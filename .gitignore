@@ -1,0 +1,5 @@
+jwstnoobfriend/__pycache__/
+.pytest_cache/
+noobfriend.egg-info/
+test/data/
+test/__pycache__/
