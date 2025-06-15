@@ -1,0 +1,36 @@
+[project]
+name = "jwstnoobfriend"
+version = "0.2.0"
+description = "Not Only Observational Bundle: For Reduction, Inference, Extraction & Navigation of Data (JWST/WFSS)"
+readme = "README.md"
+authors = [
+    { name = "Chenghao Zhu", email = "zchao@icrr.u-tokyo.ac.jp" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "aiofiles>=24.1.0",
+    "aiohttp>=3.12.13",
+    "astropy>=7.1.0",
+    "astroquery>=0.4.10",
+    "asyncer>=0.0.8",
+    "jwst>=1.18.0",
+    "matplotlib>=3.10.3",
+    "numpy>=2.3.0",
+    "pydantic>=2.11.5",
+    "requests>=2.32.3",
+    "rich>=14.0.0",
+    "scipy>=1.15.3",
+    "seaborn>=0.13.2",
+    "typer>=0.16.0",
+]
+
+[project.scripts]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
