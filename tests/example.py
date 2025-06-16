@@ -1,22 +1,19 @@
-import astropy.table
-from astroquery.mast import MastMissionsClass
-import astropy
-import requests
-from collections import Counter
-mission = MastMissionsClass(mission="jwst")
+from rich.layout import Layout
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+import time
+from datetime import timedelta
+import threading
 
-response: astropy.table.Table = mission.query_criteria( # type: ignore
-    program='01895',
-    productLevel='1b'
+layout = Layout()
+layout.split(
+    Layout(name='main'),
+    Layout(name='footer', size =2)
 )
-
-"""
-products = mission.get_unique_product_list(
-    response['fileSetName'][0],
-    )
-selected = mission.filter_products(
-    products,
-    category=['1b'],
-)
-"""
-response.write('test.txt', format='ascii.fixed_width', overwrite=True)
+start_time = time.time()
+stop_timer = threading.Event()
+def update_footer_time():
+    while not stop_timer.is_set():
+        elapsed_time = time.time() - start_time
+        layout["footer"].update

@@ -1,5 +1,5 @@
 import typer
-from typing import Annotated, Iterable
+from typing import Annotated, Iterable, Callable
 from pathlib import Path
 from collections import Counter
 from jwstnoobfriend.utils.display import track_func, track
@@ -10,7 +10,7 @@ from rich.live import Live
 from rich.layout import Layout
 import aiohttp
 import asyncer
-from jwstnoobfriend.utils.network import fetch_json_async
+from jwstnoobfriend.utils.network import ConnectionSession
 
 app = typer.Typer(
     rich_markup_mode="rich",
@@ -130,46 +130,73 @@ def cli_retrieve_check(
 ## 1. Add the download function to download the products.
 ## 2. Add the progress bar to show the download progress.
 ## 3. Add the live view to show the running time of the retrieval.
+## 4. Sometimes the number of products has problem, solve this potential bug.
 
 mast_jwst_base_url = "https://mast.stsci.edu/search/jwst/api/v0.1"
 mast_jwst_search_url = f"{mast_jwst_base_url}/search"
 mast_jwst_product_url = f"{mast_jwst_base_url}/list_products"
-async def get_product_list(
+
+async def search_proposal_id(
     proposal_id: str,
-    product_level: str = '1b',
-    include_rateint: bool = False,
+    product_level: str,
 ):
-    async with aiohttp.ClientSession() as session:
-        search_json = await fetch_json_async(
+    async with ConnectionSession.session() as session:
+        search_json = await ConnectionSession.fetch_json_async(
             mast_jwst_search_url,
             session,
             method='POST',
             body={"conditions": [{"program": proposal_id, "productLevel": product_level}]}
         )
-        search_filesets = search_json['results']
-        
-        soon_values = []
-        async with asyncer.create_task_group() as tg:
-            for fileset in search_filesets:
-                fileset_name = fileset['fileSetName']
-                products_soon = tg.soonify(fetch_json_async)(
-                    mast_jwst_product_url,
-                    session,
-                    method='GET',
-                    params={"dataset_ids": fileset_name}
-                )
-                soon_values.append(products_soon)
-        
-        results = []
-        for soon_value in soon_values:
-            product_json = soon_value.value
-            products = product_json["products"]
-            results.extend(
-                [p for p in products if p["category"] == product_level]
-            )
+        return search_json['results']
+    
+async def send_products_request(
+    fileset_name: str,
+    product_level: str,
+    include_rateint: bool,
+):
+    async with ConnectionSession.session() as session:
+        product_json = await ConnectionSession.fetch_json_async(
+            mast_jwst_product_url,
+            session,
+            method='GET',
+            params={"dataset_ids": fileset_name}
+        )
+        products = product_json["products"]
         if not include_rateint:
-            results = [p for p in results if 'rateint' not in p['file_suffix']]
-    return search_filesets, results
+            products = [p for p in products if 'rateint' not in p['file_suffix']]
+        products_filtered = [p for p in products if p["category"] == product_level]
+        if len(products_filtered) != 10:
+            print(f"Found {len(products_filtered)} products for {fileset_name} with product level {product_level}.")
+        return products_filtered
+
+async def get_products(
+    search_results: Iterable[dict],
+    product_level: str,
+    include_rateint: bool,
+    error_table: Table | None = None,
+):
+    tasks = []
+    async with asyncer.create_task_group() as task_group:
+        for result in search_results:
+            fileset_name = result['fileSetName']
+            soon_products = task_group.soonify(send_products_request)(
+                fileset_name=fileset_name,
+                product_level=product_level,
+                include_rateint=include_rateint,
+            )
+            tasks.append(soon_products)
+    
+    results = []
+    for task in tasks:
+        products = task.value
+        if not products and error_table is not None:
+            error_table.add_row(
+                'error',
+            )
+        results.extend(products)
+    return results
+        
+
 
 @app.command(name="retrieve", help="Check the JWST data of given proposal id from MAST.")
 def cli_retrieve_check_async(
@@ -191,10 +218,9 @@ def cli_retrieve_check_async(
 ):
 
     console = Console()
-    search_filesets, results = asyncer.runnify(get_product_list)(   
+    search_filesets = asyncer.runnify(search_proposal_id)(   
         proposal_id=proposal_id,
         product_level=product_level,
-        include_rateint=include_rateint,
     )
     
     ## Show the summary of the search results
@@ -205,6 +231,15 @@ def cli_retrieve_check_async(
     for access, count in fileset_access.items():
         table_access.add_row(access, str(count))
     console.print(table_access)
+    
+    results = asyncer.runnify(get_products)(
+        search_results=search_filesets,
+        product_level=product_level,
+        include_rateint=include_rateint,
+    )
+    
+
+    
     ## Show the summary of the instruments
     products_instrument = Counter([p['instrument_name'] for p in results])
     table_instrument = Table(title=f"Instrument file numbers of {proposal_id} ({product_level})")
