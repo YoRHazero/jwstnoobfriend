@@ -4,24 +4,22 @@ from rich.progress import Progress, TaskID, track
 from rich.layout import Layout
 from rich.console import Console
 from rich.live import Live
-from pydantic import BaseModel
+from pydantic import validate_call
 from typing import Callable, Iterable
 import threading
 import time
 from datetime import timedelta
 
 
-class InputProgressBarFunc(BaseModel):
-    progress_paramkey: str | None 
-    refresh_per_second: int 
-    progress_description: str
+    
+@validate_call
 def track_func(
     progress_paramkey: str | None = None, 
     refresh_per_second: int = 10, 
     progress_description: str = "Processing ...",
-):
+) -> Callable:
     """
-
+    A decorator to add a progress bar to a function that processes an iterable parameter.
     
     Parameters
     -----------
@@ -43,9 +41,7 @@ def track_func(
     Example
     --------
 
-    """
-    input_decorator_params = InputProgressBarFunc(**locals())
-    
+    """    
     def progress_bar_decorator(func: Callable):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
