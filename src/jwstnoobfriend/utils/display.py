@@ -2,9 +2,10 @@ from ast import main
 import inspect
 import functools
 from rich.progress import Progress, TaskID, track
-from rich.layout import Layout
 from rich.console import Console
 from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
 from pydantic import validate_call
 from typing import Callable, Iterable
 import threading
@@ -79,40 +80,36 @@ def track_func(
 
 ## to do list:
 # 1. include the logic of splitting the layout and updating with live in the decorator
+
 def time_footer(func: Callable) -> Callable:
-    @functools.wraps(func) # wraps is also not a decorator, but a decorator factory
+    @functools.wraps(func)  # wraps is also not a decorator, but a decorator factory
     def wrapper(*args, **kwargs):
         start_time = time.time()
-        time_layout = Layout(size=1)
-        def update_time(refresh_per_second: int = 10):
-            while True:
-                elapsed_time = time.time() - start_time
-                formatted_time = str(timedelta(seconds=int(elapsed_time)))
-                time_layout.update(f"Elapsed Time: {formatted_time}")
-                time.sleep(1 / refresh_per_second)
-
-        threading.Thread(target=update_time, daemon=True).start()
-        
-        live_container = {}
-        original_print = console.print
-        def live_print(*renderables, **kwargs):
-            live = live_container.get('live', None)
-            if live:
+        with Live(
+            refresh_per_second=2,
+        ) as live:
+            
+            def update_time(refresh_per_second: int = 2):
+                while True:
+                    elapsed_time = time.time() - start_time
+                    formatted_time = str(timedelta(seconds=int(elapsed_time)))
+                    timer_text = Text(f"⏱️ Running Time: {formatted_time}")
+                    live.update(Panel(timer_text))
+                    time.sleep(1 / refresh_per_second)
+            
+            threading.Thread(target=update_time, daemon=True).start()
+            
+            original_print = console.print
+            def live_print(*renderables, **kwargs):
                 live.console.print(*renderables, **kwargs)
-        
-        console.print = live_print
-        
-        try:
-            with Live(time_layout, refresh_per_second=10) as live:
-                live_container['live'] = live
+            
+            console.print = live_print
+            try:
                 result = func(*args, **kwargs)
-                
-            return result
-        finally:
-            # Restore the original print function
-            console.print = original_print
-            # Clear the live container
-            live_container.clear()
+                return result
+            finally:
+                # Restore the original print function
+                console.print = original_print
     return wrapper
             
             
