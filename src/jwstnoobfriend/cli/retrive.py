@@ -1,3 +1,5 @@
+from math import comb
+from unittest import result
 import typer
 from typing import Annotated, Iterable, Callable
 from pathlib import Path
@@ -7,7 +9,7 @@ from astroquery.mast.missions import MastMissionsClass
 from rich.table import Table
 from rich.live import Live
 from rich.layout import Layout
-import aiohttp
+import asyncio
 import asyncer
 from jwstnoobfriend.utils.network import ConnectionSession
 
@@ -135,11 +137,13 @@ def cli_retrieve_check(
 mast_jwst_base_url = "https://mast.stsci.edu/search/jwst/api/v0.1"
 mast_jwst_search_url = f"{mast_jwst_base_url}/search"
 mast_jwst_product_url = f"{mast_jwst_base_url}/list_products"
+mast_jwst_post_product_url = f"{mast_jwst_base_url}/post_list_products"
 
 async def search_proposal_id(
     proposal_id: str,
     product_level: str,
 ):
+    """Search for the file sets of a given proposal ID and product level."""
     async with ConnectionSession.session() as session:
         search_json = await ConnectionSession.fetch_json_async(
             mast_jwst_search_url,
@@ -154,6 +158,7 @@ async def send_products_request(
     product_level: str,
     include_rateint: bool,
 ):
+    """Send a request to get the products for a given fileset name and product level."""
     async with ConnectionSession.session() as session:
         product_json = await ConnectionSession.fetch_json_async(
             mast_jwst_product_url,
@@ -165,8 +170,6 @@ async def send_products_request(
         if not include_rateint:
             products = [p for p in products if 'rateint' not in p['file_suffix']]
         products_filtered = [p for p in products if p["category"] == product_level]
-        if len(products_filtered) != 10:
-            console.print(f"Found {len(products_filtered)} products for {fileset_name} with product level {product_level}.")
         return products_filtered
 
 async def get_products(
@@ -175,6 +178,7 @@ async def get_products(
     include_rateint: bool,
     error_table: Table | None = None,
 ):
+    """wrapping the send_products_request to get the products for each fileset for runnable in asyncer."""
     tasks = []
     async with asyncer.create_task_group() as task_group:
         for result in search_results:
@@ -195,8 +199,26 @@ async def get_products(
             )
         results.extend(products)
     return results
-        
 
+async def get_products_combined_request(
+    search_results: Iterable[dict],
+    product_level: str,
+    include_rateint: bool,
+):
+    """This function is potentially used for chunking the products in a single request, instead of sending one request for only one fileset."""
+    async with ConnectionSession.session() as session:
+        product_json = await ConnectionSession.fetch_json_async(
+            mast_jwst_post_product_url,
+            session,
+            method='POST',
+            body={"dataset_ids": [result['fileSetName'] for result in search_results]}
+        )
+        products = product_json["products"]
+        if not include_rateint:
+            products = [p for p in products if 'rateint' not in p['file_suffix']]
+        products_filtered = [p for p in products if p["category"] == product_level]
+        return products_filtered
+            
 
 @app.command(name="retrieve", help="Check the JWST data of given proposal id from MAST.")
 @time_footer
@@ -233,11 +255,13 @@ def cli_retrieve_check_async(
         table_access.add_row(access, str(count))
     console.print(table_access)
     
+
     results = asyncer.runnify(get_products)(
         search_results=search_filesets,
         product_level=product_level,
         include_rateint=include_rateint,
     )
+
     
 
     
