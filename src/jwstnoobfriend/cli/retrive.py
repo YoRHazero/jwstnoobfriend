@@ -2,9 +2,8 @@ import typer
 from typing import Annotated, Iterable, Callable
 from pathlib import Path
 from collections import Counter
-from jwstnoobfriend.utils.display import track_func, track
+from jwstnoobfriend.utils.display import track_func, track, console
 from astroquery.mast.missions import MastMissionsClass
-from rich.console import Console
 from rich.table import Table
 from rich.live import Live
 from rich.layout import Layout
@@ -57,7 +56,7 @@ def cli_retrieve_check(
                                                   help="Include rateint products in the output, default is False, in most cases rateint products are just the same as rate products.",
                                                   )] = False,
 ):
-    console = Console()
+    global console
     ## Format of the table of accessibility
     table_access = Table(title=f"Accessibility of {proposal_id}")
     table_access.add_column("Accessibility", justify="left", style="cyan", width=20)
@@ -217,7 +216,7 @@ def cli_retrieve_check_async(
                                                   exists=True, file_okay=False, dir_okay=True, resolve_path=True)] = Path.cwd(),
 ):
 
-    console = Console()
+    global console
     search_filesets = asyncer.runnify(search_proposal_id)(   
         proposal_id=proposal_id,
         product_level=product_level,

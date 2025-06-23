@@ -1,3 +1,4 @@
+from ast import main
 import inspect
 import functools
 from rich.progress import Progress, TaskID, track
@@ -10,7 +11,7 @@ import threading
 import time
 from datetime import timedelta
 
-
+console = Console()
     
 @validate_call
 def track_func(
@@ -78,33 +79,40 @@ def track_func(
 
 ## to do list:
 # 1. include the logic of splitting the layout and updating with live in the decorator
-def time_footer(time_layout: Layout):
-    """
-    Function to update the footer of the main layout with the current time.
-    
-    Parameters
-    ----------
-    main_layout : Layout
-        The main layout to update.
-    time_layout : Layout
-        The layout containing the time information.
-    """
-    
-    start_time = time.time()
-    def time_footer_decorator(func: Callable):
-        @functools.wraps(func) # wraps is also not a decorator, but a decorator factory
-        def wrapper(*args, **kwargs):
-            def update_time(refresh_per_second: int = 10):
-                while True:
-                    elapsed_time = time.time() - start_time
-                    formatted_time = str(timedelta(seconds=int(elapsed_time)))
-                    time_layout.update(f"Elapsed Time: {formatted_time}")
-                    time.sleep(1 / refresh_per_second)
+def time_footer(func: Callable) -> Callable:
+    @functools.wraps(func) # wraps is also not a decorator, but a decorator factory
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        time_layout = Layout(size=1)
+        def update_time(refresh_per_second: int = 10):
+            while True:
+                elapsed_time = time.time() - start_time
+                formatted_time = str(timedelta(seconds=int(elapsed_time)))
+                time_layout.update(f"Elapsed Time: {formatted_time}")
+                time.sleep(1 / refresh_per_second)
 
-            threading.Thread(target=update_time, daemon=True).start()
-            result = func(*args, **kwargs)
+        threading.Thread(target=update_time, daemon=True).start()
+        
+        live_container = {}
+        original_print = console.print
+        def live_print(*renderables, **kwargs):
+            live = live_container.get('live', None)
+            if live:
+                live.console.print(*renderables, **kwargs)
+        
+        console.print = live_print
+        
+        try:
+            with Live(time_layout, refresh_per_second=10) as live:
+                live_container['live'] = live
+                result = func(*args, **kwargs)
+                
             return result
-        return wrapper
-    return time_footer_decorator
+        finally:
+            # Restore the original print function
+            console.print = original_print
+            # Clear the live container
+            live_container.clear()
+    return wrapper
             
             
