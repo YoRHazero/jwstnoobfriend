@@ -53,4 +53,18 @@ class TestCompoundFootPrint:
         ]
         with pytest.raises(ValidationError):
             CompoundFootPrint(footprints=footprints)
+            
+    def test_compound_footprint_with_vertices(self):
+        vertices = [(0, 0), (2, 0), (2, 2), (0, 2)]
+        vertex_marker = ['A', 'B', 'C', 'D']
+        compound_footprint = CompoundFootPrint(vertices=vertices, vertex_marker=vertex_marker) # type: ignore
+        assert compound_footprint.polygon.is_valid
+        assert compound_footprint.vertices == vertices
+        assert compound_footprint.vertex_marker == vertex_marker
+        
+    def test_compound_footprint_invalid_vertices(self):
+        vertices = [(0, 0), (1, 1), (1, 0), (0, 1)]
+        vertex_marker = ['A', 'B', 'C', 'D']
+        with pytest.raises(ValidationError):
+            CompoundFootPrint(vertices=vertices, vertex_marker=vertex_marker)
     
