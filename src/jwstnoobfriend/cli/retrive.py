@@ -2,7 +2,7 @@ import typer
 from typing import Annotated, Iterable, Callable
 from pathlib import Path
 from collections import Counter
-from jwstnoobfriend.utils.display import track_func, track, console
+from jwstnoobfriend.utils.display import track_func, track, console, time_footer
 from astroquery.mast.missions import MastMissionsClass
 from rich.table import Table
 from rich.live import Live
@@ -39,6 +39,7 @@ def product_level_callback(value: str) -> str:
                                     the retrieval is done by astroquery. And for the speed,\
                                     we assume every dataset of the same instrument has the same \
                                     suffix, which may not be true in some cases. Use [cyan]retrieve[/cyan] command instead.")
+@time_footer
 def cli_retrieve_check(
     proposal_id: Annotated[str, typer.Argument(help="Proposal ID to check, 5 digits, e.g. '01895'.")],
     product_level: Annotated[str, 
@@ -165,7 +166,7 @@ async def send_products_request(
             products = [p for p in products if 'rateint' not in p['file_suffix']]
         products_filtered = [p for p in products if p["category"] == product_level]
         if len(products_filtered) != 10:
-            print(f"Found {len(products_filtered)} products for {fileset_name} with product level {product_level}.")
+            console.print(f"Found {len(products_filtered)} products for {fileset_name} with product level {product_level}.")
         return products_filtered
 
 async def get_products(
@@ -198,6 +199,7 @@ async def get_products(
 
 
 @app.command(name="retrieve", help="Check the JWST data of given proposal id from MAST.")
+@time_footer
 def cli_retrieve_check_async(
     proposal_id: Annotated[str, typer.Argument(help="Proposal ID to check, 5 digits, e.g. '01895'.")],
     product_level: Annotated[str, 
