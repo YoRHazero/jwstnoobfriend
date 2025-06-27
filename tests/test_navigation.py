@@ -1,8 +1,7 @@
 import pytest
 from pydantic import ValidationError
 from jwstnoobfriend.navigation import FootPrint, CompoundFootPrint
-import logging
-
+from jwstnoobfriend.navigation import JwstInfoBase
 
 class TestFootPrint:
     def test_valid_vertices(self):

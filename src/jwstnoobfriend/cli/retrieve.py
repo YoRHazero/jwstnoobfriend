@@ -1,19 +1,30 @@
-from math import comb
-from unittest import result
+from asyncio import tasks
+from turtle import down
+from urllib import response
+from pydantic import validate_call
 import typer
-from typing import Annotated, Iterable, Callable
+from typing import Annotated, Callable, Iterable, Literal
 from pathlib import Path
 from collections import Counter
 from jwstnoobfriend.utils.display import track_func, track, console, time_footer
+from jwstnoobfriend.utils.log import getLogger
 from astroquery.mast.missions import MastMissionsClass
 from rich.table import Table
-from rich.live import Live
-from rich.layout import Layout
+from rich.progress import Progress
 import asyncio
 import asyncer
 from jwstnoobfriend.utils.network import ConnectionSession
+from jwstnoobfriend.utils.environment import load_environment
+import json
+import sys
+import os
+## Load environment variables from .env
+load_environment()
 
-app = typer.Typer(
+## Initialize the logger
+logger = getLogger(__name__)
+
+retrieve_app = typer.Typer(
     rich_markup_mode="rich",
     no_args_is_help=True,
     help="Check and retrieve JWST data from MAST.",
@@ -37,10 +48,8 @@ def product_level_callback(value: str) -> str:
         raise typer.BadParameter(f"Invalid product level '{value}'. Choose from {choices}.")
     return value
 
-@app.command(name="check", help="Old version of the check command. In this version, \
-                                    the retrieval is done by astroquery. And for the speed,\
-                                    we assume every dataset of the same instrument has the same \
-                                    suffix, which may not be true in some cases. Use [cyan]retrieve[/cyan] command instead.")
+### Check command
+@retrieve_app.command(name="check", help="Old version of the check command. In this version, the retrieval is done by astroquery. And for the speed, we assume every dataset of the same instrument has the same suffix, which may not be true in some cases. Use [cyan]retrieve[/cyan] command instead.")
 @time_footer
 def cli_retrieve_check(
     proposal_id: Annotated[str, typer.Argument(help="Proposal ID to check, 5 digits, e.g. '01895'.")],
@@ -127,12 +136,7 @@ def cli_retrieve_check(
                 product['instrument']
             )
 
-
-## To do list:
-## 1. Add the download function to download the products.
-## 2. Add the progress bar to show the download progress.
-## 3. Add the live view to show the running time of the retrieval.
-## 4. Sometimes the number of products has problem, solve this potential bug.
+### Retrieve command
 
 mast_jwst_base_url = "https://mast.stsci.edu/search/jwst/api/v0.1"
 mast_jwst_search_url = f"{mast_jwst_base_url}/search"
@@ -159,14 +163,20 @@ async def send_products_request(
     include_rateint: bool,
 ):
     """Send a request to get the products for a given fileset name and product level."""
+    RETRY_LIMIT = 3
     async with ConnectionSession.session() as session:
-        product_json = await ConnectionSession.fetch_json_async(
-            mast_jwst_product_url,
-            session,
-            method='GET',
-            params={"dataset_ids": fileset_name}
-        )
-        products = product_json["products"]
+        for _ in range(RETRY_LIMIT):
+            product_json = await ConnectionSession.fetch_json_async(
+                mast_jwst_product_url,
+                session,
+                method='GET',
+                params={"dataset_ids": fileset_name}
+            )
+            products = product_json["products"]
+            if len(products) > 0:
+                break
+            else:
+                await asyncio.sleep(1)
         if not include_rateint:
             products = [p for p in products if 'rateint' not in p['file_suffix']]
         products_filtered = [p for p in products if p["category"] == product_level]
@@ -176,10 +186,10 @@ async def get_products(
     search_results: Iterable[dict],
     product_level: str,
     include_rateint: bool,
-    error_table: Table | None = None,
 ):
     """wrapping the send_products_request to get the products for each fileset for runnable in asyncer."""
     tasks = []
+    search_results = [result for result in search_results if result['access'] != 'private'] # Filter out private access filesets
     async with asyncer.create_task_group() as task_group:
         for result in search_results:
             fileset_name = result['fileSetName']
@@ -189,15 +199,19 @@ async def get_products(
                 include_rateint=include_rateint,
             )
             tasks.append(soon_products)
-    
+    error_table = Table(title="No products found or an error occurred.")
+    error_table.add_column("Fileset", justify="left", style="red", width=30)
     results = []
-    for task in tasks:
+    for i, task in enumerate(tasks):
         products = task.value
         if not products and error_table is not None:
             error_table.add_row(
-                'error',
+                search_results[i]['fileSetName'],
             )
         results.extend(products)
+    if error_table.row_count > 0:
+        console.print(error_table)
+        console.print("This problem can be solved by rerunning the command.")
     return results
 
 async def get_products_combined_request(
@@ -220,7 +234,7 @@ async def get_products_combined_request(
         return products_filtered
             
 
-@app.command(name="retrieve", help="Check the JWST data of given proposal id from MAST.")
+@retrieve_app.command(name="retrieve", help="Check the JWST data of given proposal id from MAST.")
 @time_footer
 def cli_retrieve_check_async(
     proposal_id: Annotated[str, typer.Argument(help="Proposal ID to check, 5 digits, e.g. '01895'.")],
@@ -235,12 +249,17 @@ def cli_retrieve_check_async(
     include_rateint: Annotated[bool, typer.Option('-r', '--include-rateint',
                                                   help="Include rateint products in the output, default is False, in most cases rateint products are just the same as rate products.",
                                                   )] = False,
-    download_folder: Annotated[Path, typer.Option('-d', '--download-folder', 
-                                                  help="Folder to download the products, default is current directory.",
-                                                  exists=True, file_okay=False, dir_okay=True, resolve_path=True)] = Path.cwd(),
+    output_file: Annotated[Path, typer.Option('-o', '--output-file', 
+                                                  help="File to save the products, default is 'products.json' in the current directory.",
+                                                  rich_help_panel="Output",
+                                                  metavar="FILE",
+                                                  prompt="Output file is not specified. Use the default path (press [Enter] to confirm or type a new path):\n ",
+                                                  prompt_required=False,
+                                                  exists=False, file_okay=True, dir_okay=False, resolve_path=True)] = Path.cwd() / 'products.json',
 ):
 
     global console
+    ## Retrieval part
     search_filesets = asyncer.runnify(search_proposal_id)(   
         proposal_id=proposal_id,
         product_level=product_level,
@@ -255,16 +274,12 @@ def cli_retrieve_check_async(
         table_access.add_row(access, str(count))
     console.print(table_access)
     
-
     results = asyncer.runnify(get_products)(
         search_results=search_filesets,
         product_level=product_level,
         include_rateint=include_rateint,
     )
-
-    
-
-    
+        
     ## Show the summary of the instruments
     products_instrument = Counter([p['instrument_name'] for p in results])
     table_instrument = Table(title=f"Instrument file numbers of {proposal_id} ({product_level})")
@@ -273,6 +288,7 @@ def cli_retrieve_check_async(
     for instrument, count in products_instrument.items():
         table_instrument.add_row(str(instrument), str(count))
     console.print(table_instrument)
+    
     ## Show the example products
     if show_example:
         table_example = Table(title="Example Products")
@@ -288,7 +304,154 @@ def cli_retrieve_check_async(
                 f"{product['size'] / (1024 * 1024):.2f} MB" if product['size'] else "N/A"
             )
         console.print(table_example)
+        
+    ## Save the results to file, if output_file is specified
+    output_option_used = "-o" in sys.argv or "--output-file" in sys.argv
+    if output_option_used and output_file is not None:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        console.print(f"[teal]Opening {output_file} [/teal]...")
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=4)
+            console.print(f"[green] Saved [/green]")
+ 
+### Download command
+def env_download_folder():
+    START_STAGE = os.environ.get("START_STAGE", None)
+    if START_STAGE is None:
+        return None
+    START_STAGE_PATH = os.environ.get(f"STAGE_{START_STAGE}_PATH", None)
+    if START_STAGE_PATH is None:
+        logger.warning(f"START_STAGE is set to {START_STAGE}, but {START_STAGE}_PATH is not set. \
+            Check whether the .env file is written correctly.")
+        return None
+    if not Path(START_STAGE_PATH).exists():
+        START_STAGE_PATH.mkdir(parents=True, exist_ok=True)
+    return Path(START_STAGE_PATH)
+        
+mast_jwst_download_url = f"{mast_jwst_base_url}/retrieve_product"
+
+@validate_call
+async def download_single_request(
+    product: dict,
+    output_dir: Path,
+    exist_mode: Literal['skip', 'overwrite'] = 'skip',
+    progress_callback: Callable | None = None,
+):
+    filename = product['filename']
+    output_path = output_dir / filename
+    if output_path.exists() and exist_mode == 'skip':
+        logger.info(f"File {output_path} already exists, skipping download.")
+        return
+    
+    MAX_CONCURRENT_DOWNLOADS = 5
+    async with ConnectionSession.session(max_tcp_connector=MAX_CONCURRENT_DOWNLOADS) as session:
+        try:
+            generator = ConnectionSession.download_and_save_async(
+                url=mast_jwst_download_url,
+                output_path=output_path,
+                session=session,
+                method='GET',
+                params={
+                    "product_name": filename,
+                },
+                progress_callback=progress_callback,
+            )
             
+            ## for future individual download progress tracking
+            async for _ in generator:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"Failed to download {filename}: {e}")
+            return False
+    
+    
+
+async def download_products(
+    products: list[dict],
+    output_dir: Path,
+    exist_mode: Literal['skip', 'overwrite'] = 'skip',
+):
+    """Wrapping the download_single_request so that it can be called by runnify."""
+    tasks = []
+    with Progress() as progress:
+        total_file_task = progress.add_task("Total Progress:", total=len(products))
+        async with asyncer.create_task_group() as task_group:
+            for product in products:
+                task = task_group.soonify(download_single_request)(
+                    product=product,
+                    output_dir=output_dir,
+                    exist_mode=exist_mode,
+                    progress_callback=lambda: progress.update(total_file_task, advance=1),
+                )
+                tasks.append(task)
+    ## wait for all tasks to complete and report the results
+    download_status = []
+    for task in tasks:
+        result = task.value
+        download_status.append(result)
+    return download_status
+           
+            
+@retrieve_app.command(name="download",
+                      help="Download the JWST data of given products list.")
+def cli_retrieve_download(
+    products_file: Annotated[Path, typer.Argument(
+        help="File containing the products list to download, the output of [cyan]retrieve[/cyan] command.",
+        exists=True, file_okay=True, dir_okay=False, resolve_path=True,
+    )],
+    output_dir: Annotated[Path, typer.Option(
+        '-o', '--output-dir',
+        help="Directory to save the downloaded products. Default is the path of start stage in \"[yellow].env[/yellow]\". If not set, \"[yellow]/downloads[/yellow]\" in the current directory.",
+        dir_okay=True, file_okay=False, resolve_path=True,
+        rich_help_panel="Output",
+        metavar="DIR",
+        prompt="Output directory is not specified. Use the default path (press [red]Enter[/red] to confirm or type a new path):\n ",
+        prompt_required=False,
+    )] = env_download_folder() if env_download_folder() else Path.cwd() / 'downloads',
+    current_folder: Annotated[bool, typer.Option(
+        '-c', '--current-folder',
+        help="Download the products to the current folder, this will override the [blue]--output-dir[/blue] option.",
+        rich_help_panel="Output",
+    )] = False,
+    skip_exist: Annotated[bool, typer.Option(
+        '-s', '--skip-exist',
+        help="Skip the existing files in the output directory, default is True. If set to False, will overwrite the existing files.",
+        rich_help_panel="Output",
+    )] = True,
+):
+    global console
+    ## Check if the output directory exists, if not, create it
+    if current_folder:
+        output_dir = Path.cwd()
+    else:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"[green]{output_dir} is created[/green]")
+    
+    ## Load the products from the file
+    with open(products_file, 'r') as f:
+        products = json.load(f)
+    if not products:
+        console.print("[red]No products found in the file.[/red]")
+        raise typer.Exit(code=1)
+    
+    if skip_exist:
+        exist_mode = 'skip'
+    else:
+        exist_mode = 'overwrite'
+    
+    download_status = asyncer.runnify(download_products)(
+        products=products,
+        output_dir=output_dir,
+        exist_mode=exist_mode,
+    )
+    
+    download_status = [not not status for status in download_status]
+    
+    console.print(f"[green]Downloaded {sum(download_status)} out of {len(products)} products.[/green]")
+
+        
+
 if __name__ == "__main__":
-    app()    
+    retrieve_app()    
     

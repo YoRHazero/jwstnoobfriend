@@ -17,6 +17,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "numpy>=2.3.0",
     "pydantic>=2.11.5",
+    "python-dotenv>=1.1.1",
     "requests>=2.32.3",
     "rich>=14.0.0",
     "scipy>=1.15.3",
@@ -26,6 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
+noobfetch = "jwstnoobfriend.cli:retrieve_app"
 
 [build-system]
 requires = ["hatchling"]
