@@ -13,6 +13,7 @@ dependencies = [
     "astropy>=7.1.0",
     "astroquery>=0.4.10",
     "asyncer>=0.0.8",
+    "cachetools>=6.1.0",
     "jwst>=1.18.0",
     "matplotlib>=3.10.3",
     "numpy>=2.3.0",
@@ -35,5 +36,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "mkdocs-material>=9.6.14",
+    "mkdocstrings[python]>=0.29.1",
     "pytest>=8.4.0",
 ]

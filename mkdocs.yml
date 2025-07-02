@@ -1,0 +1,85 @@
+site_name: NOOB FRIEND
+site_description: Not Only Observational Bundle For Inference, Extraction & Navigation of Data (beginner-friendly)
+site_author: Chenghao Zhu
+
+theme:
+  name: material
+  icon:
+    logo: fontawesome/solid/kiwi-bird
+  favicon: assets/kiwi-bird-solid.ico
+
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.expand
+    - navigation.path
+    
+    - content.code.copy
+    - content.code.select
+    - content.code.annotate
+    
+  palette:
+    - media: "(prefers-color-scheme)"
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7 
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - md_in_html
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+
+plugins:
+  - search:
+  - mkdocstrings:
+      handlers: 
+        python:
+          inventories:
+            - https://shapely.readthedocs.io/en/stable/objects.inv
+          options:
+            show_root_heading: true
+            annotations_path: full
+      enable_inventory: null
+
+
+nav:
+  - NOOBFRIEND: index.md
+  - Key Concepts:
+      - Overview: KeyConcepts/index.md
+
+  - Step-by-Step Tutorial:
+      - Overview: StepByStepTutorial/index.md
+      - Installation: StepByStepTutorial/installation.md
+

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, model_validator, ValidationError
+from pydantic import BaseModel, field_validator, model_validator, computed_field, FilePath, validate_call
 from shapely.geometry import Polygon, Point, LineString
 from typing import Any, Literal, Iterable
 from astropy.coordinates import SkyCoord
@@ -46,27 +46,81 @@ class FootPrint(BaseModel):
                 raise ValueError("Invalid vertices, cannot form a valid polygon, \
                     check whether the four vertices are on the same line")
 
-
-    @property
-    def polygon(self) -> Polygon:
-        """ Returns the shapely.geometry.Polygon object representing the footprint.
-        """
-        return Polygon(self.vertices)
-    
-
+    @computed_field
     @property
     def center(self) ->  tuple[float, ...]:
         """ Returns the center of the footprint (geometric centroid).
         """
         return self.polygon.centroid.coords[0]
     
+    @computed_field
+    @property
+    def area(self) -> float:
+        """ Returns the area of the footprint. In the units of the coordinates provided (e.g., degrees, if RA/Dec is provided).
+        """
+        return self.polygon.area
+    
+    @computed_field
+    @property
+    def radius(self) -> float:
+        """ Returns the radius of the footprint, defined as the distance from the center to the furthest vertex.
+        """
+        return max(Point(self.center).distance(Point(vertex)) for vertex in self.vertices)
+    
+
+    @property
+    def polygon(self) -> Polygon:
+        """ Returns the shapely.geometry.Polygon object representing the footprint.
+        """
+        return Polygon(self.vertices)
 
     @property
     def vertices_as_skycoords(self) -> list[SkyCoord]:
         """ Returns the vertices as SkyCoord objects.
         """
         return [SkyCoord(ra=coord[0], dec=coord[1], unit='deg') for coord in self.vertices]
-
+    
+    @classmethod
+    @validate_call
+    def from_file(cls, file_path: FilePath) -> 'FootPrint':
+        """ Creates a FootPrint object from a file containing vertices.
+        
+        The file should contain wcs
+        """
+        from jwst import datamodels as dm
+        import numpy as np
+        try:
+            with dm.open(file_path) as model:
+                wcs = model.meta.wcs
+                data_shape = model.data.shape
+                pupil = model.meta.instrument.pupil
+            
+            if pupil == "CLEAR":
+                vertices_marker = [(0, 0), (data_shape[1] - 1, 0), 
+                                (data_shape[1] - 1, data_shape[0] - 1), (0, data_shape[0] - 1)]
+                transform = wcs.get_transform('detector', 'world')
+                vertices_marker_array = np.array(vertices_marker)
+                vertices = transform(vertices_marker_array[:, 0], vertices_marker_array[:, 1])
+                vertices = np.array(vertices).T
+                return cls(
+                    vertices=vertices,
+                    vertex_marker=vertices_marker
+                    )
+            elif pupil == "GRISMR" or pupil == "GRISMC":
+                vertices_marker = [(0, 0), (data_shape[1] - 1, 0), 
+                                (data_shape[1] - 1, data_shape[0] - 1), (0, data_shape[0] - 1)]
+                transform = wcs.get_transform('detector', 'world')
+                vertices_marker_array = np.array(vertices_marker)
+                vertices = transform(vertices_marker_array[:, 0], vertices_marker_array[:, 1], [1] * 4, [1] * 4)
+                vertices = np.array(vertices).T[:, :2]  # Only take the first two columns (RA, Dec)
+                return cls(
+                    vertices=vertices,
+                    vertex_marker=vertices_marker
+                )
+        except Exception as e:
+            logger.warning(f"Failed to create FootPrint from file {file_path}: {e}. Return None\
+                If this is not expected, please check whether the file is assigned a WCS object.")
+            return None
 
 class CompoundFootPrint(FootPrint):
     
