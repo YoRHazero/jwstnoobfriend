@@ -1,8 +1,10 @@
 from pydantic import BaseModel, field_validator, model_validator, computed_field, FilePath, validate_call
-from shapely.geometry import Polygon, Point, LineString
-from typing import Any, Literal, Iterable
+from pathlib import Path
+from shapely.geometry import Polygon, Point
+from typing import Any, Iterable
 from astropy.coordinates import SkyCoord
 from jwstnoobfriend.utils import log
+from jwstnoobfriend.navigation._cache import _open_and_cache_datamodel, _open_and_cache_wcs
 
 __all__ = ['FootPrint', 'CompoundFootPrint']
 
@@ -81,19 +83,20 @@ class FootPrint(BaseModel):
         return [SkyCoord(ra=coord[0], dec=coord[1], unit='deg') for coord in self.vertices]
     
     @classmethod
-    @validate_call
-    def from_file(cls, file_path: FilePath) -> 'FootPrint':
+    def new(cls, file_path: FilePath | str) -> 'FootPrint':
         """ Creates a FootPrint object from a file containing vertices.
         
-        The file should contain wcs
+        The file should contain wcs information, or return None if the file does not have a WCS object assigned.
         """
-        from jwst import datamodels as dm
         import numpy as np
+        file_path = Path(file_path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File {file_path} does not exist")
         try:
-            with dm.open(file_path) as model:
-                wcs = model.meta.wcs
-                data_shape = model.data.shape
-                pupil = model.meta.instrument.pupil
+            model = _open_and_cache_datamodel(file_path)
+            wcs = _open_and_cache_wcs(file_path)
+            data_shape = model.data.shape
+            pupil = model.meta.instrument.pupil
             
             if pupil == "CLEAR":
                 vertices_marker = [(0, 0), (data_shape[1] - 1, 0), 
@@ -122,10 +125,20 @@ class FootPrint(BaseModel):
                 If this is not expected, please check whether the file is assigned a WCS object.")
             return None
 
+
+
+
 class CompoundFootPrint(FootPrint):
+    """
+    A compound footprint that can be constructed from multiple footprints or vertices.
+    It is suggested to only pass the footprints or vertices, not both, and currently the best practice is to pass footprints.
+    The usage of this class is still under development.
     
+    To do
+    - Support passing vertices and vertex_marker, and check if they match the union of footprints.
+    - Add property and method to utilize the union of footprints.
+    """
     footprints: list[FootPrint] | None = None
-    
     @model_validator(mode='before')
     @classmethod
     def validate_footprints(cls, data: Any):
@@ -133,29 +146,33 @@ class CompoundFootPrint(FootPrint):
         vertex_list = data.get('vertices', None)
         vertex_marker_list = data.get('vertex_marker', None)
         
+        ## At least one of footprints or vertices must be provided
         if footprint_iterable is None and vertex_list is None:
             raise ValueError("Either 'footprints' or 'vertices' must be provided")
         
+        ## If footprints are provided, use polygon to get the union of all footprints
         if footprint_iterable is not None:
             if not isinstance(footprint_iterable, Iterable):
                 raise TypeError("'footprints' must be an iterable of FootPrint objects, recommend to use a list")
+            
+            ## check if they are overlapped
             try:
                 first_footprint = next(iter(footprint_iterable))
                 result_polygon = first_footprint.polygon
             except StopIteration:
                 raise ValueError("'footprints' cannot be empty")
-            
             for footprint in footprint_iterable:
                 if not isinstance(footprint, FootPrint):
                     raise TypeError("All elements in 'footprints' must be FootPrint objects")
-                
                 if not result_polygon.intersects(footprint.polygon):
                     raise ValueError("Footprints in 'footprints' must intersect with each other")
                 
                 result_polygon = result_polygon.union(footprint.polygon)
-                
+            
+            ## get the vertices of the union of footprints
             polygon_vertices = list(result_polygon.exterior.coords)
             
+            ## if vertex_list is provided simultaneously, check if they match. Note passing the matching check does not mean the vertices order are correct.
             if vertex_list is not None:
                 if sorted(vertex_list) != sorted(polygon_vertices):
                     logger.warning("The provided vertices do not match the vertices of the union of footprints, \
