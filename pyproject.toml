@@ -29,6 +29,7 @@ dependencies = [
 
 [project.scripts]
 noobfetch = "jwstnoobfriend.cli:retrieve_app"
+noobenv = "jwstnoobfriend.cli:env_app"
 
 [build-system]
 requires = ["hatchling"]
@@ -36,7 +37,10 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "ipykernel>=6.29.5",
+    "jupyter>=1.1.1",
     "mkdocs-material>=9.6.14",
     "mkdocstrings[python]>=0.29.1",
     "pytest>=8.4.0",
+    "termynal>=0.13.0",
 ]

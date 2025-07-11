@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from jwstnoobfriend.utils.log import getLogger
 
+__all__ = ['find_project_root', 'find_env_file', 'load_environment']
 
 logger = getLogger(__name__)
 
@@ -36,7 +37,11 @@ def find_env_file() -> Path:
         return None
         
 def load_environment():
-    """Load environment variables from the .env file."""
+    """
+    Load environment variables from the .env file.
+    Prioritizes the .env file in the current directory over the one in the project root.
+    If no .env file is found, logs a warning.
+    """
     env_file = find_env_file()
     if env_file:
         load_dotenv(env_file)

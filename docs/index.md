@@ -60,4 +60,4 @@ Or you can read the step-by-step tutorial, which will provide a process that beg
 
 ---
 ## Installation?
-Check the first part of [tutorial](StepByStepTutorial/index.md)!
+Check the [first part of tutorial](StepByStepTutorial/installation.md)!

@@ -6,7 +6,7 @@ theme:
   name: material
   icon:
     logo: fontawesome/solid/kiwi-bird
-  favicon: assets/kiwi-bird-solid.ico
+  favicon: assets/images/kiwi-bird-solid.ico
 
   features:
     - navigation.tabs
@@ -72,6 +72,10 @@ plugins:
             show_root_heading: true
             annotations_path: full
       enable_inventory: null
+  - termynal:
+        prompt_literal_start:
+        - "$"
+        - ">"
 
 
 nav:
@@ -82,4 +86,6 @@ nav:
   - Step-by-Step Tutorial:
       - Overview: StepByStepTutorial/index.md
       - Installation: StepByStepTutorial/installation.md
+      - Retrieving JWST Data: StepByStepTutorial/Retrieval.md
+
 
