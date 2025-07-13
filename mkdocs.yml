@@ -88,5 +88,7 @@ nav:
       - Installation: StepByStepTutorial/installation.md
       - Environment Variables: StepByStepTutorial/environment.md
       - Retrieving JWST Data: StepByStepTutorial/fetch.md
+      - Reduction with Pipeline: 
+        - Preliminary: StepByStepTutorial/reduction/index.md
 
 
