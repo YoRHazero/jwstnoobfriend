@@ -42,5 +42,11 @@ dev = [
     "mkdocs-material>=9.6.14",
     "mkdocstrings[python]>=0.29.1",
     "pytest>=8.4.0",
+    "ruff>=0.12.3",
     "termynal>=0.13.0",
+]
+
+[tool.ruff.lint]
+extend-select = [
+    "UP", # pyupgrade
 ]
