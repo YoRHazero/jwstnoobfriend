@@ -36,7 +36,7 @@ def find_env_file() -> Path:
         logger.warning("No .env file found in the current directory or project root.")
         return None
         
-def load_environment():
+def load_environment(override: bool = False) -> None:
     """
     Load environment variables from the .env file.
     Prioritizes the .env file in the current directory over the one in the project root.
@@ -44,7 +44,7 @@ def load_environment():
     """
     env_file = find_env_file()
     if env_file:
-        load_dotenv(env_file)
+        load_dotenv(env_file, override=override)
         logger.info(f"Loaded environment variables from {env_file}")
     else:
         logger.warning("No .env file found to load environment variables.")

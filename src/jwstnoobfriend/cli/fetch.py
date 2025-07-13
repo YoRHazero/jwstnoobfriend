@@ -15,8 +15,7 @@ from jwstnoobfriend.utils.environment import load_environment
 import json
 import sys
 import os
-## Load environment variables from .env
-load_environment()
+
 
 ## Initialize the logger
 logger = getLogger(__name__)
@@ -313,16 +312,17 @@ def cli_retrieve_check_async(
  
 ### Download command
 def env_download_folder():
-    START_STAGE = os.environ.get("START_STAGE", None)
+    ## Load environment variables from .env
+    load_environment()
+    START_STAGE = os.getenv("START_STAGE", None)
     if START_STAGE is None:
         return None
-    START_STAGE_PATH = os.environ.get(f"STAGE_{START_STAGE}_PATH", None)
+    START_STAGE_PATH = os.environ.get(f"STAGE_{START_STAGE.upper()}_PATH", None)
     if START_STAGE_PATH is None:
-        logger.warning(f"START_STAGE is set to {START_STAGE}, but {START_STAGE}_PATH is not set. \
-            Check whether the .env file is written correctly.")
+        logger.warning(f"START_STAGE is set to {START_STAGE}, but STAGE_{START_STAGE.upper()}_PATH is not set. Check whether the .env file is written correctly.")
         return None
     if not Path(START_STAGE_PATH).exists():
-        START_STAGE_PATH.mkdir(parents=True, exist_ok=True)
+        Path(START_STAGE_PATH).mkdir(parents=True, exist_ok=True)
     return Path(START_STAGE_PATH)
         
 mast_jwst_download_url = f"{mast_jwst_base_url}/retrieve_product"
@@ -405,7 +405,7 @@ def cli_retrieve_download(
         metavar="DIR",
         prompt="Output directory is not specified. Use the default path (press [red]Enter[/red] to confirm or type a new path):\n ",
         prompt_required=False,
-    )] = env_download_folder() if env_download_folder() else Path.cwd() / 'downloads',
+    )] = None,
     current_folder: Annotated[bool, typer.Option(
         '-c', '--current-folder',
         help="Download the products to the current folder, this will override the [blue]--output-dir[/blue] option.",
@@ -418,12 +418,16 @@ def cli_retrieve_download(
     )] = True,
 ):
     global console
+    ## Load environment variables from .env
+    if output_dir is None:
+        env_dir = env_download_folder()
+        output_dir = env_dir if env_dir else Path.cwd() / 'downloads'
     ## Check if the output directory exists, if not, create it
     if current_folder:
         output_dir = Path.cwd()
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
-    console.print(f"[green]{output_dir} is created[/green]")
+        console.print(f"[green]{output_dir} is created[/green]")
     
     ## Load the products from the file
     with open(products_file, 'r') as f:

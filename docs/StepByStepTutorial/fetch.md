@@ -12,8 +12,9 @@ The most straightforward way to download JWST data is to visit the [MAST JWST Po
 
 As a first step, try to see the help message of `noobfetch` by running `noobfetch --help` in your terminal. You should see something like this:
 
-```shell
- noobfetch --help
+<!-- termynal -->
+```console
+$ uv run noobfetch --help
                                                                                                                                                                          
  Usage: noobfetch [OPTIONS] COMMAND [ARGS]...                                                                                                                            
                                                                                                                                                                          
@@ -37,10 +38,42 @@ As the help message suggests, basically you only need to run the subcommands `re
 
 
 
+
+## Get the product list
+First we need to prepare a product list. You can run:
+
+<!-- termynal -->
+```console
+$ uv run noobfetch retrieve 01895 -l 1b
+```
+- The proposal id should be 5 digits long, so if you want to retrieve data from a proposal id like `1895`, you should use `01895` instead.
+- The `-l` option specifies the [product level](https://jwst-pipeline.readthedocs.io/en/latest/jwst/data_products/stages.html), e.g., `1b`.
+- The `--help` option is always available, so you can check the help message to get more flexible options.
+
+??? note "Why it is faster to use `noobfetch`?"
+    The `noobfetch` uses asynchronous requests to retrieve the data. 
+    
+    I don't know why if we sent the FileSetIDs to the MAST API, it will take a long time to get the response. So I use the asynchronous requests and only send one filesetid in one request, which speeds up the retrieval process significantly.
+
+After the command is executed, you should find the product list in a file named `products.json`. You can open it and do some filtering before downloading the data. But in this tutorial, we will just download all the products in the FRESCO program.
+
+## Download the data
+If you followed the [Environment Variables](environment.md) part, you can directly run:
+<!-- termynal -->
+```console
+$ uv run noobfetch download products.json
+```
+The files will be downloaded to the path specified by the `STAGE_1B_PATH` in the `.env` file if you set the `START_STAGE` to `1b`.
+
+Otherwise, you need to specify the folder to save the downloaded data by using the `-o` option. See the help message by running `noobfetch download --help` for more details.
+
+??? tip "Use `tmux` or `screen` to run the command in the background"
+    If you are running the command on a remote server, you can use `tmux` or `screen` to run the command in the background. This way, you can close the terminal without interrupting the download process 😋. This method can be applied when you are executing any long-running command in the terminal.
+
 ## Use astroquery
 You can also use the `astroquery` package.
 
-```python title="Download data with astroquery" hl_lines="4-9"
+```python title="Download data with astroquery" hl_lines="10"
 from astroquery.mast.missions import MastMissionsClass
 
 mission = MastMissionsClass(mission="jwst")
@@ -50,5 +83,8 @@ program_query = mission.query_criteria( # type: ignore
     program=proposal_id,
     productLevel=product_level
 )
+product_list = mission.get_product_list(program_query)
 ```
 
+But the highlighted line seems to take a super long time to execute :cry:.
+You can refer the [astroquery documentation](https://astroquery.readthedocs.io/en/latest/mast/mast_obsquery.html#downloading-data) to learn how to download the data with `astroquery`.

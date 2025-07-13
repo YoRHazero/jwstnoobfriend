@@ -86,6 +86,7 @@ nav:
   - Step-by-Step Tutorial:
       - Overview: StepByStepTutorial/index.md
       - Installation: StepByStepTutorial/installation.md
-      - Retrieving JWST Data: StepByStepTutorial/Retrieval.md
+      - Environment Variables: StepByStepTutorial/environment.md
+      - Retrieving JWST Data: StepByStepTutorial/fetch.md
 
 

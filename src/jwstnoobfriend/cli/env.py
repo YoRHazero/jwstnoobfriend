@@ -74,13 +74,13 @@ def init_env(
     if show_content:
         console.print("[bold green]Initializing .env file...[/bold green]\n")
         console.print(init_template.render(
-            start_stage=start_stage if start_stage else "",
+            start_stage=start_stage.lower() if start_stage else "",
             crds_path=crds_path if crds_path else "",
             data_root_path=data_root_path if data_root_path else ""
         ))
     with open(output_path / ".env", "w") as f:
         f.write(init_template.render(
-            start_stage=start_stage if start_stage else "",
+            start_stage=start_stage.lower() if start_stage else "",
             crds_path=crds_path if crds_path else "",
             data_root_path=data_root_path if data_root_path else ""
         ))
@@ -103,7 +103,7 @@ def stage_list_callback(value_list: list[str]) -> list[str]:
         if not value[0].isdigit():
             raise typer.BadParameter(f"The first character of stage '{value}' must be a digit.")
     
-    return value_list
+    return [value.lower() for value in value_list]  # Convert to lowercase for consistency
 
 @env_app.command(
     name='append',
