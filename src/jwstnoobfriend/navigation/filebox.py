@@ -151,9 +151,9 @@ class FileBox(BaseModel):
         async with asyncer.create_task_group() as task_group:
             for filepath in folder_path.glob(wildcard):
                 if filepath.is_file():
-                    task = task_group.create_task(
-                        JwstInfo._new_async(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
-                    )
+                    task = task_group.soonify(
+                        JwstInfo._new_async
+                    )(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
                     tasks.append(task)
         for task in tasks:
             infos.append(task.value)
@@ -162,7 +162,7 @@ class FileBox(BaseModel):
 
     @validate_call
     def init_from_folder(self, *, stage: str, folder_path: DirectoryPath | None = None,
-                         wildcard='*.fits', force_with_wcs: bool = False, method: Literal['normal', 'async', 'parallel'] = 'normal') -> None:
+                         wildcard='*.fits', force_with_wcs: bool = False, method: Literal['async', 'parallel'] = 'parallel') -> None:
         """
         Initializes the FileBox from a folder containing files. It will create a JwstInfo for each file that matches the wildcard.
         
@@ -178,9 +178,9 @@ class FileBox(BaseModel):
             The wildcard pattern to match files in the folder. Default is '*.fits'.
         force_with_wcs : bool, optional
             If True, the files are assumed to have a WCS object assigned regardless of their suffix
-        method : Literal['normal', 'async', 'parallel'], optional
-            The method to use for loading files. 'normal' will load files sequentially, 'async' will load files asynchronously,
-            and 'parallel' will load files with multiprocessing.
+        method : Literal['async', 'parallel'], optional
+            The method to use for loading files. 'async' will load files asynchronously, 'parallel' will use parallel processing.
+            Default is 'parallel'.
         """
         ## Get the folder path from the environment variable
         if folder_path is None:
@@ -191,25 +191,21 @@ class FileBox(BaseModel):
             else:
                 folder_path = DirectoryPath(folder_path)
         ## IO operation to load files
-        if method == 'normal':
-            for filepath in track(list(folder_path.glob(wildcard))):
-                if filepath.is_file():
-                    self.update_from_file(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
-        elif method == 'async':
-            infos = asyncer.runnify(self._infos_from_folder_async)(folder_path=folder_path, stage=stage, wildcard=wildcard, force_with_wcs=force_with_wcs)
-            self.update(infos=infos)
-        elif method == 'parallel':
-            valid_files = [f for f in folder_path.glob(wildcard) if f.is_file()]
-            
-            # make closure to convert JwstInfo.new to a partial function
-            new_info_func = partial(JwstInfo.new, stage=stage, force_with_wcs=force_with_wcs)
-            # Use ProcessPoolExecutor to parallelize the creation of JwstInfo objects
-            with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
-                infos = list(executor.map(
-                    new_info_func,
-                    valid_files
-                ))
-            self.update(infos=infos)
+        match method:
+            case 'async':
+                infos = asyncer.runnify(self._infos_from_folder_async)(folder_path=folder_path, stage=stage, wildcard=wildcard, force_with_wcs=force_with_wcs)
+                self.update(infos=infos)
+            case 'parallel':
+                valid_files = [f for f in folder_path.glob(wildcard) if f.is_file()]
+                # make closure to convert JwstInfo.new to a partial function
+                new_info_func = partial(JwstInfo.new, stage=stage, force_with_wcs=force_with_wcs)
+                # Use ProcessPoolExecutor to parallelize the creation of JwstInfo objects
+                with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
+                    infos = list(executor.map(
+                        new_info_func,
+                        valid_files
+                    ))
+                self.update(infos=infos)
 
     def merge(self, other: 'FileBox') -> 'FileBox':
         """
@@ -278,8 +274,11 @@ class FileBox(BaseModel):
             f.write(self.model_dump_json(indent=4))
     
     @classmethod
-    def load(cls, filepath: FilePath) -> 'FileBox':
+    def load(cls, filepath: FilePath | None = None) -> 'FileBox':
         """Loads a FileBox from a file."""
+        if filepath is None:
+            filepath = os.getenv('FILE_BOX_PATH', 'noobox.json')
+            filepath = FilePath(filepath)
         with open(filepath, 'r') as f:
             data = f.read()
         return cls.model_validate_json(data)

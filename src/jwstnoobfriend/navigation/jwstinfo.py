@@ -302,7 +302,7 @@ class JwstInfo(BaseModel):
         if not filepath.exists():
             raise FileNotFoundError(f"File {filepath} does not exist")
         filename = filepath.name
-        with_wcs = any(suffix in filename for suffix in cls.suffix_without_wcs)
+        with_wcs = all(suffix not in filename for suffix in cls.suffix_without_wcs)
         if force_with_wcs:
             with_wcs = True
         jwst_cover = JwstCover.new(filepath, with_wcs=with_wcs)
@@ -323,9 +323,18 @@ class JwstInfo(BaseModel):
         if not filepath.exists():
             raise FileNotFoundError(f"File {filepath} does not exist")
         filename = filepath.name
-        # with_wcs = any(suffix in filename for suffix in cls.suffix_without_wcs)
-        # if force_with_wcs:
-        # with_wcs = True
+        with_wcs = all(suffix not in filename for suffix in cls.suffix_without_wcs)
+        if force_with_wcs:
+            with_wcs = True
+        jwst_cover = await JwstCover._new_async(filepath, with_wcs=with_wcs)
+        instrument_info = jwst_cover.meta.instrument
+        return cls(
+            basename=filename,
+            filter=instrument_info.filter,
+            detector=instrument_info.detector,
+            pupil=instrument_info.pupil,
+            cover_dict={stage: jwst_cover},
+        )
 
     @validate_call
     def update(
@@ -346,7 +355,7 @@ class JwstInfo(BaseModel):
             If True, the file is assumed to have a WCS object assigned regardless of its suffix.
         """
         filename = filepath.name
-        with_wcs = any(suffix in filename for suffix in self.suffix_without_wcs)
+        with_wcs = all(suffix not in filename for suffix in self.suffix_without_wcs)
         if force_with_wcs:
             with_wcs = True
         jwst_cover = JwstCover.new(filepath, with_wcs=with_wcs)
