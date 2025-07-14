@@ -282,6 +282,14 @@ async def get_products_combined_request(
         products_filtered = [p for p in products if p["category"] == product_level]
         return products_filtered
 
+def proposal_id_callback(value: str) -> str:
+    value = value.strip().lstrip('0')
+    if not value.isdigit():
+        raise typer.BadParameter("Proposal ID must be a numeric string.")
+    if len(value) > 5:
+        raise typer.BadParameter("Proposal ID too long")
+    
+    return value.zfill(5)  
 
 @retrieve_app.command(
     name="retrieve", help="Check the JWST data of given proposal id from MAST."
@@ -289,7 +297,8 @@ async def get_products_combined_request(
 @time_footer
 def cli_retrieve_check_async(
     proposal_id: Annotated[
-        str, typer.Argument(help="Proposal ID to check, 5 digits, e.g. '01895'.")
+        str, typer.Argument(help="Proposal ID to check, 5 digits, e.g. '01895'.",
+                            callback=proposal_id_callback)
     ],
     product_level: Annotated[
         str,
