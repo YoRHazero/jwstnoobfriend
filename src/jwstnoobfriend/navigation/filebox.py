@@ -1,9 +1,16 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 import re
+import os
+import asyncer
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import cpu_count
+from functools import partial
 from pydantic import BaseModel, FilePath, field_validator, model_validator, computed_field, Field, validate_call, DirectoryPath
 from jwstnoobfriend.navigation.jwstinfo import JwstInfo, JwstCover
 from jwstnoobfriend.navigation.footprint import FootPrint
 from jwstnoobfriend.utils.log import getLogger
+from jwstnoobfriend.utils.environment import load_environment
+from jwstnoobfriend.utils.display import track
 
 logger = getLogger(__name__)
 
@@ -84,6 +91,36 @@ class FileBox(BaseModel):
         return {info.basename: info.cover_dict[stage].footprint for info in self.infos if stage in info.cover_dict}        
     
     ## Methods for manipulating the FileBox
+    @validate_call
+    def update(self, *, infos: dict[str, JwstInfo] | list[JwstInfo] | JwstInfo):
+        """
+        Update the FileBox with new JwstInfo objects.
+        If a JwstInfo with the same basename already exists, it will merge the new information with the existing one.
+        
+        Parameters
+        ----------
+        infos : dict[str, JwstInfo] | list[JwstInfo] | JwstInfo
+            The JwstInfo objects to add or update in the FileBox. If a dictionary is provided, the keys should be the basenames of the JwstInfo objects.
+        
+        """
+        if isinstance(infos, JwstInfo):
+            infos = {infos.basename: infos}
+        elif isinstance(infos, list):
+            infos = {info.basename: info for info in infos}
+        
+        ## extract proposal IDs from the basenames of the JwstInfo objects
+        for info in infos.values():
+            proposal_id_match = re.search(r'jw(\d{5})', info.basename)
+            if proposal_id_match:
+                proposal_id = proposal_id_match.group(1)
+                if proposal_id not in self.proposal_ids:
+                    self.proposal_ids.append(proposal_id)
+        ## If the Basename already exists in the infos, merge the new JwstInfo with the existing one.
+        for key, info in infos.items():
+            if key in self.infos:
+                self.infos[key].merge(info)
+            else:
+                self.infos[key] = info
     
     @validate_call
     def update_from_file(self, *, filepath: FilePath, stage: str, force_with_wcs: bool = False) -> None:
@@ -100,39 +137,80 @@ class FileBox(BaseModel):
         """
         info = JwstInfo.new(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
         ## extract proposal ID from the basename of the file
-        proposal_id_match = re.search(r'jw(\d{5})', info.basename)
-        if proposal_id_match:
-            proposal_id = proposal_id_match.group(1)
-            if proposal_id not in self.proposal_ids:
-                self.proposal_ids.append(proposal_id)
-        ## If the Basename already exists in the infos, merge the new JwstInfo with the existing one.
-        if info.basename in self.infos:
-            self.infos[info.basename].merge(info)
-        else:
-            self.infos[info.basename] = info
+        self.update(infos=info)
     
-    
+    @classmethod
+    async def _infos_from_folder_async(cls,
+                                      *,
+                                      folder_path: DirectoryPath,
+                                      stage: str,
+                                      wildcard: str = '*.fits',
+                                      force_with_wcs: bool = False) -> list[JwstInfo]:
+        infos = []
+        tasks = []
+        async with asyncer.create_task_group() as task_group:
+            for filepath in folder_path.glob(wildcard):
+                if filepath.is_file():
+                    task = task_group.create_task(
+                        JwstInfo._new_async(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
+                    )
+                    tasks.append(task)
+        for task in tasks:
+            infos.append(task.value)
+        return infos
+            
+
     @validate_call
-    def init_from_folder(self, *, folder_path: DirectoryPath, stage: str, 
-                         wildcard='*.fits', force_with_wcs: bool = False) -> None:
+    def init_from_folder(self, *, stage: str, folder_path: DirectoryPath | None = None,
+                         wildcard='*.fits', force_with_wcs: bool = False, method: Literal['normal', 'async', 'parallel'] = 'normal') -> None:
         """
         Initializes the FileBox from a folder containing files. It will create a JwstInfo for each file that matches the wildcard.
         
         Parameters
         ----------
-        folder_path : DirectoryPath
-            The path to the folder containing the files.
         stage : str
             The stage of the JwstCover to be added for each file.
+        folder_path : DirectoryPath | None, optional
+            The path to the folder containing the files. If None, it will use the environment variable
+            STAGE_{stage.upper()}_PATH to find the folder path.
+            If the environment variable is not set, it will raise a ValueError.
         wildcard : str, optional
             The wildcard pattern to match files in the folder. Default is '*.fits'.
         force_with_wcs : bool, optional
             If True, the files are assumed to have a WCS object assigned regardless of their suffix
+        method : Literal['normal', 'async', 'parallel'], optional
+            The method to use for loading files. 'normal' will load files sequentially, 'async' will load files asynchronously,
+            and 'parallel' will load files with multiprocessing.
         """
-        for filepath in folder_path.glob(wildcard):
-            if filepath.is_file():
-                self.update_from_file(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
+        ## Get the folder path from the environment variable
+        if folder_path is None:
+            load_environment()
+            folder_path = os.getenv(f"STAGE_{stage.upper()}_PATH", None)
+            if folder_path is None:
+                raise ValueError(f"Folder path for stage '{stage}' is not set in the environment variables. Please provide a valid folder path manually.")
+            else:
+                folder_path = DirectoryPath(folder_path)
+        ## IO operation to load files
+        if method == 'normal':
+            for filepath in track(list(folder_path.glob(wildcard))):
+                if filepath.is_file():
+                    self.update_from_file(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
+        elif method == 'async':
+            infos = asyncer.runnify(self._infos_from_folder_async)(folder_path=folder_path, stage=stage, wildcard=wildcard, force_with_wcs=force_with_wcs)
+            self.update(infos=infos)
+        elif method == 'parallel':
+            valid_files = [f for f in folder_path.glob(wildcard) if f.is_file()]
             
+            # make closure to convert JwstInfo.new to a partial function
+            new_info_func = partial(JwstInfo.new, stage=stage, force_with_wcs=force_with_wcs)
+            # Use ProcessPoolExecutor to parallelize the creation of JwstInfo objects
+            with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
+                infos = list(executor.map(
+                    new_info_func,
+                    valid_files
+                ))
+            self.update(infos=infos)
+
     def merge(self, other: 'FileBox') -> 'FileBox':
         """
         Merges another FileBox into this one. If a JwstInfo with the same basename exists, it will merge the information.
@@ -188,8 +266,14 @@ class FileBox(BaseModel):
                     selected_infos[info.basename] = info
         return FileBox(infos=selected_infos)
 
-    def save(self, filepath: FilePath) -> None:
-        """Saves the FileBox to a file."""
+    def save(self, filepath: FilePath | None = None) -> None:
+        """
+        Saves the FileBox to a file.
+        If filepath is None, it will use the environment variable FILE_BOX_PATH or default to 'noobox.json' in the current directory.
+        """
+        if filepath is None:
+            filepath = os.getenv('FILE_BOX_PATH', 'noobox.json')
+            filepath = FilePath(filepath)
         with open(filepath, 'w') as f:
             f.write(self.model_dump_json(indent=4))
     
@@ -199,6 +283,7 @@ class FileBox(BaseModel):
         with open(filepath, 'r') as f:
             data = f.read()
         return cls.model_validate_json(data)
+    
     
     ## Special methods for accessing JwstInfo objects
 

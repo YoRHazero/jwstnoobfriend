@@ -48,5 +48,5 @@ dev = [
 
 [tool.ruff.lint]
 extend-select = [
-    "UP", # pyupgrade
+    #"UP", # pyupgrade
 ]

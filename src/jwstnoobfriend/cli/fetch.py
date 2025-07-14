@@ -1,4 +1,4 @@
-from pydantic import validate_call
+from pydantic import validate_call, ConfigDict
 import typer
 from typing import Annotated, Callable, Iterable, Literal
 from pathlib import Path
@@ -7,7 +7,15 @@ from jwstnoobfriend.utils.display import console, time_footer
 from jwstnoobfriend.utils.log import getLogger
 from astroquery.mast.missions import MastMissionsClass
 from rich.table import Table
-from rich.progress import Progress
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    TimeElapsedColumn,
+    MofNCompleteColumn,
+)
 import asyncio
 import asyncer
 from jwstnoobfriend.utils.network import ConnectionSession
@@ -409,18 +417,38 @@ def env_download_folder():
 mast_jwst_download_url = f"{mast_jwst_base_url}/retrieve_product"
 
 
-@validate_call
+@validate_call(config=ConfigDict(arbitrary_types_allowed=True))
 async def download_single_request(
     product: dict,
     output_dir: Path,
+    progress: Progress,
     exist_mode: Literal["skip", "overwrite"] = "skip",
-    progress_callback: Callable | None = None,
 ):
+    """Download a single product from MAST JWST.
+    
+    Args:
+        product (dict): The product information dictionary containing keys like 'filename', 'size', etc.
+        output_dir (Path): The directory where the product will be saved.
+        exist_mode (Literal["skip", "overwrite"]): How to handle existing files. Defaults to "skip".
+        individual_progress_callback (Callable | None): Optional callback function to report individual file download progress.
+        total_progress_callback (Callable | None): Optional callback function to report total download progress.
+    
+    Returns:
+        bool: True if the download was successful, False otherwise.
+    """
     filename = product["filename"]
     output_path = output_dir / filename
     if output_path.exists() and exist_mode == "skip":
-        logger.info(f"File {output_path} already exists, skipping download.")
-        return
+        # Check if the file size matches the expected size
+        if output_path.stat().st_size == product['size']:
+            logger.info(f"File {output_path} already exists, skipping download.")
+            # Call the progress callback if it exists
+            progress.update(0, advance=1)
+            return False
+        else:
+            logger.warning(
+                f"File {output_path} exists but size does not match. Will overwrite."
+            )
 
     MAX_CONCURRENT_DOWNLOADS = 5
     async with ConnectionSession.session(
@@ -435,12 +463,21 @@ async def download_single_request(
                 params={
                     "product_name": filename,
                 },
-                progress_callback=progress_callback,
+                progress_callback=lambda: progress.update(0, advance=1) 
             )
+            task_id = progress.add_task(
+                f"Downloading {filename}"
+                )
+            progress.update(task_id, description=f"Downloading File {task_id}", total=product['size'])
 
             ## for future individual download progress tracking
-            async for _ in generator:
-                pass
+            async for downloaded_size, total_size in generator:
+                progress.update(
+                    task_id,
+                    advance=downloaded_size,
+                    total=total_size,
+                    )
+            progress.remove_task(task_id)
             return True
         except Exception as e:
             logger.error(f"Failed to download {filename}: {e}")
@@ -454,17 +491,24 @@ async def download_products(
 ):
     """Wrapping the download_single_request so that it can be called by runnify."""
     tasks = []
-    with Progress() as progress:
-        total_file_task = progress.add_task("Total Progress:", total=len(products))
+    with Progress(
+        TextColumn("[bold blue]{task.description}[/bold blue]", justify="right"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        expand=True,
+        console=console,
+        ) as progress:
+        progress.add_task("Total Progress:", total=len(products))
         async with asyncer.create_task_group() as task_group:
-            for product in products:
+            for i, product in enumerate(products):
                 task = task_group.soonify(download_single_request)(
                     product=product,
                     output_dir=output_dir,
+                    progress=progress,
                     exist_mode=exist_mode,
-                    progress_callback=lambda: progress.update(
-                        total_file_task, advance=1
-                    ),
                 )
                 tasks.append(task)
     ## wait for all tasks to complete and report the results
@@ -518,10 +562,11 @@ def cli_retrieve_download(
         typer.Option(
             "-s",
             "--skip-exist",
+            is_flag=True,
             help="Skip the existing files in the output directory, default is True. If set to False, will overwrite the existing files.",
             rich_help_panel="Output",
         ),
-    ] = True,
+    ] = False,
 ):
     global console
     ## Load environment variables from .env
@@ -532,8 +577,9 @@ def cli_retrieve_download(
     if current_folder:
         output_dir = Path.cwd()
     else:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]{output_dir} is created[/green]")
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+            console.print(f"[green]{output_dir} is created[/green]")
 
     ## Load the products from the file
     with open(products_file, "r") as f:
@@ -546,6 +592,7 @@ def cli_retrieve_download(
         exist_mode = "skip"
     else:
         exist_mode = "overwrite"
+    
 
     download_status = asyncer.runnify(download_products)(
         products=products,
@@ -556,7 +603,7 @@ def cli_retrieve_download(
     download_status = [not not status for status in download_status]
 
     console.print(
-        f"[green]Downloaded {sum(download_status)} out of {len(products)} products.[/green]"
+        f"[green]Newly downloaded {sum(download_status)} out of {len(products)} products.[/green]"
     )
 
 

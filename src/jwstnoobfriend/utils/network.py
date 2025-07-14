@@ -48,7 +48,9 @@ class ConnectionSession:
     """The number of active references to the session."""
     _lock: anyio.Lock = anyio.Lock()
     """A lock to ensure thread-safe access to the session."""
-    _timeout: ClientTimeout | None = ClientTimeout(total=10*60)  # 10 minutes timeout for requests
+    _timeout: ClientTimeout | None = ClientTimeout(
+        total=None,  # Total timeout for the request
+    )
     """The timeout for requests made with the session."""
     @classmethod
     @contextlib.asynccontextmanager
@@ -72,7 +74,7 @@ class ConnectionSession:
         """
         async with cls._lock:
             if cls._session is None or cls._session.closed:
-                connector = TCPConnector(limit=max_tcp_connector)
+                connector = TCPConnector(limit=max_tcp_connector, keepalive_timeout=10 * 60)  # 10 minutes keepalive timeout
                 cls._session = ClientSession(timeout=cls._timeout, connector=connector)
             cls._reference_count += 1
         
