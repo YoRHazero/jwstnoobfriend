@@ -212,6 +212,7 @@ def append_env(
             + append_template.render(
                 replace=True,
                 file_box_path=data_root_path / "noobox.json",
+                auxiliary_path=data_root_path / "auxiliary",
                 stage_folder_paths=append_render_dict,
             )
         )
