@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "aiofiles>=24.1.0",
     "aiohttp>=3.12.13",
+    "anywidget>=0.9.18",
     "astropy>=7.1.0",
     "astroquery>=0.4.10",
     "asyncer>=0.0.8",
@@ -17,6 +18,7 @@ dependencies = [
     "jwst>=1.18.0",
     "matplotlib>=3.10.3",
     "numpy>=2.3.0",
+    "plotly>=6.2.0",
     "pydantic>=2.11.5",
     "python-dotenv>=1.1.1",
     "requests>=2.32.3",

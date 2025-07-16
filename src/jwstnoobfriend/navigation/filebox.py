@@ -1,16 +1,23 @@
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self, Callable
 import re
 import os
 import asyncer
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
 from functools import partial
+from rich.table import Table
+from collections import Counter
+import random
+from pathlib import Path
 from pydantic import BaseModel, FilePath, field_validator, model_validator, computed_field, Field, validate_call, DirectoryPath
+import plotly.express as px
+import numpy as np
+
 from jwstnoobfriend.navigation.jwstinfo import JwstInfo, JwstCover
 from jwstnoobfriend.navigation.footprint import FootPrint
 from jwstnoobfriend.utils.log import getLogger
 from jwstnoobfriend.utils.environment import load_environment
-from jwstnoobfriend.utils.display import track
+from jwstnoobfriend.utils.display import track, console
 
 logger = getLogger(__name__)
 
@@ -68,6 +75,11 @@ class FileBox(BaseModel):
         return list(sample_info.cover_dict.keys())
     
     @property
+    def filesetnames(self) -> list[str]:
+        """Returns a list of fileset names in the FileBox."""
+        return [info.filesetname for info in self.info_list]
+
+    @property
     def cover_dicts(self) -> dict[str, JwstCover]:
         """Returns a dictionary of JwstCover object dict for each file, keyed by the basename."""
         return {info.basename: info.cover_dict for info in self.info_list}
@@ -92,7 +104,7 @@ class FileBox(BaseModel):
     
     ## Methods for manipulating the FileBox
     @validate_call
-    def update(self, *, infos: dict[str, JwstInfo] | list[JwstInfo] | JwstInfo):
+    def update(self, *, infos: dict[str, JwstInfo] | list[JwstInfo] | JwstInfo) -> Self:
         """
         Update the FileBox with new JwstInfo objects.
         If a JwstInfo with the same basename already exists, it will merge the new information with the existing one.
@@ -102,6 +114,10 @@ class FileBox(BaseModel):
         infos : dict[str, JwstInfo] | list[JwstInfo] | JwstInfo
             The JwstInfo objects to add or update in the FileBox. If a dictionary is provided, the keys should be the basenames of the JwstInfo objects.
         
+        Returns
+        -------
+        FileBox
+            The updated FileBox with the new JwstInfo objects.
         """
         if isinstance(infos, JwstInfo):
             infos = {infos.basename: infos}
@@ -121,9 +137,10 @@ class FileBox(BaseModel):
                 self.infos[key].merge(info)
             else:
                 self.infos[key] = info
+        return self
     
     @validate_call
-    def update_from_file(self, *, filepath: FilePath, stage: str, force_with_wcs: bool = False) -> None:
+    def update_from_file(self, *, filepath: FilePath, stage: str, force_with_wcs: bool = False) -> Self:
         """Add a new JwstInfo to the infos from a file path. If the file already exists, it will merge the new information with the existing one.
         
         Parameters
@@ -138,6 +155,38 @@ class FileBox(BaseModel):
         info = JwstInfo.new(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
         ## extract proposal ID from the basename of the file
         self.update(infos=info)
+        return self
+    
+    @validate_call
+    def update_from_folder(self, *, folder_path: DirectoryPath, stage: str, wildcard: str = '*.fits', force_with_wcs: bool = False) -> Self:
+        """
+        Updates the FileBox with JwstInfo objects from a folder containing files.
+        It will create a JwstInfo for each file that matches the wildcard.
+        
+        Parameters
+        ----------
+        folder_path : DirectoryPath
+            The path to the folder containing the files.
+        stage : str
+            The stage of the JwstCover to be added for each file.
+        wildcard : str, optional
+            The wildcard pattern to match files in the folder. Default is '*.fits'.
+        force_with_wcs : bool, optional
+            If True, the files are assumed to have a WCS object assigned regardless of their suffix.
+        
+        Returns
+        -------
+        FileBox
+            The updated FileBox with the new JwstInfo objects.
+        """
+        new_box = Self.init_from_folder(
+            stage=stage,
+            folder_path=folder_path,
+            wildcard=wildcard,
+            force_with_wcs=force_with_wcs,
+            method='parallel')
+        self.merge(new_box)
+        return self
     
     @classmethod
     async def _infos_from_folder_async(cls,
@@ -159,10 +208,10 @@ class FileBox(BaseModel):
             infos.append(task.value)
         return infos
             
-
+    @classmethod
     @validate_call
-    def init_from_folder(self, *, stage: str, folder_path: DirectoryPath | None = None,
-                         wildcard='*.fits', force_with_wcs: bool = False, method: Literal['async', 'parallel'] = 'parallel') -> None:
+    def init_from_folder(cls, *, stage: str, folder_path: DirectoryPath | None = None,
+                         wildcard='*.fits', force_with_wcs: bool = False, method: Literal['async', 'parallel', 'loop'] = 'parallel') -> Self:
         """
         Initializes the FileBox from a folder containing files. It will create a JwstInfo for each file that matches the wildcard.
         
@@ -178,11 +227,13 @@ class FileBox(BaseModel):
             The wildcard pattern to match files in the folder. Default is '*.fits'.
         force_with_wcs : bool, optional
             If True, the files are assumed to have a WCS object assigned regardless of their suffix
-        method : Literal['async', 'parallel'], optional
+        method : Literal['async', 'parallel', 'loop'], optional
             The method to use for loading files. 'async' will load files asynchronously, 'parallel' will use parallel processing.
+            'loop' will load files in a loop, should be used for small numbers of files.
             Default is 'parallel'.
         """
         ## Get the folder path from the environment variable
+        self = cls(infos={}, proposal_ids=[])
         if folder_path is None:
             load_environment()
             folder_path = os.getenv(f"STAGE_{stage.upper()}_PATH", None)
@@ -206,8 +257,13 @@ class FileBox(BaseModel):
                         valid_files
                     ))
                 self.update(infos=infos)
+            case 'loop':
+                for filepath in folder_path.glob(wildcard):
+                    if filepath.is_file():
+                        self.update_from_file(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
+        return self
 
-    def merge(self, other: 'FileBox') -> 'FileBox':
+    def merge(self, other: Self) -> Self:
         """
         Merges another FileBox into this one. If a JwstInfo with the same basename exists, it will merge the information.
         Else, it will add the new JwstInfo to the infos dictionary.
@@ -232,6 +288,7 @@ class FileBox(BaseModel):
                 self.infos[key].merge(info)
             else:
                 self.infos[key] = info
+                logger.warning(f"Adding new JwstInfo with basename {key} to FileBox.")
                 
         ## Merge proposal IDs
         for proposal_id in other.proposal_ids:
@@ -239,42 +296,105 @@ class FileBox(BaseModel):
                 self.proposal_ids.append(proposal_id)
         return self
     
-    def select(self, condition: dict[str: Any]) -> 'FileBox':
+    @validate_call
+    def select(self, condition: dict[str, list[Any]] | None = None, predicate: Callable[[JwstInfo], bool] | None = None) -> Self:
         """
-        Selects JwstInfo objects from the FileBox based on a condition.
+        Selects JwstInfo objects from the FileBox based on specified conditions.
         
         Parameters
         ----------
-        condition : dict[str, Any]
-            A dictionary where keys are attributes of JwstInfo and values are the values to match.
-        
+        condition : dict[str, list[Any]] | None
+            A dictionary where keys are attribute names of JwstInfo objects and values are 
+            lists of acceptable values to match. The selection uses AND logic between different 
+            attributes (all conditions must be satisfied) and OR logic within each attribute's 
+            value list (any value in the list can match).
+            
+            Supported attribute keys include:
+            - 'filter': Filter names (e.g., ['F200W', 'F115W'])
+            - 'detector': Detector names (e.g., ['NRCA1', 'NRCA2'])
+            - 'pupil': Pupil names (e.g., ['CLEAR', 'GRISMR'])
+            - 'basename': File basenames
+            - Any other valid JwstInfo attribute
+            
+        predicate : Callable[[JwstInfo], bool] | None
+            A predicate function that takes a JwstInfo object and returns True if it 
+            should be selected. If both condition and predicate are provided, the 
+            result will contain the union of both selections.
+
         Returns
         -------
-        FileBox
-            A new FileBox containing only the JwstInfo objects that match the condition.
+        Self
+            A new FileBox containing only the JwstInfo objects that match the criteria.
+            
+        Raises
+        ------
+        ValueError
+            If neither condition nor predicate is provided, or if condition contains 
+            invalid attribute keys that don't exist in JwstInfo objects.
+            
+        Examples
+        --------
+        ```python
+        # Select files with specific filters and detectors
+        selected_box = filebox.select(condition={
+            'filter': ['F200W', 'F115W'],
+            'detector': ['NRCA1']
+        })
+        
+        # Select files using a predicate function
+        selected_box = filebox.select(predicate=lambda info: 'F200W' in info.filter)
+        ```
+        Notes
+        -----
+        - The condition dictionary uses AND logic between different keys and OR logic 
+        within each key's value list
+        - For example: {'filter': ['F200W', 'F115W'], 'detector': ['NRCA1']} 
+        means "(filter is F200W OR F115W) AND (detector is NRCA1)"
+        - All attribute values are compared using Python's `in` operator with exact matching
+        - Use predicate functions for more complex selection logic like partial string 
+        matching or numerical comparisons
         """
         selected_infos = {}
-        for key, value in condition.items():
-            if not hasattr(JwstInfo, key):
-                raise ValueError(f"Invalid condition key: {key}")
+        if condition is None and predicate is None:
+            raise ValueError("At least one of 'condition' or 'predicate' must be provided.")
+        if condition:
+            for key in condition.keys():
+                if not hasattr(JwstInfo, key):
+                    raise ValueError(f"Invalid condition key: {key}. JwstInfo does not have this attribute.")
             for info in self.info_list:
-                if getattr(info, key) == value:
+                matched = True
+                for key, values in condition.items():
+                    if getattr(info, key) not in values:
+                        matched = False
+                        break
+                if matched:
+                    selected_infos[info.basename] = info
+            
+        if predicate:
+            for info in self.info_list:
+                if predicate(info):
                     selected_infos[info.basename] = info
         return FileBox(infos=selected_infos)
 
-    def save(self, filepath: FilePath | None = None) -> None:
+    @validate_call
+    def save(self, filepath: Path | None = None, force_overwrite: bool = False) -> None:
         """
         Saves the FileBox to a file.
         If filepath is None, it will use the environment variable FILE_BOX_PATH or default to 'noobox.json' in the current directory.
         """
         if filepath is None:
             filepath = os.getenv('FILE_BOX_PATH', 'noobox.json')
-            filepath = FilePath(filepath)
+            filepath = Path(filepath)
+        if filepath.exists() and not force_overwrite:
+            old_box = self.load(filepath=filepath)
+            if len(old_box) > len(self):
+                raise ValueError(f"FileBox at {filepath} already exists and has more files ({len(old_box)}) than the current FileBox ({len(self)}). Use force_overwrite=True to overwrite if this is desired or save in a different file.")
         with open(filepath, 'w') as f:
             f.write(self.model_dump_json(indent=4))
     
     @classmethod
-    def load(cls, filepath: FilePath | None = None) -> 'FileBox':
+    @validate_call
+    def load(cls, filepath: FilePath | None = None) -> Self:
         """Loads a FileBox from a file."""
         if filepath is None:
             filepath = os.getenv('FILE_BOX_PATH', 'noobox.json')
@@ -307,5 +427,87 @@ class FileBox(BaseModel):
         return iter(self.infos.items())
     
     ## Methods for visualization, grouping, and filtering
+    def summary(self) -> None:
+        combinations = []
+        for info in self.info_list:
+            combinations.append((info.pupil, info.filter, info.detector))        
+        combo_counts = Counter(combinations)
+        
+        nested_data = {}
+        for (pupil, filter_, detector), count in combo_counts.items():
+            if pupil not in nested_data:
+                nested_data[pupil] = {}
+            if filter_ not in nested_data[pupil]:
+                nested_data[pupil][filter_] = {}
+            nested_data[pupil][filter_][detector] = count
+        
+        main_table = Table(title=f"FileBox Summary ({len(self)} files)",)
+        main_table.add_column("Pupil", style="bold cyan")
+        main_table.add_column("Filter       Detector      Count", style="white")
+
+        for pupil in sorted(nested_data.keys()):
+            filters = nested_data[pupil]
+            filter_table = Table(show_header=False, box=None, padding=(0, 1))
+            filter_table.add_column("Filter", style="bold magenta", width=12)
+            filter_table.add_column("Detectors", style="white")
+            
+            for filter_ in sorted(filters.keys()):
+                detectors = filters[filter_]
+                detector_table = Table(show_header=False, box=None, padding=(0, 0))
+                detector_table.add_column("Detector", style="bold green", width=10)
+                detector_table.add_column("Count", style="bold yellow", justify="right", width=6)
+                
+                for detector in sorted(detectors.keys()):
+                    count = detectors[detector]
+                    detector_table.add_row(detector, str(count))
+                
+                filter_table.add_row(filter_, detector_table)
+            
+            main_table.add_row(pupil, filter_table)
+        console.print(main_table)
     
+    @validate_call
+    def example(self, size: Annotated[int, Field(gt=0)] = 10, attrs_in_sample: list[str] | None = None) -> Self:
+        """
+        Returns a new FileBox containing a random sample of JwstInfo objects from the current FileBox.
+        
+        Parameters
+        ----------
+        size : int, optional
+            The number of JwstInfo objects to include in the sample. Default is 10.
+            
+        Returns
+        -------
+        FileBox
+            A new FileBox containing a random sample of JwstInfo objects.
+        """
+        if size > len(self):
+            size = len(self)
+        
+        if attrs_in_sample is None:
+            attrs_in_sample = ['pupil']   
+            
+        sampled_infos = random.sample(self.info_list, size)        
+        
+        sampled_types = set(tuple(getattr(info, attr) for attr in attrs_in_sample) for info in sampled_infos)
+        total_types = set(tuple(getattr(info, attr) for attr in attrs_in_sample) for info in self.info_list)
+        
+
+        if len(total_types) > size:
+            diff = len(total_types) - size
+            logger.warning(f"Total unique combinations ({len(total_types)}) exceed sample size ({size}). The example cannot cover all types.")
+        else:
+            diff = 0
+        
+        attempt = 0
+        max_attempts = 1000
+        while attempt < max_attempts:
+            attempt += 1
+            if (len(total_types) - len(sampled_types)) <= diff:
+                break
+            sampled_infos = random.sample(self.info_list, size)
+            sampled_types = set(tuple(getattr(info, attr) for attr in attrs_in_sample) 
+                                    for info in sampled_infos)
+        return self.__class__(infos={info.basename: info for info in sampled_infos})
+        
     

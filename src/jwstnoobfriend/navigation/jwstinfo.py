@@ -1,8 +1,11 @@
 from pydantic import BaseModel, Field, field_validator, validate_call, FilePath
 from pathlib import Path
-from typing import Any, ClassVar, Annotated
+from typing import Any, ClassVar, Annotated, Self, overload, Literal
 from gwcs.wcs import WCS
 import re
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
 from jwstnoobfriend.utils.log import getLogger
 from jwstnoobfriend.navigation.footprint import FootPrint
 from jwstnoobfriend.navigation._cache import (
@@ -115,9 +118,100 @@ class JwstCover(BaseModel):
         """Get the data quality data for this file."""
         datamodel = self.datamodel
         return datamodel.dq
+    @overload
+    def plotly_notebook(self, *, return_figure: Literal[True], **kwargs) -> go.Figure:
+        ...
+    @overload
+    def plotly_notebook(self, *, return_figure: Literal[False], **kwargs) -> None:
+        ...
+
+    def plotly_notebook(self,
+               fig_height: int| None = None,
+               fig_width: int | None = None,
+               facet_col_wrap: int = 2,
+               pmin: float = 1.,
+               pmax: float = 99.,
+               color_map: str = 'gray',
+               return_figure: bool = False
+               ) -> go.Figure | None:
+        """Plot the data using Plotly in a notebook.
+        
+        Parameters
+        ----------
+        fig_height : int, optional
+            Height of the figure in pixels, by default None. If None, it will be calculated based on the data shape.
+        fig_width : int, optional
+            Width of the figure in pixels, by default None. If None, it will be calculated based on the data shape.
+        facet_col_wrap : int, optional
+            Number of columns to wrap the facets, by default 2.
+        pmin : float, optional
+            Minimum percentile for the color scale, by default 1.0.
+        pmax : float, optional
+            Maximum percentile for the color scale, by default 99.0.
+        color_map : str, optional
+            Color map to use for the plot, by default 'gray'.
+        return_figure : bool, optional
+            If True, return the figure object instead of showing it, by default False.
+        """
+        data = self.data
+        shape = data.shape
+        zmin, zmax = np.nanpercentile(data, [pmin, pmax])
+        match len(shape):
+            case 2:
+                fig = px.imshow(
+                    data,
+                    zmin=zmin,
+                    zmax=zmax,
+                    color_continuous_scale=color_map,
+                    binary_string=True,
+                )
+            case 3:
+                if fig_height is None:
+                    fig_height = np.ceil(shape[0] / facet_col_wrap).astype(int) * 500
+                if fig_width is None:
+                    fig_width = facet_col_wrap * 500
+                fig = px.imshow(
+                    data,
+                    facet_col=0,
+                    facet_col_wrap=facet_col_wrap,
+                    zmin=zmin,
+                    zmax=zmax,
+                    color_continuous_scale=color_map,
+                    binary_string=True,
+                )
+            case 4:
+                if shape[0] == 1:
+                    facet_col_wrap = 1
+                if fig_height is None:
+                    fig_height = np.ceil(shape[0] / facet_col_wrap).astype(int) * 500 + 50
+                if fig_width is None:
+                    fig_width = facet_col_wrap * 500
+                fig = px.imshow(
+                    data,
+                    facet_col=0,
+                    facet_col_wrap=facet_col_wrap,
+                    animation_frame=1,
+                    zmin=zmin,
+                    zmax=zmax,
+                    binary_string=True,
+                    color_continuous_scale=color_map,
+                )
+            case _:
+                raise ValueError(
+                    f"Unsupported data shape {shape}. Only 2D, 3D, and 4D data are supported."
+                )
+        fig.update_layout(
+            height=fig_height,
+            width=fig_width,
+        )
+        if return_figure:
+            return fig
+        else:
+            fig.show(config={'modeBarButtonsToAdd':['drawrect',
+                                                    'eraseshape']})
 
     @classmethod
-    def new(cls, filepath: Path, with_wcs: bool = True) -> "JwstCover":
+    def new(cls, filepath: Path, with_wcs: bool = True) -> Self:
         """
         Create a new JwstCover instance.
 
@@ -138,7 +232,7 @@ class JwstCover(BaseModel):
         return cls(filepath=filepath, footprint=footprint)
 
     @classmethod
-    async def _new_async(cls, filepath: Path, with_wcs: bool = True) -> "JwstCover":
+    async def _new_async(cls, filepath: Path, with_wcs: bool = True) -> Self:
         """
         Create a new JwstCover instance asynchronously, this requires to be executed in an async context.
 
@@ -272,11 +366,28 @@ class JwstInfo(BaseModel):
             default_factory=dict,
         ),
     ]
+    
+    @property
+    def filesetname(self) -> str:
+        """
+        Get the fileset name from the basename.
+        
+        Returns
+        -------
+        str
+            The fileset name, which is the first part of the basename.
+        """
+        file_set_regex = r"jw\d{5}\d{3}\d{3}_\d{5}_\d{5}"
+        match = re.match(file_set_regex, self.basename)
+        if match:
+            return match.group(0)
+        else:
+            raise ValueError(f"Basename {self.basename} does not match the expected pattern.")
 
     @classmethod
     def new(
         cls, filepath: FilePath | str, stage: str, force_with_wcs: bool = False
-    ) -> "JwstInfo":
+    ) -> Self:
         """
         Create a new JwstInfo instance from a file path. Note that whether the file has
         a WCS object assigned is determined by the suffix of the file name.
@@ -318,7 +429,7 @@ class JwstInfo(BaseModel):
     @classmethod
     async def _new_async(
         cls, *, filepath: FilePath | str, stage: str, force_with_wcs: bool = False
-    ) -> "JwstInfo":
+    ) -> Self:
         filepath = Path(filepath)
         if not filepath.exists():
             raise FileNotFoundError(f"File {filepath} does not exist")
@@ -375,7 +486,7 @@ class JwstInfo(BaseModel):
         self.cover_dict[stage] = jwst_cover
         return self
 
-    def merge(self, other: "JwstInfo") -> "JwstInfo":
+    def merge(self, other: Self) -> Self:
         """
         Merge another JwstInfo instance into this one.
 
@@ -395,3 +506,19 @@ class JwstInfo(BaseModel):
         merged_cover_dict = {**self.cover_dict, **other.cover_dict}
         self.cover_dict = merged_cover_dict
         return self
+    
+    def __getitem__(self, stage: str) -> JwstCover:
+        """
+        Get the JwstCover for a specific stage.
+
+        Parameters
+        ----------
+        stage : str
+            Calibration stage of the file, e.g. '1b', '2a', '2b', '2c'.
+
+        Returns
+        -------
+        JwstCover
+            The JwstCover object for the specified stage.
+        """
+        return self.cover_dict[stage]

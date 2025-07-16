@@ -2,12 +2,13 @@ from pydantic import (
     BaseModel,
     field_validator,
     model_validator,
+    validate_call,
     computed_field,
     FilePath,
 )
 from pathlib import Path
 from shapely.geometry import Polygon, Point
-from typing import Any, Iterable
+from typing import Any, Iterable, Self
 from astropy.coordinates import SkyCoord
 from jwstnoobfriend.utils import log
 from jwstnoobfriend.navigation._cache import (
@@ -102,7 +103,8 @@ class FootPrint(BaseModel):
         ]
 
     @classmethod
-    def new(cls, file_path: FilePath | str) -> "FootPrint":
+    @validate_call
+    def new(cls, file_path: FilePath | str) -> Self:
         """Creates a FootPrint object from a file containing vertices.
 
         The file should contain wcs information, or return None if the file does not have a WCS object assigned.
@@ -159,7 +161,8 @@ class FootPrint(BaseModel):
             return None
 
     @classmethod
-    async def _new_async(cls, file_path: FilePath | str) -> "FootPrint":
+    @validate_call
+    async def _new_async(cls, file_path: FilePath | str) -> Self:
         import numpy as np
 
         file_path = Path(file_path)
