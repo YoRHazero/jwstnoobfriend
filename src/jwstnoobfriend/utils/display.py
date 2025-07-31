@@ -1,4 +1,3 @@
-from ast import main
 import inspect
 import functools
 from rich.progress import Progress, TaskID, track
@@ -7,11 +6,17 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 from pydantic import validate_call
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Literal
 import threading
 import time
 from datetime import timedelta
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
 
+
+__all__ = ['console','track_func','time_footer', 'plotly_figure_and_mask']
+## Terminal part
 console = Console()
     
 @validate_call
@@ -112,4 +117,133 @@ def time_footer(func: Callable) -> Callable:
                 console.print = original_print
     return wrapper
             
-            
+
+# Visualization part
+
+def plotly_figure_and_mask(
+    data: list[np.ndarray] | None = None,
+    mask: list[np.ndarray] | None = None,
+    pmin: float = 1.0,
+    pmax: float = 99.0,
+    zmin: float | None = None,
+    zmax: float | None = None,
+    cmap: str = 'gray',
+    binary_mode: bool = True,
+    height: int = 600,
+    width: int = 600,
+    align_mode: Literal['blink', 'wrap'] = 'animate',
+    subtitles: list[str] | None = None,
+) -> go.Figure:
+    """
+    Create a Plotly figure with a list of data and mask arrays, applying a color scale and alignment.
+    
+    Parameters
+    ----------
+    data : list[np.ndarray] | None
+        A list of numpy arrays representing the data to be displayed. If None, an empty list is used.
+    mask : list[np.ndarray] | None
+        A list of numpy arrays representing the masks to be applied to the data. If None, an empty list is used.
+    pmin : float, optional
+        The minimum percentile for the color scale. Default is 1.0. If `zmin` is provided, this is ignored.
+    pmax : float, optional
+        The maximum percentile for the color scale. Default is 99.0. If `zmax` is provided, this is ignored.
+    zmin : float | None, optional
+        The minimum value for the color scale. If None, it is calculated from the data.
+    zmax : float | None, optional
+        The maximum value for the color scale. If None, it is calculated from the data.
+    cmap : str, optional
+        The color map to use for the figure. Default is 'gray'.
+    binary_mode : bool, optional
+        Whether to treat the data as binary strings. Default is True.
+    height : int, optional
+        The height of the figure in pixels. Default is 600.
+    width : int, optional
+        The width of the figure in pixels. Default is 600.
+    align_mode : Literal['blink', 'wrap'], optional
+        The alignment mode for the figure. Options are 'blink' for animation frame alignment or 'wrap' for facet column wrapping. Default is 'animate'.
+    subtitles : list[str] | None
+        A list of subtitles for each data and mask array. If None, default subtitles are generated.
+        
+    Returns
+    -------
+    go.Figure
+        A Plotly figure object containing the data and masks visualized with the specified parameters.
+    
+    """
+    
+    # Validate inputs
+    if data is None:
+        data = []
+    if mask is None:
+        mask = []
+    if len(data) + len(mask) == 0:
+        raise ValueError("At least one of 'data' or 'mask' must be provided.")
+    if subtitles:
+        if len(subtitles) != len(data) + len(mask):
+            raise ValueError("Length of 'subtitles' must match the total number of data and mask arrays.")
+    else:
+        subtitles = [f"Data {i+1}" for i in range(len(data))] + [f"Mask {i+1}" for i in range(len(mask))]
+        
+    if zmin is None:
+        zmin = np.nanpercentile(np.concatenate(data), pmin)
+    if zmax is None:
+        zmax = np.nanpercentile(np.concatenate(data), pmax)
+    
+    mask_arrays = []
+    for m in mask:
+        mask_array = np.where(m, zmax, zmin)
+        mask_arrays.append(mask_array)
+
+    arrays_to_show = np.array(data + mask_arrays)
+    match align_mode:
+        case 'blink':
+            align_method = {'animation_frame': 0}
+        case 'wrap':
+            align_method = {'facet_col': 0, 'facet_col_wrap': 2}
+    fig = px.imshow(arrays_to_show,
+        zmin=zmin,
+        zmax=zmax,
+        color_continuous_scale=cmap,
+        binary_string=binary_mode,
+        **align_method,
+        height=height,
+        width=width,
+    )
+    
+    for annotation, subtitle in zip(fig.layout.annotations, subtitles):
+        annotation.text = subtitle
+    
+    return fig
+
+def plotly_sky_figure(projection_type: str = "orthographic",
+                      showlatgrid: bool = True,
+                      showlongrid: bool = True,
+                      lataxis_dtick: int = 90,
+                      lonaxis_dtick: int = 90,
+                      gridcolor: str = "gray",
+                      griddash: str = "dash") -> go.Figure:
+    fig = go.Figure(go.Scattergeo())
+    fig.update_geos(
+        projection_type=projection_type,
+        showland=False,
+        showcoastlines=False,
+        lataxis=dict(
+            showgrid=showlatgrid,
+            tick0=0,
+            dtick=lataxis_dtick,
+            gridcolor=gridcolor,
+            gridwidth=2,
+            griddash=griddash
+        ),
+        lonaxis = dict(
+            showgrid=showlongrid,
+            tick0=0,
+            dtick=lonaxis_dtick,
+            gridcolor=gridcolor,
+            gridwidth=2,
+            griddash=griddash
+        )
+    )
+    fig.update_layout(margin={'b': 20, 't': 20})
+
+    return fig

@@ -82,6 +82,7 @@ nav:
   - NOOBFRIEND: index.md
   - Key Concepts:
       - Overview: KeyConcepts/index.md
+      - Navigation: KeyConcepts/navigation.md
 
   - Step-by-Step Tutorial:
       - Overview: StepByStepTutorial/index.md
@@ -90,5 +91,6 @@ nav:
       - Retrieving JWST Data: StepByStepTutorial/fetch.md
       - Reduction with Pipeline: 
         - Preliminary: StepByStepTutorial/reduction/index.md
+        - Stage 1: StepByStepTutorial/reduction/stage1.md
 
 

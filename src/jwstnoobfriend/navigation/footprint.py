@@ -17,7 +17,8 @@ from jwstnoobfriend.navigation._cache import (
     _open_and_cache_wcs,
     _open_and_cache_wcs_async,
 )
-
+import array
+import plotly.graph_objects as go
 __all__ = ["FootPrint", "CompoundFootPrint"]
 
 logger = log.getLogger(__name__)
@@ -101,7 +102,12 @@ class FootPrint(BaseModel):
         return [
             SkyCoord(ra=coord[0], dec=coord[1], unit="deg") for coord in self.vertices
         ]
-
+        
+    @property
+    def vertices_for_plot(self) -> tuple[array.array, array.array]:
+        """Returns the vertices as two separate arrays for plotting."""
+        return self.polygon.exterior.xy
+    
     @classmethod
     @validate_call
     def new(cls, file_path: FilePath | str) -> Self:
@@ -213,6 +219,124 @@ class FootPrint(BaseModel):
                 If this is not expected, please check whether the file is assigned a WCS object."
             )
             return None
+
+    def add_trace_in_sky(self, 
+                            fig: go.Figure, 
+                            color: str = 'teal', 
+                            point_hovertemplate: str | None = None,
+                            fp_hovertemplate: str | None = None) -> go.Figure:
+        """
+        Adds the footprint to a Plotly figure as a scattergeo trace.
+        
+        Parameters
+        ----------
+        fig : go.Figure
+            The Plotly figure to which the footprint will be added.
+        color : str, optional
+            The color of the footprint line, by default 'teal'.
+        point_hovertemplate : str, optional
+            The hover template for the points, if None, a default template will be used.
+        fp_hovertemplate : str, optional
+            The footprint-level information to show in the hover template, if None, no additional information will be shown.
+            
+        Returns
+        -------
+        go.Figure
+            The Plotly figure with the footprint added as a trace.
+        """
+        ra_arr, dec_arr = self.vertices_for_plot
+        ra_arr = ra_arr.tolist()
+        dec_arr = dec_arr.tolist()
+        if point_hovertemplate is None:
+            point_hovertemplate = '<b>Pixel: %{text}</b><br>' + \
+                            'RA: %{lon:.3f}<br>' + \
+                            'Dec: %{lat:.3f}<br>' + \
+                            '<extra></extra>'
+        if fp_hovertemplate is not None:
+            hovertemplate = point_hovertemplate + fp_hovertemplate
+        else:
+            hovertemplate = point_hovertemplate
+                                  
+        fig.add_trace(
+            go.Scattergeo(
+                lat=dec_arr,
+                lon=ra_arr,
+                mode="lines",
+                line=dict(color=color, dash='dash'),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        fig.add_trace(
+            go.Scattergeo(
+                lat=dec_arr[:-1],
+                lon=ra_arr[:-1],
+                mode='markers',
+                showlegend=False,
+                text=self.vertex_marker if self.vertex_marker else [str(i) for i in range(len(ra_arr[:-1]))],
+                hovertemplate=hovertemplate,
+            )
+        )
+        return fig
+    
+    def add_trace_in_cartesian(self, 
+                            fig: go.Figure, 
+                            color: str = 'teal', 
+                            point_hovertemplate: str | None = None,
+                            fp_hovertemplate: str | None = None) -> go.Figure:
+        """
+        Adds the footprint to a Plotly figure as a scatter trace in Cartesian coordinates.
+        
+        Parameters
+        ----------
+        fig : go.Figure
+            The Plotly figure to which the footprint will be added.
+        color : str, optional
+            The color of the footprint line, by default 'teal'.
+        point_hovertemplate : str, optional
+            The hover template for the points, if None, a default template will be used.
+        fp_hovertemplate : str, optional
+            The footprint-level information to show in the hover template, if None, no additional information will be shown.
+        
+        Returns
+        -------
+        go.Figure
+            The Plotly figure with the footprint added as a trace.
+        """
+        ra_arr, dec_arr = self.vertices_for_plot
+        ra_arr = ra_arr.tolist()
+        dec_arr = dec_arr.tolist()
+        if point_hovertemplate is None:
+            point_hovertemplate = '<b>Pixel: %{text}</b><br>' + \
+                            'RA: %{x:.3f}<br>' + \
+                            'Dec: %{y:.3f}<br>' + \
+                            '<extra></extra>'
+        if fp_hovertemplate is not None:
+            hovertemplate = point_hovertemplate + fp_hovertemplate
+        else:
+            hovertemplate = point_hovertemplate
+        
+        fig.add_trace(
+            go.Scatter(
+                x=ra_arr,
+                y=dec_arr,
+                mode="lines",
+                line=dict(color=color, dash='dash'),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=ra_arr[:-1],
+                y=dec_arr[:-1],
+                mode='markers',
+                showlegend=False,
+                text=self.vertex_marker if self.vertex_marker else [str(i) for i in range(len(ra_arr[:-1]))],
+                hovertemplate=hovertemplate,
+            )
+        )
+        return fig
 
 
 class CompoundFootPrint(FootPrint):

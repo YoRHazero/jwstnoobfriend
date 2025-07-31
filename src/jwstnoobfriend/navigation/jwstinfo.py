@@ -7,11 +7,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from jwstnoobfriend.utils.log import getLogger
+from jwstnoobfriend.utils.display import plotly_figure_and_mask
 from jwstnoobfriend.navigation.footprint import FootPrint
 from jwstnoobfriend.navigation._cache import (
     _open_and_cache_datamodel,
     _open_and_cache_wcs,
 )
+from jwstnoobfriend.utils.calculate import mad_clipped_stats, gaussian_fill_nan, segmentation_mask
 
 logger = getLogger(__name__)
 
@@ -40,24 +42,18 @@ class JwstCover(BaseModel):
     dq : Any
         Data quality data for this file, extracted from the datamodel.
 
-    Methods
-    -------
-    new(filepath: FilePath, with_wcs: bool = True) -> 'JwstCover':
-        Create a new JwstCover instance.
-
-    resolve_filepath(value: FilePath) -> FilePath:
-        Resolve the filepath to an absolute path.
-
     Example
     -------
-    >>> from jwstnoobfriend.navigation.jwstinfo import JwstCover
+    ```python
+    from jwstnoobfriend.navigation.jwstinfo import JwstCover
     Directly creating an instance:
-    >>> cover = JwstCover(
-    ...     filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits',
-    ...     footprint=FootPrint.new([(0, 0), (1, 0), (1, 1), (0, 1)])
-    ... )
+    cover = JwstCover(
+        filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits',
+        footprint=FootPrint.new([(0, 0), (1, 0), (1, 1), (0, 1)])
+    )
     Creating an instance with a filepath:
-    >>> cover = JwstCover.new(filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits', with_wcs=True)
+    cover = JwstCover.new(filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits', with_wcs=True)
+    ```
     Provide a correct with_wcs parameter will receive a clear log message
     """
 
@@ -118,38 +114,157 @@ class JwstCover(BaseModel):
         """Get the data quality data for this file."""
         datamodel = self.datamodel
         return datamodel.dq
-    @overload
-    def plotly_notebook(self, *, return_figure: Literal[True], **kwargs) -> go.Figure:
-        ...
-    @overload
-    def plotly_notebook(self, *, return_figure: Literal[False], **kwargs) -> None:
-        ...
+    
+    def segmentation(self,
+                     data: np.ndarray | None = None,
+                     factor: float = 2,
+                     min_pixels_connected: int = 10,
+                     kernel_radius: int = 4,
+                     sigma: float | None = None) -> np.ndarray:
+        """
+        Create a segmentation mask for the data using the MAD method.
 
-    def plotly_notebook(self,
-               fig_height: int| None = None,
-               fig_width: int | None = None,
-               facet_col_wrap: int = 2,
-               pmin: float = 1.,
-               pmax: float = 99.,
-               color_map: str = 'gray',
-               return_figure: bool = False
-               ) -> go.Figure | None:
+        Returns
+        -------
+        np.ndarray
+            A boolean mask indicating the segmented regions.
+        """
+        if data is None:
+            data = self.data
+        if data.ndim != 2:
+            raise ValueError("Segmentation mask can only be created for 2D data.")
+        return segmentation_mask(data, factor=factor,
+                                 min_pixels_connected=min_pixels_connected,
+                                 kernel_radius=kernel_radius, sigma=sigma)
+    
+    def gaussian_smooth(self, 
+                        mask_valid: np.ndarray | None = None,
+                        kernel_radius_x: int = 15,
+                        kernel_radius_y: int | None = None,
+                        sigma_x: float | None = None,
+                        sigma_y: float | None = None,
+                        fill_outer_nan: Literal['nan', 'zero', 'mean', 'median', 'nearest'] = 'nan'
+                        ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Apply Gaussian smoothing to the data.
+
+        Parameters
+        ----------
+        mask_valid : np.ndarray | None, optional
+            A boolean mask indicating valid data points. If None, all data points are considered valid.
+        kernel_radius_x : int, optional
+            The radius of the Gaussian kernel in the x direction. Default is 15.
+        kernel_radius_y : int | None, optional
+            The radius of the Gaussian kernel in the y direction. If None, it will be set
+            to the same value as `kernel_radius_x`. Default is None.
+        sigma_x : float | None, optional
+            The standard deviation of the Gaussian kernel in the x direction. If None, it will be
+            set to half of `kernel_radius_x`. Default is None.
+        sigma_y : float | None, optional
+            The standard deviation of the Gaussian kernel in the y direction. If None, it will be
+            set to half of `kernel_radius_y` if `kernel_radius_y` is not None, otherwise it will be set to the same value as `sigma_x`. Default is None.
+        fill_outer_nan : Literal['nan', 'zero', 'mean', 'median', 'nearest'], optional
+            How to handle outer NaN values after smoothing. Options are:
+            - 'nan': Keep outer NaN values as is.
+            - 'zero': Fill outer NaN values with zero.
+            - 'mean': Fill outer NaN values with the mean of the data.
+            - 'median': Fill outer NaN values with the median of the data.
+            - 'nearest': Fill outer NaN values with the nearest valid value (not implemented in
+            this version).
+            
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            A tuple containing the smoothed data and the smoothed error data.
+        """
+        if self.data.ndim != 2:
+            raise ValueError("Gaussian smoothing can only be applied to 2D data.")
+        if self.err.ndim != 2:
+            raise ValueError("Gaussian smoothing can only be applied to 2D error data.")
+        if mask_valid is None:
+            mask_valid = ~np.isnan(self.data)
+        data_smoothed = gaussian_fill_nan(
+            data=self.data,
+            mask_valid=mask_valid,
+            kernel_radius_x=kernel_radius_x,
+            kernel_radius_y=kernel_radius_y,
+            sigma_x=sigma_x,
+            sigma_y=sigma_y,
+            fill_outer_nan=fill_outer_nan
+        )
+        err_smoothed = gaussian_fill_nan(
+            data=self.err,
+            mask_valid=mask_valid,
+            kernel_radius_x=kernel_radius_x,
+            kernel_radius_y=kernel_radius_y,
+            sigma_x=sigma_x,
+            sigma_y=sigma_y,
+            fill_outer_nan=fill_outer_nan
+        )
+        return data_smoothed, err_smoothed
+
+    @overload
+    def plotly_imshow(self, 
+                        fig_height: int | None = None,
+                        fig_width: int | None = None,
+                        facet_col_wrap: int = 2,
+                        pmin: float = 1.,
+                        pmax: float = 99.,
+                        color_map: str = 'gray',
+                        *,
+                        return_figure: Literal[True]) -> go.Figure: ...
+    @overload
+    def plotly_imshow(self,
+                        fig_height: int | None = None,
+                        fig_width: int | None = None,
+                        facet_col_wrap: int = 2,
+                        pmin: float = 1.,
+                        pmax: float = 99.,
+                        color_map: str = 'gray',
+                        *, 
+                        return_figure: Literal[False]) -> None: ...
+    
+    @overload
+    def plotly_imshow(self,
+                        fig_height: int | None = None,
+                        fig_width: int | None = None,
+                        facet_col_wrap: int = 2,
+                        pmin: float = 1.,
+                        pmax: float = 99.,
+                        color_map: str = 'gray') -> None: ...
+
+    @validate_call
+    def plotly_imshow(self,
+                        fig_height: int| None = None,
+                        fig_width: int | None = None,
+                        facet_col_wrap: int = 2,
+                        pmin: float = 1.,
+                        pmax: float = 99.,
+                        color_map: str = 'gray',
+                        return_figure: bool = False
+                        ) -> go.Figure | None:
         """Plot the data using Plotly in a notebook.
         
         Parameters
         ----------
         fig_height : int, optional
             Height of the figure in pixels, by default None. If None, it will be calculated based on the data shape.
+            
         fig_width : int, optional
             Width of the figure in pixels, by default None. If None, it will be calculated based on the data shape.
+            
         facet_col_wrap : int, optional
             Number of columns to wrap the facets, by default 2.
+            
         pmin : float, optional
             Minimum percentile for the color scale, by default 1.0.
+            
         pmax : float, optional
             Maximum percentile for the color scale, by default 99.0.
+            
         color_map : str, optional
             Color map to use for the plot, by default 'gray'.
+            
         return_figure : bool, optional
             If True, return the figure object instead of showing it, by default False.
         """
@@ -203,6 +318,10 @@ class JwstCover(BaseModel):
         fig.update_layout(
             height=fig_height,
             width=fig_width,
+            newshape=dict(
+                line_color='red',
+                line_width=2,
+            )
         )
         if return_figure:
             return fig
@@ -282,27 +401,29 @@ class JwstInfo(BaseModel):
 
     Example
     -------
-    >>> from jwstnoobfriend.navigation.jwstinfo import JwstInfo
+    ```python
+    from jwstnoobfriend.navigation.jwstinfo import JwstInfo
     Directly creating an instance:
-    >>> info = JwstInfo(
-    ...     basename='jw01895002001_02010_00001_nrca1_cal.fits', # The basename will automatically be converted to 'jw01895002001_02010_00001_nrca1'
-    ...     filter='F090W',
-    ...     detector='NRCA1',
-    ...     pupil='CLEAR',
-    ...     cover_dict={
-    ...         '2b': JwstCover.new(filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits', with_wcs=True),
-    ...         },
-    ...     }
-
+    info = JwstInfo(
+        basename='jw01895002001_02010_00001_nrca1_cal.fits', # The basename will automatically be converted to 'jw01895002001_02010_00001_nrca1'
+        filter='F090W',
+        detector='NRCA1',
+        pupil='CLEAR',
+        cover_dict={
+            '2b': JwstCover.new(filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits', with_wcs=True),
+        }
+    }
+    ```
     Creating an instance from a file path:
-
-    >>> info = JwstInfo.new(filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits', stage='2b', force_with_wcs=True)
-
+    ```python
+    info = JwstInfo.new(filepath='path/to/jw01895002001_02010_00001_nrca1_cal.fits', stage='2b', force_with_wcs=True)
+    ```
     This will automatically extract the basename, filter, detector, and pupil from the file name and metadata.
     The cover_dict will contain the JwstCover object for the specified stage.
     Add a new cover to the existing JwstInfo instance:
-
-    >>> info.update(filepath='path/to/jw01895002001_02010_00002_nrca1_cal.fits', stage='2c', force_with_wcs=True)
+    ```python
+    info.update(filepath='path/to/jw01895002001_02010_00002_nrca1_cal.fits', stage='2c', force_with_wcs=True)
+    ```
 
     This will add a new JwstCover to the cover_dict for the '2c' stage.
     Note that the filter, detector, and pupil must match the existing JwstInfo instance, otherwise a ValueError will be raised.
@@ -507,6 +628,128 @@ class JwstInfo(BaseModel):
         self.cover_dict = merged_cover_dict
         return self
     
+    def plotly_imshow(self,
+                        stages: list[str] | None = None,
+                        stage_types: list[Literal['data', 'mask']] | None = None,
+                        data: list[np.ndarray] | None = None,
+                        mask: list[np.ndarray] | None = None,
+                        pmin: float = 1.0,
+                        pmax: float = 99.0,
+                        zmin: float | None = None,
+                        zmax: float | None = None,
+                        cmap: str = 'gray',
+                        binary_mode: bool = True,
+                        height: int = 600,
+                        width: int = 600,
+                        align_mode: Literal['blink', 'wrap'] = 'blink',
+                        subtitles: list[str] | None = None
+                        ) -> go.Figure:
+        """
+        Create a Plotly figure with the data and masks from the specified stages or provided data and mask arrays.
+        
+        Parameters
+        ----------
+        stages : list[str] | None
+            A list of stage names to extract data and masks from the JwstCover objects. If None, no stages are used. Make sure the stages are valid keys in the cover_dict.
+        stage_types : list[Literal['data', 'mask']] | None
+            A list of stage types corresponding to the stages. If None, it defaults to 'data' for all stages.
+            The length must match the length of `stages` if `stages` is provided.
+        data : list[np.ndarray] | None
+            A list of numpy arrays representing the data to be displayed. If None, it will be extracted from the stages.
+        mask : list[np.ndarray] | None
+            A list of numpy arrays representing the masks to be displayed.
+        pmin : float, optional
+            The minimum percentile for the color scale. Default is 1.0. If `zmin` is provided, this is ignored.
+        pmax : float, optional
+            The maximum percentile for the color scale. Default is 99.0. If `zmax` is provided, this is ignored.
+        zmin : float | None, optional
+            The minimum value for the color scale. If None, it is calculated from the data.
+        zmax : float | None, optional
+            The maximum value for the color scale. If None, it is calculated from the data.
+        cmap : str, optional
+            The color map to use for the figure. Default is 'gray'.
+        binary_mode : bool, optional
+            Whether to treat the data as binary strings, this will have better performance. Default is True.
+        height : int, optional
+            The height of the figure in pixels. Default is 600.
+        width : int, optional
+            The width of the figure in pixels. Default is 600.
+        align_mode : Literal['blink', 'wrap'], optional
+            The alignment mode for the figure. Options are 'blink' for animation frame alignment or 'wrap' for facet column wrapping. Default is 'animate'.
+        subtitles : list[str] | None
+            A list of subtitles for each data and mask array. If None, default subtitles are generated.
+
+        Returns
+        -------
+        go.Figure
+            A Plotly figure object containing the data and masks visualized with the specified parameters.
+        """
+        if stages is None and data is None and mask is None:
+            raise ValueError("At least one of 'stages', 'data', or 'mask' must be provided.")
+        if data is None:
+            data = []
+        if mask is None:
+            mask = []
+        if stages:
+            if stage_types is None:
+                stage_types = ['data'] * len(stages)
+            elif len(stage_types) != len(stages):
+                raise ValueError("Length of 'stage_types' must match length of 'stages'.")
+            data_stages = []
+        for stage, stage_type in zip(stages, stage_types):
+            if stage_type == 'data':
+                data_stages.append(self[stage].data)
+            elif stage_type == 'mask':
+                mask.append(self[stage].data)
+        
+        data = data_stages + data
+
+        if zmin is None:
+            zmin = np.nanpercentile(np.concatenate(data), pmin)
+        if zmax is None:
+            zmax = np.nanpercentile(np.concatenate(data), pmax)
+        fig = plotly_figure_and_mask(
+            data=data,
+            mask=mask,
+            pmin=pmin,
+            pmax=pmax,
+            zmin=zmin,
+            zmax=zmax,
+            cmap=cmap,
+            binary_mode=binary_mode,
+            height=height,
+            width=width,
+            align_mode=align_mode,
+            subtitles=subtitles
+        )
+
+        return fig
+
+    def plotly_add_footprint(self,
+                         fig: go.Figure,
+                         stage: str,
+                         show_more: bool = True,
+                         fig_mode: Literal['sky', 'cartesian'] = 'sky',
+                         **kwargs) -> go.Figure:
+        
+        if stage not in self.cover_dict:
+            raise ValueError(f"Stage '{stage}' not found in cover_dict.")
+        cover = self.cover_dict[stage]
+        fp = cover.footprint
+        if fp is None:
+            raise ValueError(f"Footprint for stage '{stage}' is None.")
+        if show_more:
+            default_fp_hovertemplate = f"Filter: {self.filter}<br>" + \
+                                        f"Pupil: {self.pupil}<br>" + \
+                                        f"{self.basename}<br>"
+            kwargs.setdefault('fp_hovertemplate', default_fp_hovertemplate)
+        match fig_mode:
+            case 'sky':
+                fig = fp.add_trace_in_sky(fig, **kwargs)
+            case 'cartesian':
+                fig = fp.add_trace_in_cartesian(fig, **kwargs)
+        return fig
+
     def __getitem__(self, stage: str) -> JwstCover:
         """
         Get the JwstCover for a specific stage.

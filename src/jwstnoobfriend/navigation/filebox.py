@@ -1,4 +1,5 @@
 from typing import Annotated, Any, Literal, Self, Callable
+import functools
 import re
 import os
 import asyncer
@@ -10,14 +11,15 @@ from collections import Counter
 import random
 from pathlib import Path
 from pydantic import BaseModel, FilePath, field_validator, model_validator, computed_field, Field, validate_call, DirectoryPath
-import plotly.express as px
+from dash import Dash, html, dcc
+import plotly.graph_objects as go
 import numpy as np
 
 from jwstnoobfriend.navigation.jwstinfo import JwstInfo, JwstCover
 from jwstnoobfriend.navigation.footprint import FootPrint
 from jwstnoobfriend.utils.log import getLogger
 from jwstnoobfriend.utils.environment import load_environment
-from jwstnoobfriend.utils.display import track, console
+from jwstnoobfriend.utils.display import track, console, plotly_sky_figure
 
 logger = getLogger(__name__)
 
@@ -179,7 +181,7 @@ class FileBox(BaseModel):
         FileBox
             The updated FileBox with the new JwstInfo objects.
         """
-        new_box = Self.init_from_folder(
+        new_box = self.__class__.init_from_folder(
             stage=stage,
             folder_path=folder_path,
             wildcard=wildcard,
@@ -358,17 +360,17 @@ class FileBox(BaseModel):
         if condition is None and predicate is None:
             raise ValueError("At least one of 'condition' or 'predicate' must be provided.")
         if condition:
-            for key in condition.keys():
-                if not hasattr(JwstInfo, key):
-                    raise ValueError(f"Invalid condition key: {key}. JwstInfo does not have this attribute.")
-            for info in self.info_list:
-                matched = True
-                for key, values in condition.items():
-                    if getattr(info, key) not in values:
-                        matched = False
-                        break
-                if matched:
-                    selected_infos[info.basename] = info
+            try:
+                for info in self.info_list:
+                    matched = True
+                    for key, values in condition.items():
+                        if getattr(info, key) not in values:
+                            matched = False
+                            break
+                    if matched:
+                        selected_infos[info.basename] = info
+            except AttributeError as e:
+                raise ValueError(f"Invalid attribute in condition: {e}")
             
         if predicate:
             for info in self.info_list:
@@ -426,7 +428,7 @@ class FileBox(BaseModel):
         """Returns an iterator over the JwstInfo objects in the FileBox with their basenames as keys."""
         return iter(self.infos.items())
     
-    ## Methods for visualization, grouping, and filtering
+    ## Methods for grouping, and filtering
     def summary(self) -> None:
         combinations = []
         for info in self.info_list:
@@ -467,7 +469,7 @@ class FileBox(BaseModel):
         console.print(main_table)
     
     @validate_call
-    def example(self, size: Annotated[int, Field(gt=0)] = 10, attrs_in_sample: list[str] | None = None) -> Self:
+    def random_sample(self, size: Annotated[int, Field(gt=0)] = 10, attrs_in_sample: list[str] | None = None) -> Self:
         """
         Returns a new FileBox containing a random sample of JwstInfo objects from the current FileBox.
         
@@ -510,4 +512,104 @@ class FileBox(BaseModel):
                                     for info in sampled_infos)
         return self.__class__(infos={info.basename: info for info in sampled_infos})
         
-    
+    def example(self, target: JwstInfo | None = None) -> Self:
+        if target is None:
+            target = random.choice(self.info_list)
+        
+        match_regex = r"jw\d{5}\d{3}\d{3}_\d{5}"
+        matched_index = re.match(match_regex, target.basename)
+        if not matched_index:
+            raise ValueError(f"'{target.basename}' does not follow the naming convention for JWST files.")
+
+        # Extract the relevant parts from the matched index
+        jw_index = matched_index.group(0)
+        return self.__class__(infos={info.basename: info 
+                                     for info in self.info_list 
+                                     if jw_index in info.basename})
+        
+        
+    ## Methods for visualization
+    @classmethod
+    def sky_figure(cls,
+                projection_type: str = "orthographic",
+                showlatgrid: bool = True,
+                showlongrid: bool = True,
+                lataxis_dtick: int = 90,
+                lonaxis_dtick: int = 90,
+                gridcolor: str = "gray",
+                griddash: str = "dash",) -> go.Figure:
+        """
+        Creates a Plotly figure representing the sky projection with specified parameters.
+        
+        Parameters
+        ----------
+        projection_type : str, optional
+            The type of sky projection to use. Default is "orthographic".
+        showlatgrid : bool, optional
+            Whether to show latitude grid lines. Default is True.
+        showlongrid : bool, optional
+            Whether to show longitude grid lines. Default is True.
+        lataxis_dtick : int, optional
+            The tick interval for latitude axis. Default is 90.
+        lonaxis_dtick : int, optional
+            The tick interval for longitude axis. Default is 90.
+        gridcolor : str, optional
+            The color of the grid lines. Default is "gray".
+        griddash : str, optional
+            The dash style of the grid lines. Default is "dash".
+            
+        Returns
+        -------
+        go.Figure
+            A Plotly figure object representing the sky projection with the specified parameters.
+        """
+        return plotly_sky_figure(
+            projection_type=projection_type,
+            showlatgrid=showlatgrid,
+            showlongrid=showlongrid,
+            lataxis_dtick=lataxis_dtick,
+            lonaxis_dtick=lonaxis_dtick,
+            gridcolor=gridcolor,
+            griddash=griddash)
+        
+    def show_footprints(
+        self,
+        fig: go.Figure | None = None,
+        stage: str = '2b',
+        show_more: bool = True,
+        fig_mode: Literal['sky', 'cartesian'] = 'sky',
+        **kwargs
+    ) -> Dash | None:
+        if fig is None:
+            match fig_mode:
+                case 'sky':
+                    fig = self.sky_figure()
+                case 'cartesian':
+                    fig = go.Figure()
+                    fig.update_layout(
+                        dragmode='pan',
+                        xaxis=dict(
+                            fixedrange=False,  
+                        ),
+                        yaxis=dict(
+                            fixedrange=False, 
+                        )
+                    )
+        
+        for info in self.info_list:
+            if stage not in info.cover_dict:
+                logger.warning(f"Stage '{stage}' not found in JwstInfo {info.basename}. Skipping.")
+                continue
+            info.plotly_add_footprint(
+                fig=fig,
+                stage=stage,
+                show_more=show_more,
+                fig_mode=fig_mode,
+                **kwargs
+            )
+        
+        match fig_mode:
+            case 'sky':
+                fig.show()
+            case 'cartesian':
+                fig.show(config={'scrollZoom': True,})
