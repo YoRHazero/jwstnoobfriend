@@ -12,6 +12,7 @@ import random
 from pathlib import Path
 from pydantic import BaseModel, FilePath, field_validator, model_validator, computed_field, Field, validate_call, DirectoryPath
 from dash import Dash, html, dcc
+import plotly.colors as pc
 import plotly.graph_objects as go
 import numpy as np
 
@@ -578,8 +579,10 @@ class FileBox(BaseModel):
         stage: str = '2b',
         show_more: bool = True,
         fig_mode: Literal['sky', 'cartesian'] = 'sky',
+        color_by: list[str] | None = None,
+        color_list: list[str] | None = None,
         **kwargs
-    ) -> Dash | None:
+    ) -> go.Figure:
         if fig is None:
             match fig_mode:
                 case 'sky':
@@ -596,10 +599,35 @@ class FileBox(BaseModel):
                         )
                     )
         
+        if color_by:
+            for attr in color_by:
+                if not hasattr(self[0], attr):
+                    raise ValueError(f"Attribute '{attr}' not found in FileBox. Available attributes: {list(self.__dict__.keys())}")
+            if kwargs.pop('color', None) is not None:
+                raise ValueError("Cannot use 'color' in kwargs when 'color_by' is specified. Use 'color_by' to specify the attribute for coloring.")        
+            if color_list is None:
+                color_list = pc.qualitative.Plotly + pc.qualitative.Set1 + pc.qualitative.Set2 + pc.qualitative.Set3
+            
+            color_map = {}
+            unique_combinations = set()
+            for info in self.info_list:
+                combo = tuple(getattr(info, attr) for attr in color_by)
+                unique_combinations.add(combo)
+            
+            if len(unique_combinations) > len(color_list):
+                raise ValueError(f"Too many unique combinations ({len(unique_combinations)}) for the provided color list. Please provide a longer color list or reduce the number of unique combinations.")
+            
+            for i, combo in enumerate(unique_combinations):
+                color_map[combo] = color_list[i]
+                
         for info in self.info_list:
             if stage not in info.cover_dict:
                 logger.warning(f"Stage '{stage}' not found in JwstInfo {info.basename}. Skipping.")
                 continue
+            
+            if color_by:
+                kwargs['color'] = color_map[tuple(getattr(info, attr) for attr in color_by)]
+            
             info.plotly_add_footprint(
                 fig=fig,
                 stage=stage,
@@ -608,8 +636,4 @@ class FileBox(BaseModel):
                 **kwargs
             )
         
-        match fig_mode:
-            case 'sky':
-                fig.show()
-            case 'cartesian':
-                fig.show(config={'scrollZoom': True,})
+        return fig

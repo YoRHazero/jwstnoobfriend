@@ -224,6 +224,8 @@ class FootPrint(BaseModel):
                             fig: go.Figure, 
                             color: str = 'teal', 
                             point_hovertemplate: str | None = None,
+                            fp_customdata: dict | None = None,
+                            fp_customdata_for_hover: list[str] | None = None,
                             fp_hovertemplate: str | None = None) -> go.Figure:
         """
         Adds the footprint to a Plotly figure as a scattergeo trace.
@@ -236,6 +238,11 @@ class FootPrint(BaseModel):
             The color of the footprint line, by default 'teal'.
         point_hovertemplate : str, optional
             The hover template for the points, if None, a default template will be used.
+        fp_customdata : dict | None, optional
+            Custom data to be passed to the figure, which can be used for the callback.
+        fp_customdata_for_hover : list[str] | None, optional
+            A list of keys from `fp_customdata` to be included in the hover template.
+            If None, all keys will be included.
         fp_hovertemplate : str, optional
             The footprint-level information to show in the hover template, if None, no additional information will be shown.
             
@@ -252,10 +259,25 @@ class FootPrint(BaseModel):
                             'RA: %{lon:.3f}<br>' + \
                             'Dec: %{lat:.3f}<br>' + \
                             '<extra></extra>'
+        
+        fp_customdata_hovertemplate = ""
+        if fp_customdata is not None:
+            if fp_customdata_for_hover is not None:
+                # Validate that the keys in fp_customdata_for_hover exist in fp_customdata
+                for key in fp_customdata_for_hover:
+                    if key not in fp_customdata:
+                        raise ValueError(f"Key '{key}' not found in fp_customdata, the keys in fp_customdata is {list(fp_customdata.keys())}")
+            # If fp_customdata_for_hover is empty, include all keys
+            else:
+                fp_customdata_for_hover = list(fp_customdata.keys())
+            
+            for key, value in fp_customdata.items():
+                if key in fp_customdata_for_hover:
+                    fp_customdata_hovertemplate += f"{key.capitalize()}: {value}<br>"
+
+        hovertemplate = point_hovertemplate + fp_customdata_hovertemplate
         if fp_hovertemplate is not None:
-            hovertemplate = point_hovertemplate + fp_hovertemplate
-        else:
-            hovertemplate = point_hovertemplate
+            hovertemplate += fp_hovertemplate
                                   
         fig.add_trace(
             go.Scattergeo(
@@ -272,9 +294,11 @@ class FootPrint(BaseModel):
                 lat=dec_arr[:-1],
                 lon=ra_arr[:-1],
                 mode='markers',
+                marker=dict(color=color),
                 showlegend=False,
                 text=self.vertex_marker if self.vertex_marker else [str(i) for i in range(len(ra_arr[:-1]))],
                 hovertemplate=hovertemplate,
+                customdata=[fp_customdata] * len(ra_arr[:-1]) if fp_customdata else None,
             )
         )
         return fig
@@ -283,6 +307,8 @@ class FootPrint(BaseModel):
                             fig: go.Figure, 
                             color: str = 'teal', 
                             point_hovertemplate: str | None = None,
+                            fp_customdata: dict | None = None,
+                            fp_customdata_for_hover: list[str] | None = None,
                             fp_hovertemplate: str | None = None) -> go.Figure:
         """
         Adds the footprint to a Plotly figure as a scatter trace in Cartesian coordinates.
@@ -295,6 +321,11 @@ class FootPrint(BaseModel):
             The color of the footprint line, by default 'teal'.
         point_hovertemplate : str, optional
             The hover template for the points, if None, a default template will be used.
+        fp_customdata : dict | None, optional
+            Custom data to be passed to the figure, which can be used for the callback.
+        fp_customdata_for_hover : list[str] | None, optional
+            A list of keys from `fp_customdata` to be included in the hover template.
+            If None, all keys will be included.
         fp_hovertemplate : str, optional
             The footprint-level information to show in the hover template, if None, no additional information will be shown.
         
@@ -311,10 +342,23 @@ class FootPrint(BaseModel):
                             'RA: %{x:.3f}<br>' + \
                             'Dec: %{y:.3f}<br>' + \
                             '<extra></extra>'
+        fp_customdata_hovertemplate = ""
+        if fp_customdata is not None:
+            if fp_customdata_for_hover is not None:
+                for key in fp_customdata_for_hover:
+                    if key not in fp_customdata:
+                        raise ValueError(f"Key '{key}' not found in fp_customdata, the keys in fp_customdata is {list(fp_customdata.keys())}")
+            else:
+                fp_customdata_for_hover = list(fp_customdata.keys())
+            
+            for key, value in fp_customdata.items():
+                if key in fp_customdata_for_hover:
+                    fp_customdata_hovertemplate += f"{key}: {value}<br>"  
+      
+        hovertemplate = point_hovertemplate + fp_customdata_hovertemplate
         if fp_hovertemplate is not None:
-            hovertemplate = point_hovertemplate + fp_hovertemplate
-        else:
-            hovertemplate = point_hovertemplate
+            hovertemplate += fp_hovertemplate
+     
         
         fig.add_trace(
             go.Scatter(
@@ -331,6 +375,7 @@ class FootPrint(BaseModel):
                 x=ra_arr[:-1],
                 y=dec_arr[:-1],
                 mode='markers',
+                marker=dict(color=color),
                 showlegend=False,
                 text=self.vertex_marker if self.vertex_marker else [str(i) for i in range(len(ra_arr[:-1]))],
                 hovertemplate=hovertemplate,

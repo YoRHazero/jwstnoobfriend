@@ -729,9 +729,33 @@ class JwstInfo(BaseModel):
                          fig: go.Figure,
                          stage: str,
                          show_more: bool = True,
+                         attrs_for_hover: list[str] | None = None,
                          fig_mode: Literal['sky', 'cartesian'] = 'sky',
                          **kwargs) -> go.Figure:
+        """
+        Add the footprint of a specific stage to a Plotly figure.
         
+        Parameters
+        ----------
+        fig : go.Figure
+            The Plotly figure to which the footprint will be added.
+        stage : str
+            Calibration stage of the file with wcs assigned, e.g. '2b', '2c'.
+        show_more : bool, optional
+            If True, additional hover information will be added to the footprint trace. Default is True, 
+            which will add the basename and attributes of filter and pupil to the hover template.
+        attrs_for_hover : list[str] | None, optional
+            A list of attributes to include in the hover template for the footprint trace. All the attributes
+            in the list will be added to "fp_customdata" for the FootPrint.add_trace_in_sky Method.
+            If None and show_more is True,
+            it defaults to ['filter', 'pupil']. If show_more is False, this parameter is ignored.
+        fig_mode : Literal['sky', 'cartesian'], optional
+            The mode in which to add the footprint trace. 'sky' for sky coordinates, 'cartesian' for Cartesian coordinates.
+            Default is 'sky'.
+        **kwargs : dict, optional
+            Additional keyword arguments to pass to the footprint trace addition method. Check the FootPrint class, add_trace_in_sky or add_trace_in_cartesian 
+            for more details on the available parameters.
+        """
         if stage not in self.cover_dict:
             raise ValueError(f"Stage '{stage}' not found in cover_dict.")
         cover = self.cover_dict[stage]
@@ -739,10 +763,19 @@ class JwstInfo(BaseModel):
         if fp is None:
             raise ValueError(f"Footprint for stage '{stage}' is None.")
         if show_more:
-            default_fp_hovertemplate = f"Filter: {self.filter}<br>" + \
-                                        f"Pupil: {self.pupil}<br>" + \
-                                        f"{self.basename}<br>"
+            default_fp_hovertemplate = f"{self.basename}<br>"
             kwargs.setdefault('fp_hovertemplate', default_fp_hovertemplate)
+            if attrs_for_hover is None:
+                attrs_for_hover = ['filter', 'pupil']
+        
+        if attrs_for_hover is not None:
+            fp_customdata = kwargs.get('fp_customdata', {})
+            for attr in attrs_for_hover:
+                if not hasattr(self, attr):
+                    raise ValueError(f"Attribute '{attr}' not found in JwstInfo. Check the attrs_for_hover contains valid attributes.")
+                fp_customdata[attr] = getattr(self, attr)
+            kwargs['fp_customdata'] = fp_customdata
+
         match fig_mode:
             case 'sky':
                 fig = fp.add_trace_in_sky(fig, **kwargs)
