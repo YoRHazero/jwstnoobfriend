@@ -1,9 +1,10 @@
 import cv2
 import numpy as np
 from scipy import stats
+from scipy.interpolate import SmoothBivariateSpline
 from typing import Literal
 
-__all__ = ['mad_clipped_stats', 'gaussian_fill_nan', 'segmentation_mask']
+__all__ = ['mad_clipped_stats', 'gaussian_smoothing', 'segmentation_mask']
 
 def mad_clipped_stats(data: np.ndarray,
                       mask: np.ndarray | None, 
@@ -40,8 +41,8 @@ def mad_clipped_stats(data: np.ndarray,
     return np.mean(data_clipped), np.std(data_clipped), np.median(data_clipped), stats.median_abs_deviation(data_clipped, scale='normal')
 
 
-def gaussian_fill_nan(data: np.ndarray, 
-                      mask_valid: np.ndarray | None = None, 
+def gaussian_smoothing(data: np.ndarray, 
+                      mask_invalid: np.ndarray | None = None, 
                       kernel_radius_x: int = 15, 
                       kernel_radius_y: int | None = None,
                       sigma_x: float | None = None,
@@ -49,14 +50,14 @@ def gaussian_fill_nan(data: np.ndarray,
                       fill_outer_nan: Literal['nan', 'zero', 'mean', 'median', 'nearest'] = 'nan'
                       ):
     """
-    Fill NaN values in the data using Gaussian interpolation.
+    Gaussian smoothing of the input data array, with masking the NaN values.
     
     Parameters
     ----------
     data : np.ndarray
         The input data array with NaN values to be filled.
-    mask_valid : np.ndarray
-        A boolean mask indicating which elements are valid (True for valid data).
+    mask_invalid : np.ndarray
+        A boolean mask indicating which elements are invalid (True for invalid data).
     kernel_radius_x : int, optional
         The radius of the Gaussian kernel to use for interpolation in the x, axis 1, and width direction. Default is 15.
     kernel_radius_y : int, optional
@@ -79,8 +80,12 @@ def gaussian_fill_nan(data: np.ndarray,
         The data array with NaN values filled using Gaussian interpolation.
     """
     data = data.copy()
-    if mask_valid is None:
+    if mask_invalid is None:
         mask_valid = ~np.isnan(data)
+    else:
+        if not np.array_equal(mask_invalid & np.isnan(data), mask_invalid):
+            raise ValueError("Custom mask_invalid must mask NaN values in data.")
+        mask_valid = ~mask_invalid
     if kernel_radius_y is None:
         kernel_radius_y = kernel_radius_x
     kernel_size_x = 2 * kernel_radius_x + 1
@@ -107,16 +112,16 @@ def gaussian_fill_nan(data: np.ndarray,
     # Use cv2 to apply Gaussian blur
     data_f32 = central_data.astype(np.float32)
     mask_valid_f32 = (central_mask_valid).astype(np.float32)
-
+    # Fill NaN values with zero for the Gaussian blur of cv2
     data_filled = np.where(central_mask_valid, data_f32, 0.0)
-
+    # Apply Gaussian blur to the data and the mask
     data_blurred = cv2.GaussianBlur(data_filled, (kernel_size_x, kernel_size_y), sigma_x)
     weights_blurred = cv2.GaussianBlur(mask_valid_f32, (kernel_size_x, kernel_size_y), sigma_x)
 
-    interpolate = np.where(weights_blurred > 0, data_blurred / weights_blurred, np.nanmedian(data))
+    data_smoothed = np.where(weights_blurred > 0, data_blurred / weights_blurred, np.nanmedian(data))
 
-    data_filled = np.where(central_mask_valid, data_f32, interpolate)
-    data[row_start:row_end, col_start:col_end] = data_filled
+    #data_filled = np.where(central_mask_valid, data_f32, data_smoothed)
+    data[row_start:row_end, col_start:col_end] = data_smoothed
 
     # Deal with outer NaN values
     match fill_outer_nan:
@@ -161,7 +166,7 @@ def segmentation_mask(data: np.ndarray,
     Returns
     -------
     np.ndarray
-        A boolean mask indicating the segmented regions in the data.
+        A boolean mask indicating the segmented regions in the data, where True indicates a segment and False indicates background.
     """
 
     mean, std, median, mad = mad_clipped_stats(data, mask=np.isnan(data))
@@ -181,3 +186,81 @@ def segmentation_mask(data: np.ndarray,
     blurred_segmentation = cv2.GaussianBlur(segmentation.astype(np.float32), (kernel_size, kernel_size), sigma)
     
     return (blurred_segmentation > 0.05).astype(bool)
+
+def background_model(
+    data: np.ndarray, 
+    mask: np.ndarray | None = None, 
+    fraction_non_masked: float = 0.5,
+    block_size: int = 128,
+    block_xsize: int | None = None,
+    block_ysize: int | None = None,
+    **kwargs
+) -> np.ndarray:
+    """
+    Create a background model for the input data by calculating the median of non-masked values
+    in blocks of the specified size.
+    
+    Parameters
+    ----------
+    data : np.ndarray
+        The input data array.
+    mask : np.ndarray | None
+        A boolean mask indicating which elements to ignore (True for invalid data).
+        If None, all NaN values in the data will be masked.
+    fraction_non_masked : float, optional
+        The fraction of non-masked pixels required to consider a block valid. Default is 0.5.
+    block_size : int, optional
+        The size of the blocks to process. Default is 128.
+    block_xsize : int | None, optional
+        The x size of the blocks. If None, it will be set to block_size.
+    block_ysize : int | None, optional
+        The y size of the blocks. If None, it will be set to block_size.
+    **kwargs
+        Additional keyword arguments to pass to the `SmoothBivariateSpline` constructor.
+    
+    Returns
+    -------
+    np.ndarray
+        The background model as a 2D array.
+    """
+    
+    if mask is None:
+        mask = np.zeros_like(data, dtype=bool)
+        
+    if block_xsize is None:
+        block_xsize = block_size
+    if block_ysize is None:
+        block_ysize = block_size
+    
+    height, width = data.shape
+    if width % block_xsize != 0 or height % block_ysize != 0:
+        raise ValueError("Data dimensions must be divisible by block_xsize and block_ysize.")
+    n_block_x = width // block_xsize
+    n_block_y = height // block_ysize
+    median_grid = np.full((n_block_y, n_block_x), np.nan)
+    for bx in range(n_block_x):
+        for by in range(n_block_y):
+            block_data = data[by * block_ysize:(by + 1) * block_ysize, bx * block_xsize:(bx + 1) * block_xsize]
+            block_mask = mask[by * block_ysize:(by + 1) * block_ysize, bx * block_xsize:(bx + 1) * block_xsize]
+            if np.sum(block_mask) > fraction_non_masked * block_size ** 2:
+                continue
+            median_grid[by, bx] = np.nanmedian(block_data[~block_mask])
+    
+    x_coords = np.arange(n_block_x // 2, width, block_xsize)
+    y_coords = np.arange(n_block_y // 2, height, block_ysize)
+    
+    xx, yy = np.meshgrid(x_coords, y_coords)
+    
+    x_flat = xx.ravel()
+    y_flat = yy.ravel()
+    z_flat = median_grid.ravel()
+
+    x_valid = x_flat[~np.isnan(z_flat)]
+    y_valid = y_flat[~np.isnan(z_flat)]
+    z_valid = z_flat[~np.isnan(z_flat)]
+
+    spline = SmoothBivariateSpline(x_valid, y_valid, z_valid, **kwargs)
+    x_full, y_full = np.meshgrid(np.arange(width), np.arange(height))
+    background_model = spline.ev(x_full.ravel(), y_full.ravel()).reshape(height, width)
+
+    return background_model

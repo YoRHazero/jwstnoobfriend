@@ -131,7 +131,7 @@ def plotly_figure_and_mask(
     binary_mode: bool = True,
     height: int = 600,
     width: int = 600,
-    align_mode: Literal['blink', 'wrap'] = 'animate',
+    align_mode: Literal['blink', 'wrap'] = 'blink',
     subtitles: list[str] | None = None,
 ) -> go.Figure:
     """

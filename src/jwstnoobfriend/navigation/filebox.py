@@ -15,6 +15,7 @@ from dash import Dash, html, dcc
 import plotly.colors as pc
 import plotly.graph_objects as go
 import numpy as np
+import pandas as pd
 
 from jwstnoobfriend.navigation.jwstinfo import JwstInfo, JwstCover
 from jwstnoobfriend.navigation.footprint import FootPrint
@@ -98,12 +99,12 @@ class FileBox(BaseModel):
         """
         ## get a key where the footprint in that JwstCover is not None
         if stage is None:
-            sample_info: JwstInfo = self.infos[0] if self.infos else None
+            sample_info: JwstInfo = self.info_list[0] if self.info_list else None
             for key, cover in sample_info.cover_dict.items():
                 if cover.footprint is not None:
                     stage = key
                     break
-        return {info.basename: info.cover_dict[stage].footprint for info in self.infos if stage in info.cover_dict}        
+        return {info.basename: info.cover_dict[stage].footprint for info in self.info_list if stage in info.cover_dict}
     
     ## Methods for manipulating the FileBox
     @validate_call
@@ -300,7 +301,9 @@ class FileBox(BaseModel):
         return self
     
     @validate_call
-    def select(self, condition: dict[str, list[Any]] | None = None, predicate: Callable[[JwstInfo], bool] | None = None) -> Self:
+    def select(self, 
+               condition: dict[str, list[Any]] | None = None, 
+               predicate: Callable[[JwstInfo], bool] | None = None) -> Self:
         """
         Selects JwstInfo objects from the FileBox based on specified conditions.
         
@@ -512,8 +515,35 @@ class FileBox(BaseModel):
             sampled_types = set(tuple(getattr(info, attr) for attr in attrs_in_sample) 
                                     for info in sampled_infos)
         return self.__class__(infos={info.basename: info for info in sampled_infos})
-        
+     
     def example(self, target: JwstInfo | None = None) -> Self:
+        """
+        Returns an example FileBox containing JwstInfo objects that match the target's basename.
+        If target is None, it will randomly select a JwstInfo from the FileBox.
+        This will give a small sample of the files for testing the reduction.
+        
+        Parameters
+        ----------
+        target : JwstInfo | None, optional
+            The target JwstInfo object to match. If None, a random JwstInfo will be selected.
+        
+        Returns
+        -------
+        FileBox
+            A new FileBox containing JwstInfo objects that match the target's basename.
+        
+        Raises
+        ------
+        ValueError
+            If the target's basename does not follow the naming convention for JWST files.
+            
+        Notes
+        -----
+        This method is useful when you want to check the reduction process before wcs assignment.
+        However, a pointing may be visited multiple times in the same observation. Hence, this method may not 
+        return a complete set of ditherings for a given pointing.
+        If you want to check the reduction process after wcs assignment, use the `complete_example` method.
+        """
         if target is None:
             target = random.choice(self.info_list)
         
@@ -527,6 +557,111 @@ class FileBox(BaseModel):
         return self.__class__(infos={info.basename: info 
                                      for info in self.info_list 
                                      if jw_index in info.basename})
+        
+    def complete_example(self, 
+                         target: JwstInfo | None = None,
+                         stage_with_wcs: str = '2b',
+                         overlap_percent: float = 0.6,
+                         same_instrument: bool = False,
+                         ) -> Self:
+        """
+        Returns a complete example FileBox containing JwstInfo objects that match the target's pointing.
+        If target is None, it will randomly select a JwstInfo from the FileBox.
+        This will give a complete set of ditherings for a given pointing, which is useful for testing the reduction process after wcs assignment.
+        
+        Parameters
+        ----------
+        target : JwstInfo | None, optional
+            The target JwstInfo object to match. If None, a random JwstInfo will be selected.
+        stage_with_wcs : str, optional
+            The stage of the JwstCover to use for the pointing information. Default is '2b'.
+            This stage should have a WCS object assigned. See also JwstInfo.is_same_pointing method.
+        overlap_percent : float, optional
+            The percentage of overlap required to consider two pointings as the same. Default is 0.6.
+            Maximum is 1.0. See also JwstInfo.is_same_pointing method.
+        same_instrument : bool, optional
+            If True, the method will only return JwstInfo objects that have the same instrument attributes (pupil, filter, detector) as the target.
+            Default is False. If False, it will return all JwstInfo objects that match the pointing.
+            
+        Returns
+        -------
+        FileBox
+            A new FileBox containing JwstInfo objects that match the target's pointing.
+        
+        Raises
+        ------
+        ValueError
+            If the target's pointing does not match any JwstInfo objects in the FileBox.
+            If the stage_with_wcs does not exist in all JwstInfo objects in the FileBox.
+            
+        Notes
+        ------
+        This method is only applicable if all JwstInfo objects in the FileBox have a stage with WCS assigned.
+        Note that long wavelength filter files usually have larger footprints than short wavelength filter files.
+        Hence, the number of matched JwstInfo objects will vary depending on the filter used.
+        
+        - If you want to check the reduction process, a short wavelength filter target is recommended.
+        - If you want to investigate the astrometry, a long wavelength filter target is recommended.
+        """
+        
+        
+        if target is None:
+            target = random.choice(self.info_list)
+        matched_infos = []
+        for info in self.info_list:
+            if info.is_same_pointing(target, stage_with_wcs=stage_with_wcs, overlap_percent=overlap_percent, same_instrument=same_instrument):
+                matched_infos.append(info)
+        if not matched_infos:
+            raise ValueError(f"Using an external target JwstInfo will lead to undefined behavior, no footprints match the target. Please check whether the target is included in the FileBox or the overlap_percent is too high.")
+
+        # If we have matched infos, we can create a new FileBox from them
+        return self.__class__(infos={info.basename: info for info in matched_infos})
+
+    def group_by_pointing(self, 
+                          stage_with_wcs: str = '2b', 
+                          overlap_percent: float = 0.6,
+                         ) -> list[Self]:
+        """
+        Groups JwstInfo objects in the FileBox by their pointing information.
+        This method is only applicable if all JwstInfo objects in the FileBox have a stage with WCS assigned.
+
+        This method is for reduction. Hence, in each group, the JwstInfo objects will have the same instrument attributes (pupil, filter, detector).
+        
+        Parameters
+        ----------
+        stage_with_wcs : str, optional
+            The stage of the JwstCover to use for the pointing information. Default is '2b'. See also JwstInfo.is_same_pointing method.
+        overlap_percent : float, optional
+            The percentage of overlap required to consider two pointings as the same. Default is 0.6. Maximum is 1.0. See also JwstInfo.is_same_pointing method.
+            
+        Returns
+        -------
+        list[Self]
+            A list of FileBox objects, each containing JwstInfo objects that are ditherings of the same pointing and have the same instrument attributes.
+            
+        Raises
+        ------
+        ValueError
+            If the stage_with_wcs does not exist in all JwstInfo objects in the FileBox.
+        """
+
+        grouped_boxes = []
+        visited_indices = set()
+        for i, info in enumerate(self.info_list):
+            if i in visited_indices:
+                continue
+            visited_indices.add(i)
+            group_infos = []
+            # Start from current index to include it in the group
+            for j in range(i, len(self.info_list)):
+                if j in visited_indices:
+                    continue
+                other_info = self.info_list[j]
+                if info.is_same_pointing(other_info, stage_with_wcs=stage_with_wcs, overlap_percent=overlap_percent, same_instrument=True):
+                    group_infos.append(other_info)
+                    visited_indices.add(j)
+            grouped_boxes.append(self.__class__(infos={info.basename: info for info in group_infos}))
+        return grouped_boxes    
         
         
     ## Methods for visualization
@@ -581,8 +716,34 @@ class FileBox(BaseModel):
         fig_mode: Literal['sky', 'cartesian'] = 'sky',
         color_by: list[str] | None = None,
         color_list: list[str] | None = None,
-        **kwargs
+        catalog: pd.DataFrame | None = None,
     ) -> go.Figure:
+        """
+        Displays the footprints of the JwstInfo objects in the FileBox on a Plotly figure.
+        
+        Parameters
+        ----------
+        fig : go.Figure | None, optional
+            The Plotly figure to add the footprints to. If None, a new figure will be created.
+        stage : str, optional
+            The stage of the JwstCover to use for the footprints. Default is '2b'.
+        show_more : bool, optional
+            Whether to show additional information in the footprints. Default is True.
+        fig_mode : Literal['sky', 'cartesian'], optional
+            The mode of the figure. 'sky' will create a sky projection, 'cartesian will create a Cartesian plot.
+            Default is 'sky'.
+        color_by : list[str] | None, optional
+            A list of attributes to color the footprints by. If None, a default color will be used.
+        color_list : list[str] | None, optional
+            A list of colors to use for the footprints. If None, a default color list will be used.
+        catalog : pd.DataFrame | None, optional
+            A DataFrame containing additional points to plot on the figure. It must contain 'ra', 'dec', and 'id' columns.
+            
+        Returns
+        -------
+        go.Figure
+            A Plotly figure object containing the footprints of the JwstInfo objects in the FileBox.
+        """
         if fig is None:
             match fig_mode:
                 case 'sky':
@@ -602,9 +763,7 @@ class FileBox(BaseModel):
         if color_by:
             for attr in color_by:
                 if not hasattr(self[0], attr):
-                    raise ValueError(f"Attribute '{attr}' not found in FileBox. Available attributes: {list(self.__dict__.keys())}")
-            if kwargs.pop('color', None) is not None:
-                raise ValueError("Cannot use 'color' in kwargs when 'color_by' is specified. Use 'color_by' to specify the attribute for coloring.")        
+                    raise ValueError(f"Attribute '{attr}' not found in FileBox. Available attributes: {list(self.__dict__.keys())}")  
             if color_list is None:
                 color_list = pc.qualitative.Plotly + pc.qualitative.Set1 + pc.qualitative.Set2 + pc.qualitative.Set3
             
@@ -624,16 +783,60 @@ class FileBox(BaseModel):
             if stage not in info.cover_dict:
                 logger.warning(f"Stage '{stage}' not found in JwstInfo {info.basename}. Skipping.")
                 continue
-            
+
             if color_by:
-                kwargs['color'] = color_map[tuple(getattr(info, attr) for attr in color_by)]
-            
+                color = color_map[tuple(getattr(info, attr) for attr in color_by)]
+            else:
+                color = 'teal'
             info.plotly_add_footprint(
                 fig=fig,
                 stage=stage,
                 show_more=show_more,
                 fig_mode=fig_mode,
-                **kwargs
+                color=color,
             )
         
+        if catalog is not None:
+            if 'ra' not in catalog.columns or 'dec' not in catalog.columns or 'id' not in catalog.columns:
+                raise ValueError("Catalog must contain 'ra', 'dec', and 'id' columns.")
+            match fig_mode:
+                case 'sky':
+                    fig.add_trace(
+                        go.Scattergeo(
+                            lon=catalog['ra'],
+                            lat=catalog['dec'],
+                            mode='markers',
+                            marker=dict(
+                                size=15,
+                                color='red',
+                                symbol='star'
+                            ),
+                            showlegend=False,
+                            text=catalog['id'],
+                            hovertemplate="ID: %{text}<br>Ra: %{lon}<br>Dec: %{lat}<br><extra></extra>",
+                        )
+                    )
+                case 'cartesian':
+                    fig.add_trace(
+                        go.Scatter(
+                            x=catalog['ra'],
+                            y=catalog['dec'],
+                            mode='markers',
+                            marker=dict(
+                                size=15,
+                                color='red',
+                                symbol='star'
+                            ),
+                            showlegend=False,
+                            text=catalog['id'],
+                            hovertemplate="ID: %{text}<br>Ra: %{x}<br>Dec: %{y}<br><extra></extra>",
+                        )
+                    )
+
         return fig
+    
+    @property
+    def plotly_show_config(self):
+        return {
+            "scrollZoom": True,
+        }

@@ -13,7 +13,7 @@ from jwstnoobfriend.navigation._cache import (
     _open_and_cache_datamodel,
     _open_and_cache_wcs,
 )
-from jwstnoobfriend.utils.calculate import mad_clipped_stats, gaussian_fill_nan, segmentation_mask
+from jwstnoobfriend.utils.calculate import mad_clipped_stats, gaussian_smoothing, segmentation_mask, background_model
 
 logger = getLogger(__name__)
 
@@ -115,6 +115,98 @@ class JwstCover(BaseModel):
         datamodel = self.datamodel
         return datamodel.dq
     
+    def data_filled(self, 
+                    mask_to_fill: np.ndarray | None = None,
+                    data_for_fill: np.ndarray | None = None,
+                    method: Literal['gaussian', 'background'] = 'background',
+                    fill_outer_nan: Literal['nan', 'zero', 'mean', 'median', 'nearest'] = 'nan'
+                    ) -> np.ndarray:
+        """
+        Replace the masked values in the data with the provided data.
+        
+        Parameters
+        ----------
+        mask_to_fill : np.ndarray | None, optional
+            A boolean mask indicating which values to be replaced. If None, it will be set to the NaN values of the data.
+        data_for_fill : np.ndarray | None, optional
+            The data to fill the masked values with. If None, it will use the result of `self.gaussian_blur()` or `self.background()`.
+        method : Literal['gaussian', 'background'], optional
+            The method to use for filling the masked values. Options are 'gaussian' for Gaussian smoothing or 'background' for background modeling. Default is 'background'.
+        fill_outer_nan : Literal['nan', 'zero', 'mean', 'median', 'nearest'], optional
+            The method to use for filling the outer NaN values. Options are 'nan' to keep them as is, 'zero' to replace with 0, 'mean' to replace with the mean, 'median' to replace with the median, and 'nearest' to replace with the nearest valid value. Default is 'nan'.
+            
+        Returns
+        -------
+        np.ndarray
+            The data with the masked values replaced.
+            
+        Notes
+        -----
+        The `method` only works when `data_for_fill` is None. Then it will apply the corresponding method 
+        with default arguments. If custom arguments are needed, please provide `data_for_fill` directly.
+        """
+        data = self.data.copy()
+        # Exclude the outer shell of the data which is all NaN
+        mask_nonnan = ~np.isnan(data)
+        valid_rows = np.any(mask_nonnan, axis=1)
+        valid_cols = np.any(mask_nonnan, axis=0)
+
+        row_indices = np.where(valid_rows)[0]
+        col_indices = np.where(valid_cols)[0]
+
+        row_start, row_end = row_indices[0], row_indices[-1] + 1
+        col_start, col_end = col_indices[0], col_indices[-1] + 1
+        central_data = data[row_start:row_end, col_start:col_end]
+        if mask_to_fill is None:
+            mask_to_fill = np.isnan(data)
+        if data_for_fill is None:
+            match method:
+                case 'gaussian':
+                    data_for_fill = self.gaussian_blur()
+                case 'background':
+                    data_for_fill = self.background()
+        central_data_for_fill = data_for_fill[row_start:row_end, col_start:col_end]
+        central_mask_to_fill = mask_to_fill[row_start:row_end, col_start:col_end]
+        central_data[central_mask_to_fill] = central_data_for_fill[central_mask_to_fill]
+        # Deal with outer NaN values
+        match fill_outer_nan:
+            case 'nan':
+                pass  # Keep outer NaN values as is
+            case 'zero':
+                data[np.isnan(data)] = 0.0
+            case 'mean':
+                mean_value = np.nanmean(data)
+                data[np.isnan(data)] = mean_value
+            case 'median':
+                median_value = np.nanmedian(data)
+                data[np.isnan(data)] = median_value
+            case 'nearest':
+                # Not implemented in this version
+                pass
+        return data
+
+    def background(self,
+                   **kwargs: Any) -> np.ndarray:
+        """
+        Model the background of the data. See also `jwstnoobfriend.utils.calculate.background_model`.
+        
+        Parameters
+        ----------
+        **kwargs : Any
+            Additional keyword arguments to pass to the `background_model` function.
+            If `mask` is not provided in `kwargs`, it will use the segmentation mask created by `self.segmentation()` with default arguments.
+            
+        Returns
+        -------
+        np.ndarray
+            The background model of the data.
+        """
+        
+        if kwargs.get('mask', None) is None:
+            kwargs['mask'] = self.segmentation()
+
+        return background_model(self.data, **kwargs)
+
     def segmentation(self,
                      data: np.ndarray | None = None,
                      factor: float = 2,
@@ -122,12 +214,25 @@ class JwstCover(BaseModel):
                      kernel_radius: int = 4,
                      sigma: float | None = None) -> np.ndarray:
         """
-        Create a segmentation mask for the data using the MAD method.
+        Create a segmentation mask for the data using the MAD method. See also `jwstnoobfriend.utils.calculate.segmentation_mask`.
 
+        Parameters
+        ----------
+        data : np.ndarray | None, optional
+            The data to create the segmentation mask for. If None, it will use the data from the instance.
+        factor : float, optional
+            The factor by which to multiply the MAD for the segmentation threshold. Default is 2.
+        min_pixels_connected : int, optional
+            The minimum number of connected pixels to consider a segment valid. Default is 10.
+        kernel_radius : int, optional
+            The radius of the kernel to use for the segmentation. Default is 4.
+        sigma : float | None, optional
+            The standard deviation of the Gaussian kernel to use for the segmentation. If None, it will be set to half of `kernel_radius`. Default is None.
+            
         Returns
         -------
         np.ndarray
-            A boolean mask indicating the segmented regions.
+            A boolean mask indicating the segments in the data, where True indicates a segment and False indicates no segment.
         """
         if data is None:
             data = self.data
@@ -137,8 +242,8 @@ class JwstCover(BaseModel):
                                  min_pixels_connected=min_pixels_connected,
                                  kernel_radius=kernel_radius, sigma=sigma)
     
-    def gaussian_smooth(self, 
-                        mask_valid: np.ndarray | None = None,
+    def gaussian_blur(self, 
+                        mask_invalid: np.ndarray | None = None,
                         kernel_radius_x: int = 15,
                         kernel_radius_y: int | None = None,
                         sigma_x: float | None = None,
@@ -146,12 +251,12 @@ class JwstCover(BaseModel):
                         fill_outer_nan: Literal['nan', 'zero', 'mean', 'median', 'nearest'] = 'nan'
                         ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Apply Gaussian smoothing to the data.
+        Apply Gaussian smoothing to the data. See also `jwstnoobfriend.utils.calculate.gaussian_smoothing`.
 
         Parameters
         ----------
-        mask_valid : np.ndarray | None, optional
-            A boolean mask indicating valid data points. If None, all data points are considered valid.
+        mask_invalid : np.ndarray | None, optional
+            A boolean mask indicating invalid data points. If None, it will be set to the NaN values of the data.
         kernel_radius_x : int, optional
             The radius of the Gaussian kernel in the x direction. Default is 15.
         kernel_radius_y : int | None, optional
@@ -181,20 +286,20 @@ class JwstCover(BaseModel):
             raise ValueError("Gaussian smoothing can only be applied to 2D data.")
         if self.err.ndim != 2:
             raise ValueError("Gaussian smoothing can only be applied to 2D error data.")
-        if mask_valid is None:
-            mask_valid = ~np.isnan(self.data)
-        data_smoothed = gaussian_fill_nan(
+        if mask_invalid is None:
+            mask_invalid = np.isnan(self.data)
+        data_smoothed = gaussian_smoothing(
             data=self.data,
-            mask_valid=mask_valid,
+            mask_invalid=mask_invalid,
             kernel_radius_x=kernel_radius_x,
             kernel_radius_y=kernel_radius_y,
             sigma_x=sigma_x,
             sigma_y=sigma_y,
             fill_outer_nan=fill_outer_nan
         )
-        err_smoothed = gaussian_fill_nan(
+        err_smoothed = gaussian_smoothing(
             data=self.err,
-            mask_valid=mask_valid,
+            mask_invalid=mask_invalid,
             kernel_radius_x=kernel_radius_x,
             kernel_radius_y=kernel_radius_y,
             sigma_x=sigma_x,
@@ -441,8 +546,7 @@ class JwstInfo(BaseModel):
         Field(
             description="JWST nameing convention is jw<ppppp><ooo><vvv>_<gg><s><aa>_<eeeee>_<detector>_<filetype>.fits \
                 (ref: https://jwst-pipeline.readthedocs.io/en/latest/jwst/data_products/file_naming.html) \
-                Here the basename is jw<ppppp><ooo><vvv>_<gg><s><aa>_<eeeee>_<detector>",
-            pattern=r"jw\d{5}\d{3}\d{3}_\d{5}_\d{5}_[^_]+",
+                Here the basename is jw<ppppp><ooo><vvv>_<gg><s><aa>_<eeeee>_<detector>. This will be checked before coadding.",
         ),
     ]
     """jw\<ppppp\>\<ooo\>\<vvv\>_\<gg\>\<s\>\<aa\>_\<eeeee\>_\<detector\>"""
@@ -451,7 +555,11 @@ class JwstInfo(BaseModel):
     @classmethod
     def extract_basename(cls, value: str) -> str:
         """Extracts the basename from the full filename."""
-        return re.match(cls.basename_pattern, value).group()
+        basename_match = re.match(cls.basename_pattern, value)
+        if basename_match:
+            return basename_match.group()
+        else:
+            return value
 
     filter: Annotated[
         str,
@@ -628,6 +736,57 @@ class JwstInfo(BaseModel):
         self.cover_dict = merged_cover_dict
         return self
     
+    def is_same_pointing(self, 
+                         other: Self,
+                         stage_with_wcs: str = '2b',
+                         overlap_percent: float = 0.6,
+                         same_instrument: bool = True,
+                         ) -> bool:
+        """
+        Check if the two JwstInfo instances have the same pointing based on their footprints.
+        
+        Parameters
+        ----------
+        other : JwstInfo
+            The other JwstInfo instance to compare with.
+        stage_with_wcs : str, optional
+            The stage to use for the WCS comparison, by default '2b'.
+        overlap_percent : float, optional
+            The minimum overlap percentage required to consider the pointings the same, by default 0.8, maximum is 1.0.
+        same_instrument : bool, optional
+            If True, also check if the filter, detector, and pupil match between the two JwstInfo instances.
+            If False, only check the overlap of the footprints, by default True.
+        
+        Returns
+        -------
+        bool
+            True if the two JwstInfo instances are different dithers of the same pointing, False otherwise.
+        """
+        
+        if stage_with_wcs not in self.cover_dict or stage_with_wcs not in other.cover_dict:
+            raise ValueError(f"Stage '{stage_with_wcs}' not found in cover_dict.")
+        if self.cover_dict[stage_with_wcs].footprint is None or other.cover_dict[stage_with_wcs].footprint is None:
+            raise ValueError(f"Footprint for stage '{stage_with_wcs}' is not available.")
+        self_fp = self[stage_with_wcs].footprint
+        other_fp = other[stage_with_wcs].footprint
+        overlap_area = self_fp.polygon.intersection(other_fp.polygon).area
+        self_area = self_fp.polygon.area
+        other_area = other_fp.polygon.area
+        if overlap_area / self_area >= overlap_percent or overlap_area / other_area >= overlap_percent:
+            # If same_instrument is True, check if the filter, detector, and pupil match
+            if same_instrument:
+                return (
+                    self.filter == other.filter and
+                    self.detector == other.detector and
+                    self.pupil == other.pupil
+                )
+            # If same_instrument is False, we only check the overlap
+            else:
+                return True
+        else:
+            return False
+        
+    
     def plotly_imshow(self,
                         stages: list[str] | None = None,
                         stage_types: list[Literal['data', 'mask']] | None = None,
@@ -690,19 +849,21 @@ class JwstInfo(BaseModel):
             data = []
         if mask is None:
             mask = []
+        if stages is None:
+            stages = []
         if stages:
             if stage_types is None:
                 stage_types = ['data'] * len(stages)
             elif len(stage_types) != len(stages):
                 raise ValueError("Length of 'stage_types' must match length of 'stages'.")
             data_stages = []
-        for stage, stage_type in zip(stages, stage_types):
-            if stage_type == 'data':
-                data_stages.append(self[stage].data)
-            elif stage_type == 'mask':
-                mask.append(self[stage].data)
+            for stage, stage_type in zip(stages, stage_types):
+                if stage_type == 'data':
+                    data_stages.append(self[stage].data)
+                elif stage_type == 'mask':
+                    mask.append(self[stage].data)
         
-        data = data_stages + data
+            data = data_stages + data
 
         if zmin is None:
             zmin = np.nanpercentile(np.concatenate(data), pmin)

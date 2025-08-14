@@ -426,11 +426,6 @@ class CompoundFootPrint(FootPrint):
                     raise TypeError(
                         "All elements in 'footprints' must be FootPrint objects"
                     )
-                if not result_polygon.intersects(footprint.polygon):
-                    raise ValueError(
-                        "Footprints in 'footprints' must intersect with each other"
-                    )
-
                 result_polygon = result_polygon.union(footprint.polygon)
 
             ## get the vertices of the union of footprints

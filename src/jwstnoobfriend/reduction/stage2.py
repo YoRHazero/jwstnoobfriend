@@ -1,5 +1,5 @@
 import numpy as np
-from jwstnoobfriend.utils.calculate import mad_clipped_stats, gaussian_fill_nan, segmentation_mask
+from jwstnoobfriend.utils.calculate import mad_clipped_stats, gaussian_smoothing, segmentation_mask
 from jwstnoobfriend.navigation import JwstInfo
 
 def nircam_1f_noise(
@@ -30,11 +30,11 @@ def nircam_1f_noise(
     # Apply Gaussian fill to NaN values
     match info.pupil:
         case "CLEAR":
-            data_conv = gaussian_fill_nan(data, np.isnan(data))
+            data_conv = gaussian_smoothing(data, np.isnan(data))
         case "GRISMR":
-            data_conv = gaussian_fill_nan(data, np.isnan(data), kernel_radius_y=1)
+            data_conv = gaussian_smoothing(data, np.isnan(data), kernel_radius_y=1)
         case "GRISMC":
-            data_conv = gaussian_fill_nan(data, np.isnan(data), kernel_radius_x=1)
+            data_conv = gaussian_smoothing(data, np.isnan(data), kernel_radius_x=1)
         case _:
             raise ValueError(f"Unsupported pupil type: {info.pupil} for NIRCam 1F noise calculation.")
     if seg_mask is None:
