@@ -1,0 +1,21 @@
+save_results=true
+output_dir = "{{ stage_3a_path | default('') }}"
+
+[steps.tweakreg]
+save_catalogs = true
+output_dir = "{{ stage_2c_path | default('') }}"
+starfinder = 'iraf' # default is 'iraf'; other options are 'dao' and 'segmentation'
+use_custom_catalogs = false # default is false
+catfile = '' # User-provided catalog file. No effect if use_custom_catalog is false.
+snr_threshold = 8.0 # value for SNR threshold for star detection
+kernel_fwhm = 2.5 # FWHM of the kernel used for star detection in pixels
+abs_refcat = 'GAIADR3'
+abs_minobj = 2
+abs_fitgeometry = 'shift'
+save_abs_catalog = true
+minsep_fwhm = 5 # minimum separation between stars in FWHM units
+minobj = 8 # minimum number of objects to be detected in the image
+
+[steps.outlier_detection]
+save_results = true
+output_dir = "{{ stage_2c_path | default('') }}"

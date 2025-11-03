@@ -6,6 +6,7 @@ import re
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+from pandas import DataFrame
 from jwstnoobfriend.utils.log import getLogger
 from jwstnoobfriend.utils.display import plotly_figure_and_mask
 from jwstnoobfriend.navigation.footprint import FootPrint
@@ -115,6 +116,69 @@ class JwstCover(BaseModel):
         datamodel = self.datamodel
         return datamodel.dq
     
+    def read_catalog(
+        self,
+        catalog: DataFrame,
+        ra_key: str = 'ra',
+        dec_key: str = 'dec',
+        id_key: str = 'id',
+    ):
+        """
+        Read a catalog and extract objects within the footprint, and add their pixel coordinates 
+        as 'pix_x' and 'pix_y' columns based on the WCS of this cover.
+
+        Parameters
+        ----------
+        catalog : DataFrame
+            The catalog to read from.
+        ra_key : str, optional
+            The key for the right ascension column. Default is 'ra'.
+        dec_key : str, optional
+            The key for the declination column. Default is 'dec'.
+        id_key : str, optional
+            The key for the ID column. Default is 'id'.
+
+        Returns
+        -------
+        DataFrame
+            A DataFrame containing the objects within the footprint.
+        """
+        if ra_key not in catalog.columns:
+            raise ValueError(f"Catalog must contain a '{ra_key}' column.")
+        if dec_key not in catalog.columns:
+            raise ValueError(f"Catalog must contain a '{dec_key}' column.")
+        if id_key not in catalog.columns:
+            raise ValueError(f"Catalog must contain a '{id_key}' column.")
+
+        footprint = self.footprint
+        if footprint is None:
+            raise ValueError("WCS is not available in this stage, please use a product with wcs assigned.")
+        result_catalog = footprint.read_catalog(
+            catalog, ra_key=ra_key, dec_key=dec_key, id_key=id_key
+        )
+        if result_catalog is None:
+            logger.warning(
+                "No points from the catalog are within the footprint."
+            )
+            return None
+        wcs = self.wcs
+        sky2pix = wcs.get_transform('world', 'detector')
+        try:
+            pix_x, pix_y = sky2pix(
+                result_catalog[ra_key],
+                result_catalog[dec_key]
+            )
+        except:
+            pix_x, pix_y, _, _ = sky2pix(
+                result_catalog[ra_key],
+                result_catalog[dec_key],
+                [0] * len(result_catalog),
+                [1] * len(result_catalog)
+            )
+        result_catalog['pix_x'] = pix_x
+        result_catalog['pix_y'] = pix_y
+        return result_catalog
+
     def data_filled(self, 
                     mask_to_fill: np.ndarray | None = None,
                     data_for_fill: np.ndarray | None = None,
@@ -312,6 +376,8 @@ class JwstCover(BaseModel):
     def plotly_imshow(self, 
                         fig_height: int | None = None,
                         fig_width: int | None = None,
+                        catalog: DataFrame | None = None,
+                        cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
                         pmax: float = 99.,
@@ -322,6 +388,8 @@ class JwstCover(BaseModel):
     def plotly_imshow(self,
                         fig_height: int | None = None,
                         fig_width: int | None = None,
+                        catalog: DataFrame | None = None,
+                        cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
                         pmax: float = 99.,
@@ -333,15 +401,18 @@ class JwstCover(BaseModel):
     def plotly_imshow(self,
                         fig_height: int | None = None,
                         fig_width: int | None = None,
+                        catalog: DataFrame | None = None,
+                        cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
                         pmax: float = 99.,
                         color_map: str = 'gray') -> None: ...
 
-    @validate_call
     def plotly_imshow(self,
                         fig_height: int| None = None,
                         fig_width: int | None = None,
+                        catalog: DataFrame | None = None,
+                        cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
                         pmax: float = 99.,
@@ -357,7 +428,13 @@ class JwstCover(BaseModel):
             
         fig_width : int, optional
             Width of the figure in pixels, by default None. If None, it will be calculated based on the data shape.
-            
+        
+        catalog : DataFrame | None, optional
+            Catalog data to overlay on the image, by default None.
+
+        cat_marker_dict : dict | None, optional
+            Dictionary passed to plotly.express.scatter, by default None.
+
         facet_col_wrap : int, optional
             Number of columns to wrap the facets, by default 2.
             
@@ -428,11 +505,28 @@ class JwstCover(BaseModel):
                 line_width=2,
             )
         )
+        if catalog is not None:
+            if 'pix_x' not in catalog.columns or 'pix_y' not in catalog.columns:
+                loaded_catalog = self.read_catalog(catalog)
+            else:
+                loaded_catalog = catalog
+            if cat_marker_dict is None:
+                cat_marker_dict = {}
+            fig.add_traces(
+                px.scatter(
+                    loaded_catalog,
+                    x='pix_x',
+                    y='pix_y',
+                    **cat_marker_dict
+                ).data
+            )
+        
         if return_figure:
             return fig
         else:
             fig.show(config={'modeBarButtonsToAdd':['drawrect',
-                                                    'eraseshape']})
+                                                    'eraseshape'],
+                             'scrollZoom': True})
 
     @classmethod
     def new(cls, filepath: Path, with_wcs: bool = True) -> Self:
@@ -739,7 +833,7 @@ class JwstInfo(BaseModel):
     def is_same_pointing(self, 
                          other: Self,
                          stage_with_wcs: str = '2b',
-                         overlap_percent: float = 0.6,
+                         overlap_fraction: float = 0.6,
                          same_instrument: bool = True,
                          ) -> bool:
         """
@@ -751,8 +845,8 @@ class JwstInfo(BaseModel):
             The other JwstInfo instance to compare with.
         stage_with_wcs : str, optional
             The stage to use for the WCS comparison, by default '2b'.
-        overlap_percent : float, optional
-            The minimum overlap percentage required to consider the pointings the same, by default 0.8, maximum is 1.0.
+        overlap_fraction : float, optional
+            The minimum overlap fraction required to consider the pointings the same, by default 0.8, maximum is 1.0.
         same_instrument : bool, optional
             If True, also check if the filter, detector, and pupil match between the two JwstInfo instances.
             If False, only check the overlap of the footprints, by default True.
@@ -772,7 +866,7 @@ class JwstInfo(BaseModel):
         overlap_area = self_fp.polygon.intersection(other_fp.polygon).area
         self_area = self_fp.polygon.area
         other_area = other_fp.polygon.area
-        if overlap_area / self_area >= overlap_percent or overlap_area / other_area >= overlap_percent:
+        if overlap_area / self_area >= overlap_fraction or overlap_area / other_area >= overlap_fraction:
             # If same_instrument is True, check if the filter, detector, and pupil match
             if same_instrument:
                 return (
@@ -792,6 +886,7 @@ class JwstInfo(BaseModel):
                         stage_types: list[Literal['data', 'mask']] | None = None,
                         data: list[np.ndarray] | None = None,
                         mask: list[np.ndarray] | None = None,
+                        stage_wcs: str | None = None,
                         pmin: float = 1.0,
                         pmax: float = 99.0,
                         zmin: float | None = None,
@@ -869,9 +964,23 @@ class JwstInfo(BaseModel):
             zmin = np.nanpercentile(np.concatenate(data), pmin)
         if zmax is None:
             zmax = np.nanpercentile(np.concatenate(data), pmax)
+            
+        wcs_transform = None
+        if stage_wcs is not None:
+            wcs = self[stage_wcs].wcs
+            if wcs is None:
+                raise ValueError(f"WCS for stage '{stage_wcs}' is None.")
+            
+            if self.pupil in ['CLEAR']:
+                wcs_transform = wcs.get_transform('detector', 'world')
+            if self.pupil in ['GRISMR', 'GRISMC']:
+                wcs_transform_temp = wcs.get_transform('detector', 'world')
+                wcs_transform = lambda x, y: wcs_transform_temp(x, y, np.full_like(x, 0), np.full_like(x, 1))
+
         fig = plotly_figure_and_mask(
             data=data,
             mask=mask,
+            wcs_transform=wcs_transform,
             pmin=pmin,
             pmax=pmax,
             zmin=zmin,

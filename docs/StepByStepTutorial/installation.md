@@ -1,6 +1,6 @@
 # How to install it
 ---
-First, open an terminal window and start your shell, I am using [fish](https://fishshell.com/). (1) 
+First, open a terminal window and start your shell. I am using [fish](https://fishshell.com/). (1) 
 { .annotate }
 
 1.  **Fish** 🐟 is a morden shell with smooth experience of auto completion, highly recommend you to have a try 😉！
@@ -15,7 +15,7 @@ First, open an terminal window and start your shell, I am using [fish](https://f
     ```
 
 ???+ note "use [uv](https://docs.astral.sh/uv/) for package management"
-    Wait🤔, what is [**uv**](https://docs.astral.sh/uv/) here? Personally, I think it is a python version of [**npm**](https://www.npmjs.com/) (javascript) or [**cargo**](https://doc.rust-lang.org/cargo/) (rust). 
+    Wait🤔, what is [**uv**](https://docs.astral.sh/uv/) here? Personally, I think it is a python version of [**npm**](https://www.npmjs.com/) (javascript/typescript) or [**cargo**](https://doc.rust-lang.org/cargo/) (rust). 
     
     Different from [**anaconda**](https://www.anaconda.com/), you will not have a virtual environment globaly, but each workspace (folder) will have its own virtual environment. This is super benifitial when you plan to output the dependencies of your project. Also, you don't have to maintain a lengthy list of anaconda virtual environment to avoid potential pacakge version conflict.
 
@@ -34,7 +34,7 @@ Please refer to the [uv installation guide](https://docs.astral.sh/uv/getting-st
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
     ```
 
-Note that I don't have experience with Windows, so if you encounter any issues, please refer to the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/#windows) for troubleshooting. And for the following steps, I will only show the commands for macOS and Linux.
+Note that I don't have experience with Windows System, so if you encounter any issues, please refer to the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/#windows) for troubleshooting. And for the following steps, I will only show the commands for macOS and Linux.
 
 ## Initialize a working folder
 After you have installed uv, you can create a new working folder and initialize it with uv.

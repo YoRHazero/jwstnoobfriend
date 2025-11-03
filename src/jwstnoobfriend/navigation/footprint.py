@@ -6,6 +6,7 @@ from pydantic import (
     computed_field,
     FilePath,
 )
+from pandas import DataFrame
 from pathlib import Path
 from shapely.geometry import Polygon, Point
 from typing import Any, Iterable, Self
@@ -107,7 +108,21 @@ class FootPrint(BaseModel):
     def vertices_for_plot(self) -> tuple[array.array, array.array]:
         """Returns the vertices as two separate arrays for plotting."""
         return self.polygon.exterior.xy
-    
+
+    @validate_call
+    def contains(self, 
+                 points: list[tuple[float, float]] | None = None,
+                 ra: list[float] | None = None,
+                 dec: list[float] | None = None
+                 ) -> list[bool]:
+        """Checks if the given points are within the footprint."""
+        if points:
+            return [self.polygon.contains(Point(p)) for p in points]
+        if len(ra) != len(dec):
+            raise ValueError("RA and Dec must have the same length")
+        points = [(r, d) for r, d in zip(ra, dec)]
+        return [self.polygon.contains(Point(p)) for p in points]
+
     @classmethod
     @validate_call
     def new(cls, file_path: FilePath | str) -> Self:
@@ -382,6 +397,51 @@ class FootPrint(BaseModel):
             )
         )
         return fig
+    
+    def read_catalog(
+        self,
+        catalog: DataFrame,
+        ra_key: str = 'ra',
+        dec_key: str = 'dec',
+        id_key: str = 'id',
+    ) -> DataFrame | None:
+        """
+        Read a catalog and extract objects within the footprint.
+
+        Parameters
+        ----------
+        catalog : DataFrame
+            The catalog to read from.
+        ra_key : str, optional
+            The key for the right ascension column. Default is 'ra'.
+        dec_key : str, optional
+            The key for the declination column. Default is 'dec'.
+        id_key : str, optional
+            The key for the ID column. Default is 'id'.
+
+        Returns
+        -------
+        DataFrame
+            A DataFrame containing the objects within the footprint.
+        """
+        if ra_key not in catalog.columns:
+            raise ValueError(f"Catalog must contain a '{ra_key}' column.")
+        if dec_key not in catalog.columns:
+            raise ValueError(f"Catalog must contain a '{dec_key}' column.")
+        if id_key not in catalog.columns:
+            raise ValueError(f"Catalog must contain a '{id_key}' column.")
+
+        result_catalog = catalog.copy()
+        result_catalog = result_catalog[self.contains(
+            ra = result_catalog[ra_key],
+            dec = result_catalog[dec_key]
+        )]
+        if result_catalog.empty:
+            logger.warning(
+                "No points from the catalog are within the footprint."
+            )
+            return None
+        return result_catalog
 
 
 class CompoundFootPrint(FootPrint):

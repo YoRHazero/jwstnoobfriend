@@ -1,0 +1,24 @@
+# The setup for reduction stage 1b->2a
+
+# whether save results
+save_results = true
+
+output_dir = "{{ output_path | default('') }}"
+
+
+[steps.jump]
+save_results = true
+maximum_cores = 'half'
+# whether the jump step will expand the number of pixels that are flagged around large cosmic ray events
+expand_large_events = true
+# A boolean value that if True requires that there are saturated pixels within the enclosed jump circle.
+sat_required_snowball = false
+# A multiplicative factor applied to the enclosing ellipse for snowballs. This larger area will have all pixels flagged as having a jump.
+expand_factor = 2
+
+[steps.clean_flicker_noise]
+# This step will be skipped by default.
+skip = false
+# The background method is fitting with a low-resolution model via Background2D
+background_method = "model"
+background_box_size = [64, 64]

@@ -90,7 +90,10 @@ nav:
       - Environment Variables: StepByStepTutorial/environment.md
       - Retrieving JWST Data: StepByStepTutorial/fetch.md
       - Reduction with Pipeline: 
-        - Preliminary: StepByStepTutorial/reduction/index.md
+        - Be Ready?: StepByStepTutorial/reduction/index.md
         - Stage 1: StepByStepTutorial/reduction/stage1.md
+        - Stage 2 for CLEAR: StepByStepTutorial/reduction/stage2-CLEAR.md
+        - Stage 3 for CLEAR: StepByStepTutorial/reduction/stage3-CLEAR.md
+        - Stage 2 for GRISM: StepByStepTutorial/reduction/stage2-GRISM.md
 
 

@@ -1,5 +1,4 @@
 from typing import Annotated, Any, Literal, Self, Callable
-import functools
 import re
 import os
 import asyncer
@@ -11,11 +10,12 @@ from collections import Counter
 import random
 from pathlib import Path
 from pydantic import BaseModel, FilePath, field_validator, model_validator, computed_field, Field, validate_call, DirectoryPath
-from dash import Dash, html, dcc
 import plotly.colors as pc
 import plotly.graph_objects as go
-import numpy as np
 import pandas as pd
+import numpy as np
+from shapely.strtree import STRtree
+import networkx as nx
 
 from jwstnoobfriend.navigation.jwstinfo import JwstInfo, JwstCover
 from jwstnoobfriend.navigation.footprint import FootPrint
@@ -214,15 +214,15 @@ class FileBox(BaseModel):
             
     @classmethod
     @validate_call
-    def init_from_folder(cls, *, stage: str, folder_path: DirectoryPath | None = None,
+    def init_from_folder(cls, *, stage: str | None = None, folder_path: DirectoryPath | None = None,
                          wildcard='*.fits', force_with_wcs: bool = False, method: Literal['async', 'parallel', 'loop'] = 'parallel') -> Self:
         """
         Initializes the FileBox from a folder containing files. It will create a JwstInfo for each file that matches the wildcard.
         
         Parameters
         ----------
-        stage : str
-            The stage of the JwstCover to be added for each file.
+        stage : str | None, optional
+            The stage of the JwstCover to be added for each file. If None, it will be inferred from the environment variable START_STAGE
         folder_path : DirectoryPath | None, optional
             The path to the folder containing the files. If None, it will use the environment variable
             STAGE_{stage.upper()}_PATH to find the folder path.
@@ -238,8 +238,12 @@ class FileBox(BaseModel):
         """
         ## Get the folder path from the environment variable
         self = cls(infos={}, proposal_ids=[])
+        load_environment()
+        if stage is None:
+            stage = os.getenv("START_STAGE", None)
+            if stage is None:
+                raise ValueError("Stage is not provided and START_STAGE is not set in the environment variables. Please provide a valid stage manually.")
         if folder_path is None:
-            load_environment()
             folder_path = os.getenv(f"STAGE_{stage.upper()}_PATH", None)
             if folder_path is None:
                 raise ValueError(f"Folder path for stage '{stage}' is not set in the environment variables. Please provide a valid folder path manually.")
@@ -267,15 +271,18 @@ class FileBox(BaseModel):
                         self.update_from_file(filepath=filepath, stage=stage, force_with_wcs=force_with_wcs)
         return self
 
-    def merge(self, other: Self) -> Self:
+    def merge(self, other: Self, discard: bool = False) -> Self:
         """
         Merges another FileBox into this one. If a JwstInfo with the same basename exists, it will merge the information.
-        Else, it will add the new JwstInfo to the infos dictionary.
+        Else, it will add the new JwstInfo to the infos dictionary. However, if discard is True, it will discard JwstInfo objects that do not exist in this FileBox.
         
         Parameters
         ----------
         other : FileBox
             The FileBox to merge into this one.
+        
+        discard : bool, optional
+            If True, it will discard JwstInfo objects from the other FileBox that do not exist in this FileBox.
             
         Returns
         -------
@@ -291,6 +298,8 @@ class FileBox(BaseModel):
             if key in self.infos:
                 self.infos[key].merge(info)
             else:
+                if discard:
+                    continue
                 self.infos[key] = info
                 logger.warning(f"Adding new JwstInfo with basename {key} to FileBox.")
                 
@@ -400,11 +409,29 @@ class FileBox(BaseModel):
     
     @classmethod
     @validate_call
-    def load(cls, filepath: FilePath | None = None) -> Self:
-        """Loads a FileBox from a file."""
+    def load(cls, filepath: FilePath | None = None, suffix: str | None = None) -> Self:
+        """
+        Loads a FileBox from a file.
+        
+        Parameters
+        ----------
+        filepath : FilePath | None, optional
+            The path to the file to load the FileBox from. If None, it will use the environment variable
+            FILE_BOX_PATH. If the environment variable is not set, it will default to 'noobox.json' in the current directory.
+        suffix : str | None, optional
+            An optional suffix to append to the filename before loading. This can be useful for loading
+            different versions of the FileBox file (e.g., 'clear' to load 'noobox_clear.json').
+        """
         if filepath is None:
-            filepath = os.getenv('FILE_BOX_PATH', 'noobox.json')
-            filepath = FilePath(filepath)
+            filepath: str = os.getenv('FILE_BOX_PATH', 'noobox.json')                
+            filepath: FilePath = FilePath(filepath)
+            if suffix is not None:
+                new_name = f"{filepath.stem}_{suffix}{filepath.suffix}"
+                filepath = filepath.parent / new_name
+                filepath = FilePath(filepath)
+        if filepath.exists() is False:
+            logger.warning(f"FileBox file does not exist at {filepath}. Returning an empty FileBox.")
+            return cls(infos={}, proposal_ids=[])
         with open(filepath, 'r') as f:
             data = f.read()
         return cls.model_validate_json(data)
@@ -412,13 +439,30 @@ class FileBox(BaseModel):
     
     ## Special methods for accessing JwstInfo objects
 
-    def __getitem__(self, key: str | int) -> JwstInfo:
+    def __getitem__(self, key: str | int | slice | list | tuple | np.ndarray) -> JwstInfo:
         """Returns the JwstInfo object for the given key or index."""
         if isinstance(key, int):
             return self.info_list[key]
-        else:
+        if isinstance(key, str):
             key = JwstInfo.extract_basename(key)  # Automatically extract basename if needed
-        return self.infos[key]
+            return self.infos[key]
+        if isinstance(key, slice):
+            selected_infos = {info.basename: info for info in self.info_list[key]}
+            return self.__class__(infos=selected_infos, proposal_ids=self.proposal_ids)
+        if isinstance(key, (list, np.ndarray)):
+            if all(isinstance(k, str) for k in key):
+                selected_infos = {JwstInfo.extract_basename(k): self.infos[JwstInfo.extract_basename(k)] for k in key}
+                return self.__class__(infos=selected_infos, proposal_ids=self.proposal_ids)
+            elif len(key) == self.__len__() and all(isinstance(k, (bool, np.bool_)) for k in key):
+                selected_infos = {info.basename: info for i, info in enumerate(self.info_list) if key[i]}
+                return self.__class__(infos=selected_infos, proposal_ids=self.proposal_ids)
+            elif all(isinstance(k, (int, np.integer)) for k in key):
+                selected_infos = {self.info_list[k].basename: self.info_list[k] for k in key}
+                return self.__class__(infos=selected_infos, proposal_ids=self.proposal_ids)
+            uniq_types = {type(k).__name__ for k in key}
+            raise TypeError(f"Unsupported mixed index types in {type(key).__name__}: {sorted(uniq_types)}")
+        raise KeyError(f"Key must be a string (basename or full filename), integer (index), slice (index), or list/np.ndarray of strings/integers/booleans. Got {type(key)} instead.")
+            
     
     def __len__(self) -> int:
         """Returns the number of JwstInfo objects in the FileBox."""
@@ -600,7 +644,6 @@ class FileBox(BaseModel):
         Note that long wavelength filter files usually have larger footprints than short wavelength filter files.
         Hence, the number of matched JwstInfo objects will vary depending on the filter used.
         
-        - If you want to check the reduction process, a short wavelength filter target is recommended.
         - If you want to investigate the astrometry, a long wavelength filter target is recommended.
         """
         
@@ -619,21 +662,24 @@ class FileBox(BaseModel):
 
     def group_by_pointing(self, 
                           stage_with_wcs: str = '2b', 
-                          overlap_percent: float = 0.6,
+                          overlap_fraction: float = 0.6,
+                          if_same_instrument: bool = True
                          ) -> list[Self]:
         """
         Groups JwstInfo objects in the FileBox by their pointing information.
         This method is only applicable if all JwstInfo objects in the FileBox have a stage with WCS assigned.
 
-        This method is for reduction. Hence, in each group, the JwstInfo objects will have the same instrument attributes (pupil, filter, detector).
+        This method is for reduction. Hence, in each group, by default, the JwstInfo objects will have the same instrument attributes (pupil, filter).
         
         Parameters
         ----------
         stage_with_wcs : str, optional
             The stage of the JwstCover to use for the pointing information. Default is '2b'. See also JwstInfo.is_same_pointing method.
-        overlap_percent : float, optional
-            The percentage of overlap required to consider two pointings as the same. Default is 0.6. Maximum is 1.0. See also JwstInfo.is_same_pointing method.
-            
+        overlap_fraction : float, optional
+            The fraction of overlap required to consider two pointings as the same. Default is 0.6. Maximum is 1.0. See also JwstInfo.is_same_pointing method.
+        if_same_instrument : bool, optional
+            If True, the method will only group JwstInfo objects that have the same instrument attributes (pupil, filter). Default is True.
+
         Returns
         -------
         list[Self]
@@ -644,26 +690,40 @@ class FileBox(BaseModel):
         ValueError
             If the stage_with_wcs does not exist in all JwstInfo objects in the FileBox.
         """
-
-        grouped_boxes = []
-        visited_indices = set()
-        for i, info in enumerate(self.info_list):
-            if i in visited_indices:
-                continue
-            visited_indices.add(i)
-            group_infos = []
-            # Start from current index to include it in the group
-            for j in range(i, len(self.info_list)):
-                if j in visited_indices:
+        footprint_polygons = [info[stage_with_wcs].footprint.polygon 
+                              for info in self.info_list
+                              if stage_with_wcs in info.cover_dict and info.cover_dict[stage_with_wcs].footprint is not None]
+        if len(footprint_polygons) != len(self):
+            raise ValueError(f"Not all JwstInfo objects in the FileBox have stage '{stage_with_wcs}' with a valid footprint. Please check the FileBox contents.")
+        str_tree = STRtree(footprint_polygons)
+        edges = []
+        for i, polygon in enumerate(footprint_polygons):
+            possible_matches = str_tree.query(polygon)
+            for j in possible_matches:
+                candidate_polygon = footprint_polygons[j]
+                if i >= j:
                     continue
-                other_info = self.info_list[j]
-                if info.is_same_pointing(other_info, stage_with_wcs=stage_with_wcs, overlap_percent=overlap_percent, same_instrument=True):
-                    group_infos.append(other_info)
-                    visited_indices.add(j)
-            grouped_boxes.append(self.__class__(infos={info.basename: info for info in group_infos}))
-        return grouped_boxes    
+                if if_same_instrument:
+                    if self.info_list[i].filter != self.info_list[j].filter \
+                            or self.info_list[i].pupil != self.info_list[j].pupil \
+                                or self.info_list[i].detector != self.info_list[j].detector:
+                        continue
+                intersection_area = polygon.intersection(candidate_polygon).area
+                intersection_fraction = max(intersection_area / polygon.area, intersection_area / candidate_polygon.area)
+                if intersection_fraction >= overlap_fraction:
+                    edges.append((i, j))
+        G = nx.Graph()
+        G.add_nodes_from(range(len(footprint_polygons)))
+        if edges:
+            G.add_edges_from(edges)
+            
+        components = [sorted(list(component)) for component in nx.connected_components(G)]
         
-        
+        grouped_fileboxes = []
+        for component in components:
+            grouped_fileboxes.append(self[component])
+        return grouped_fileboxes
+ 
     ## Methods for visualization
     @classmethod
     def sky_figure(cls,
@@ -716,6 +776,7 @@ class FileBox(BaseModel):
         fig_mode: Literal['sky', 'cartesian'] = 'sky',
         color_by: list[str] | None = None,
         color_list: list[str] | None = None,
+        hide: dict[str, list[Any]] | None = None,
         catalog: pd.DataFrame | None = None,
     ) -> go.Figure:
         """
@@ -736,6 +797,8 @@ class FileBox(BaseModel):
             A list of attributes to color the footprints by. If None, a default color will be used.
         color_list : list[str] | None, optional
             A list of colors to use for the footprints. If None, a default color list will be used.
+        hide : dict[str, list[Any]] | None, optional
+            A dictionary specifying attributes to hide in the footprints. The keys are attribute names, and the values are lists of attribute values to hide.
         catalog : pd.DataFrame | None, optional
             A DataFrame containing additional points to plot on the figure. It must contain 'ra', 'dec', and 'id' columns.
             
@@ -760,6 +823,9 @@ class FileBox(BaseModel):
                         )
                     )
         
+        if hide is None:
+            hide = {}
+        
         if color_by:
             for attr in color_by:
                 if not hasattr(self[0], attr):
@@ -782,6 +848,9 @@ class FileBox(BaseModel):
         for info in self.info_list:
             if stage not in info.cover_dict:
                 logger.warning(f"Stage '{stage}' not found in JwstInfo {info.basename}. Skipping.")
+                continue
+            
+            if any(getattr(info, attr) in values for attr, values in hide.items()):
                 continue
 
             if color_by:

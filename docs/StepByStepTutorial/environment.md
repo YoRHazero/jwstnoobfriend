@@ -64,16 +64,17 @@ The next step is to append the concrete paths of each steps to the `.env` file. 
 
 <!-- termynal -->
 ```console
-$ uv run noobenv append -n 2a 2bI 2bII 2c 3a
+$ uv run noobenv append -n 2a 2bi 2c 3a
 The .env file has been updated with the new stage paths.
 ```
 - Note that if you don't use the '`-a`' option, every time you run the `append` command, it will overwrite the previously provided stages in the `.env` file. Again, see `noobenv append --help` or directly try it once you are confused with the behavior of the command :nerd:.
-- The first character of the stage name must be a number. So if you want to save any middle products, name the stage like `2bI` or `2bII`. The stage name is case-insensitive, but I recommend you to use lowercase letters for consistency 🧐.
+- The first character of the stage name must be a number. So if you want to save any middle products, name the stage like `2bi` or `2bii`. The stage name is case-insensitive, but I recommend you to use lowercase letters for consistency 🧐.
+- Don't be confused by the term `FILE_BOX_PATH`. This points to the path which will be the default path for the `FileBox.load()`. It is just for convenience. You can still load data from any other paths or rewrite this term based on what analysis you are doing.
 
 ??? warning "Be careful if you are using terminal of VSCode🚨"
     If you are using the terminal of VSCode, you may be able to directly use the `noobenv` command without the `uv run` prefix:
     ```console
-    $ noobenv append -n 2a 2bI 2bII 2c 3a
+    $ noobenv append -n 2a 2bi 2c 3a
     ```
     However, when you create a new terminal in VSCode, it will automatically load the environment variables from the `.env` file, which will prevent us from updating the environment variables from the `.env` file.
 
@@ -97,4 +98,11 @@ Once you have checked the paths, you can create the folders by running the follo
 <!-- termynal -->
 ```console
 $ uv run noobenv check -m
+```
+
+# Final Summary
+Now your `.env` file should look like this:
+
+```dotenv title=".env"
+--8<-- "docs_srccode/StepByStepTutorial/EnvironmentVariables/.env"
 ```

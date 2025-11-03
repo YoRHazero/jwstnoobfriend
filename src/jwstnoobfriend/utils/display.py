@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 
-__all__ = ['console','track_func','time_footer', 'plotly_figure_and_mask']
+__all__ = ['console','track_func','time_footer', 'plotly_figure_and_mask', 'track']
 ## Terminal part
 console = Console()
     
@@ -123,6 +123,7 @@ def time_footer(func: Callable) -> Callable:
 def plotly_figure_and_mask(
     data: list[np.ndarray] | None = None,
     mask: list[np.ndarray] | None = None,
+    wcs_transform: Callable | list[Callable] | None = None,
     pmin: float = 1.0,
     pmax: float = 99.0,
     zmin: float | None = None,
@@ -213,6 +214,23 @@ def plotly_figure_and_mask(
     for annotation, subtitle in zip(fig.layout.annotations, subtitles):
         annotation.text = subtitle
     
+    if wcs_transform is not None:
+        if isinstance(wcs_transform, Callable):
+            wcs_list = [wcs_transform] * len(arrays_to_show)
+        else:
+            if len(wcs_transform) != len(arrays_to_show):
+                raise ValueError("Length of 'wcs' must match the total number of data and mask arrays.")
+            wcs_list = wcs_transform
+        for trace_idx, trace in enumerate(fig.data):
+            wcs_transform = wcs_list[trace_idx]
+            ny, nx = arrays_to_show[trace_idx].shape
+            y, x = np.mgrid[0:ny, 0:nx]
+            try:
+                ra_coords, dec_coords = wcs_transform(x, y)
+                trace.customdata = np.stack([ra_coords, dec_coords], axis=-1)
+                trace.hovertemplate += "<br>RA: %{customdata[0]:.7f}<br>Dec: %{customdata[1]:.7f}"
+            except:
+                continue
     return fig
 
 def plotly_sky_figure(projection_type: str = "orthographic",

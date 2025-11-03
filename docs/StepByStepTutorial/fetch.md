@@ -55,7 +55,7 @@ $ uv run noobfetch retrieve 01895 -l 1b
     
     I don't know why if we sent the FileSetIDs to the MAST API, it will take a long time to get the response. So I use the asynchronous requests and only send one filesetid in one request, which speeds up the retrieval process significantly.
 
-After the command is executed, you should find the product list in a file named `products.json`. You can open it and do some filtering before downloading the data. But in this tutorial, we will just download all the products in the FRESCO program.
+After the command is executed, you should find the product list in a file named `products.json`. You can open it and do some filtering before downloading the data. But in this tutorial, we will just download all the products in the [FRESCO](https://jwst-fresco.astro.unige.ch/) program.
 
 ## Download the data
 If you followed the [Environment Variables](environment.md) part, you can directly run:
@@ -69,6 +69,24 @@ Otherwise, you need to specify the folder to save the downloaded data by using t
 
 ??? tip "Use `tmux` or `screen` to run the command in the background"
     If you are running the command on a remote server, you can use `tmux` or `screen` to run the command in the background. This way, you can close the terminal without interrupting the download process 😋. This method can be applied when you are executing any long-running command in the terminal.
+    === "screen"
+        ```console
+        $ screen -S download # or any other name you like
+        # Now you are in a new screen session
+        $ uv run noobfetch download products.json
+        # To detach from the screen session, press `Ctrl + A`, then `D`
+        # When you feel the download is finished, you can reattach to the session by running:
+        $ screen -r download
+        ```
+    === "tmux"
+        ```console
+        $ tmux new -s download
+        # Now you are in a new tmux session
+        $ uv run noobfetch download products.json
+        # To detach from the tmux session, press `Ctrl + B`, then `D`
+        # When you feel the download is finished, you can reattach to the session by running:
+        $ tmux attach -t download
+        ```
 
 ## Use astroquery
 You can also use the `astroquery` package.

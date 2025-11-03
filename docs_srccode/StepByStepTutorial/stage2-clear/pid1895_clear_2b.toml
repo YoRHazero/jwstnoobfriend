@@ -1,0 +1,10 @@
+# The setup for reduction stage 2a->2b
+
+# whether save results
+save_results = true
+
+output_dir = "/media/disk1/zchao/icrrhome/zchao/noobfriend/PID_1895/stage2/2b"
+
+
+[steps.resample]
+skip = true
