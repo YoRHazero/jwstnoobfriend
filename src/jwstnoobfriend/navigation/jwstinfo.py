@@ -377,6 +377,7 @@ class JwstCover(BaseModel):
                         fig_height: int | None = None,
                         fig_width: int | None = None,
                         catalog: DataFrame | None = None,
+                        id_key: str = 'id',
                         cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
@@ -389,6 +390,7 @@ class JwstCover(BaseModel):
                         fig_height: int | None = None,
                         fig_width: int | None = None,
                         catalog: DataFrame | None = None,
+                        id_key: str = 'id',
                         cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
@@ -402,6 +404,7 @@ class JwstCover(BaseModel):
                         fig_height: int | None = None,
                         fig_width: int | None = None,
                         catalog: DataFrame | None = None,
+                        id_key: str = 'id',
                         cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
@@ -412,6 +415,7 @@ class JwstCover(BaseModel):
                         fig_height: int| None = None,
                         fig_width: int | None = None,
                         catalog: DataFrame | None = None,
+                        id_key: str = 'id',
                         cat_marker_dict: dict | None = None,
                         facet_col_wrap: int = 2,
                         pmin: float = 1.,
@@ -431,6 +435,9 @@ class JwstCover(BaseModel):
         
         catalog : DataFrame | None, optional
             Catalog data to overlay on the image, by default None.
+            
+        id_key : str, optional
+            The key for the ID column in the catalog, by default 'id'.
 
         cat_marker_dict : dict | None, optional
             Dictionary passed to plotly.express.scatter, by default None.
@@ -512,14 +519,21 @@ class JwstCover(BaseModel):
                 loaded_catalog = catalog
             if cat_marker_dict is None:
                 cat_marker_dict = {}
-            fig.add_traces(
-                px.scatter(
-                    loaded_catalog,
-                    x='pix_x',
-                    y='pix_y',
-                    **cat_marker_dict
-                ).data
+            scatter_traces = px.scatter(
+                loaded_catalog,
+                x='pix_x',
+                y='pix_y',
+                custom_data=[id_key],
+                **cat_marker_dict
             )
+            for trace in scatter_traces.data:
+                trace.hovertemplate = (
+                    f"{id_key}: %{{customdata[0]}}<br>"
+                    f"pix_x: %{{x}}<br>"
+                    f"pix_y: %{{y}}<br>"
+                    "<extra></extra>"
+                )
+            fig.add_traces(scatter_traces.data)            
         
         if return_figure:
             return fig
@@ -578,7 +592,7 @@ class JwstInfo(BaseModel):
     Attributes
     ----------
     basename : str
-        The basename of the JWST file, following the naming convention jw\<ppppp\>\<ooo\>\<vvv\>_\<gg\>\<s\>\<aa\>_\<eeeee\>_\<detector\>.
+        The basename of the JWST file, following the naming convention ``jw<ppppp><ooo><vvv>_<gg><s><aa>_<eeeee>_<detector>``.
     filter : str
         The filter of the JWST file, e.g. F090W, F115W.
     detector : str
@@ -643,7 +657,7 @@ class JwstInfo(BaseModel):
                 Here the basename is jw<ppppp><ooo><vvv>_<gg><s><aa>_<eeeee>_<detector>. This will be checked before coadding.",
         ),
     ]
-    """jw\<ppppp\>\<ooo\>\<vvv\>_\<gg\>\<s\>\<aa\>_\<eeeee\>_\<detector\>"""
+    """``jw<ppppp><ooo><vvv>_<gg><s><aa>_<eeeee>_<detector>``"""
 
     @field_validator("basename", mode="before")
     @classmethod
@@ -831,7 +845,7 @@ class JwstInfo(BaseModel):
         return self
     
     def is_same_pointing(self, 
-                         other: Self,
+                         other: Self | FootPrint,
                          stage_with_wcs: str = '2b',
                          overlap_fraction: float = 0.6,
                          same_instrument: bool = True,
@@ -841,32 +855,36 @@ class JwstInfo(BaseModel):
         
         Parameters
         ----------
-        other : JwstInfo
-            The other JwstInfo instance to compare with.
+        other : JwstInfo | FootPrint
+            The other JwstInfo instance to compare with, or a FootPrint instance.
         stage_with_wcs : str, optional
             The stage to use for the WCS comparison, by default '2b'.
         overlap_fraction : float, optional
             The minimum overlap fraction required to consider the pointings the same, by default 0.8, maximum is 1.0.
         same_instrument : bool, optional
             If True, also check if the filter, detector, and pupil match between the two JwstInfo instances.
-            If False, only check the overlap of the footprints, by default True.
+            If False, only check the overlap of the footprints, by default True. Only applicable when `other` is a JwstInfo instance.
         
         Returns
         -------
         bool
-            True if the two JwstInfo instances are different dithers of the same pointing, False otherwise.
+            True if the overlapped area is greater than at least `overlap_fraction` of either footprint area
         """
-        
-        if stage_with_wcs not in self.cover_dict or stage_with_wcs not in other.cover_dict:
-            raise ValueError(f"Stage '{stage_with_wcs}' not found in cover_dict.")
-        if self.cover_dict[stage_with_wcs].footprint is None or other.cover_dict[stage_with_wcs].footprint is None:
-            raise ValueError(f"Footprint for stage '{stage_with_wcs}' is not available.")
+        if isinstance(other, FootPrint):
+            other_fp = other
+        else:
+            if stage_with_wcs not in self.cover_dict or stage_with_wcs not in other.cover_dict:
+                raise ValueError(f"Stage '{stage_with_wcs}' not found in cover_dict.")
+            if self.cover_dict[stage_with_wcs].footprint is None or other.cover_dict[stage_with_wcs].footprint is None:
+                raise ValueError(f"Footprint for stage '{stage_with_wcs}' is not available.")
+            other_fp = other[stage_with_wcs].footprint
         self_fp = self[stage_with_wcs].footprint
-        other_fp = other[stage_with_wcs].footprint
         overlap_area = self_fp.polygon.intersection(other_fp.polygon).area
         self_area = self_fp.polygon.area
         other_area = other_fp.polygon.area
         if overlap_area / self_area >= overlap_fraction or overlap_area / other_area >= overlap_fraction:
+            if isinstance(other, FootPrint):
+                return True
             # If same_instrument is True, check if the filter, detector, and pupil match
             if same_instrument:
                 return (
@@ -879,8 +897,138 @@ class JwstInfo(BaseModel):
                 return True
         else:
             return False
-        
+
+    def read_catalog(
+        self,
+        catalog: DataFrame,
+        ra_key: str = 'ra',
+        dec_key: str = 'dec',
+        id_key: str = 'id',
+        stage_with_wcs: str = '2b'
+    ):
+        return self[stage_with_wcs].read_catalog(
+            catalog=catalog,
+            ra_key=ra_key,
+            dec_key=dec_key,
+            id_key=id_key
+        )
     
+    def extract(
+        self,
+        ra: float,
+        dec: float,
+        stage_with_wcs: str = '2b',
+        aperture_size: int = 40,
+        wave_end_short: float = 3.8,
+        wave_end_long: float = 5.0
+    ) -> dict[str, np.ndarray]:
+        """
+        Extract the 2D spectrum for a source at the given RA and Dec from a grism observation.
+        
+        Parameters
+        ----------
+        ra : float
+            Right Ascension of the source in degrees.
+        dec : float
+            Declination of the source in degrees.
+        stage_with_wcs : str, optional
+            The stage to use for the WCS, by default '2b'.
+        aperture_size : int, optional
+            The size of the aperture in pixels, by default 40.
+        wave_end_short : float, optional
+            The short wavelength end in microns, by default 3.8.
+        wave_end_long : float, optional
+            The long wavelength end in microns, by default 5.0.
+        
+        Returns
+        -------
+        dict[str, np.ndarray]
+            A dictionary containing:
+            - 'wavelength': 1D array of wavelengths in microns.
+            - 'spectrum_2d': 2D array of the extracted spectrum.
+            - 'error_2d': 2D array of the errors associated with the extracted spectrum.
+            - 'world_short': [RA, Dec] of the point at the short wavelength end.
+            - 'world_long': [RA, Dec] of the point at the long wavelength end.
+        """
+        
+        wcs = self[stage_with_wcs].wcs
+        data = self[stage_with_wcs].data
+        err = self[stage_with_wcs].err
+        
+        if self.pupil == 'GRISMR':
+            world_to_grism = wcs.get_transform('world', 'grism_detector') # get the transform from world coordinates (ra, dec, wavelength, order) to grism detector coordinates (x_trace, y_trace, x_source, y_source, order)
+            grism_to_detector = wcs.get_transform('grism_detector', 'detector') # get the transform from grism detector coordinates to detector coordinates (x_source, y_source, wavelength, order)
+            detector_to_grism = wcs.get_transform('detector', 'grism_detector') # get the transform from detector coordinates to grism detector coordinates
+            detector_to_world = wcs.get_transform('detector', 'world') # get the transform from detector coordinates to world coordinates
+            
+            x_s, y_s, x_source, y_source, _ = world_to_grism(
+                ra, dec, wave_end_short, 1
+            )
+            x_l, y_l, x_source, y_source, _ = world_to_grism(
+                ra, dec, wave_end_long, 1
+            )
+            ra_s, dec_s, _, _ = detector_to_world(
+                x_s, y_s, wave_end_short, 1
+            )
+            ra_l, dec_l, _, _ = detector_to_world(
+                x_l, y_l, wave_end_long, 1
+            )
+            Height, Width = data.shape
+            
+            covered = (
+                (0<=x_s<Width and 0<=y_s<Height) or
+                (0<=x_l<Width and 0<=y_l<Height)
+            )
+            if not covered:
+                return {
+                    'wavelength': np.array([]),
+                    'spectrum_2d': np.array([[]]),
+                    'error_2d': np.array([[]]),
+                    'world_short': np.array([ra_s, dec_s]),
+                    'world_long': np.array([ra_l, dec_l]),
+                }
+            
+            clamp_start = max(0, int(np.floor(min(x_s, x_l))))
+            clamp_end = min(Width-1, int(np.ceil(max(x_s, x_l))))
+            x_pixels = np.arange(clamp_start, clamp_end+1, 1)
+            
+            # Pixel coordinates in grism detector frame -> wavelengths
+            _, _, arr_wave, _ = grism_to_detector(
+                x_pixels, y_source, x_source, y_source, 1
+            ) # here the second argument y_source is not used, just a placeholder
+            
+            # Wavelengths -> (x_trace, y_trace) in grism detector frame
+            x_trace, y_trace, _, _, _ = detector_to_grism(
+                x_source, y_source, arr_wave, 1
+            )
+            spec_ny = aperture_size
+            spec_nx = len(x_pixels)
+            
+            spec_2d = np.full((spec_ny, spec_nx), np.nan)
+            err_2d = np.full((spec_ny, spec_nx), np.nan)
+            
+            # Extract the spectrum
+            for i, (xt, yt) in enumerate(zip(x_trace, y_trace)):
+                x_col = int(np.round(xt))
+                y0 = int(np.round(yt)) - spec_ny // 2
+                y1 = y0 + spec_ny
+                trim_start = max(0, -y0)
+                trim_end = max(0, y1 - Height)
+                y0 = max(0, y0)
+                y1 = min(Height, y1)
+                spec_2d[trim_start:spec_ny - trim_end, i] = data[y0:y1, x_col]
+                err_2d[trim_start:spec_ny - trim_end, i] = err[y0:y1, x_col]
+            
+            
+            order_idx = np.argsort(arr_wave)
+            return {
+                'wavelength': arr_wave[order_idx],
+                'spectrum_2d': spec_2d[:, order_idx],
+                'error_2d': err_2d[:, order_idx],
+                'world_short': np.array([ra_s, dec_s]),
+                'world_long': np.array([ra_l, dec_l]),
+            }
+            
     def plotly_imshow(self,
                         stages: list[str] | None = None,
                         stage_types: list[Literal['data', 'mask']] | None = None,

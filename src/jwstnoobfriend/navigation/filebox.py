@@ -1,6 +1,7 @@
-from typing import Annotated, Any, Literal, Self, Callable
+from typing import Annotated, Any, Literal, Self, Callable, Literal
 import re
 import os
+from collections import Counter
 import asyncer
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
@@ -18,10 +19,12 @@ from shapely.strtree import STRtree
 import networkx as nx
 
 from jwstnoobfriend.navigation.jwstinfo import JwstInfo, JwstCover
-from jwstnoobfriend.navigation.footprint import FootPrint
+from jwstnoobfriend.navigation.footprint import FootPrint, CompoundFootPrint
 from jwstnoobfriend.utils.log import getLogger
 from jwstnoobfriend.utils.environment import load_environment
 from jwstnoobfriend.utils.display import track, console, plotly_sky_figure
+from jwstnoobfriend.utils.extraction import resample_and_combine_spectra_2d, reproject_by_coordinate
+from jwstnoobfriend.utils.calculate import sort_pointings
 
 logger = getLogger(__name__)
 
@@ -602,12 +605,12 @@ class FileBox(BaseModel):
                                      for info in self.info_list 
                                      if jw_index in info.basename})
         
-    def complete_example(self, 
-                         target: JwstInfo | None = None,
-                         stage_with_wcs: str = '2b',
-                         overlap_percent: float = 0.6,
-                         same_instrument: bool = False,
-                         ) -> Self:
+    def search(self, 
+            target: JwstInfo | FootPrint | None = None,
+            stage_with_wcs: str = '2b',
+            overlap_fraction: float = 0.6,
+            same_instrument: bool = False,
+            ) -> Self:
         """
         Returns a complete example FileBox containing JwstInfo objects that match the target's pointing.
         If target is None, it will randomly select a JwstInfo from the FileBox.
@@ -615,13 +618,13 @@ class FileBox(BaseModel):
         
         Parameters
         ----------
-        target : JwstInfo | None, optional
-            The target JwstInfo object to match. If None, a random JwstInfo will be selected.
+        target : JwstInfo | FootPrint | None, optional
+            The target JwstInfo or FootPrint object to match. If None, a random JwstInfo will be selected.
         stage_with_wcs : str, optional
             The stage of the JwstCover to use for the pointing information. Default is '2b'.
             This stage should have a WCS object assigned. See also JwstInfo.is_same_pointing method.
-        overlap_percent : float, optional
-            The percentage of overlap required to consider two pointings as the same. Default is 0.6.
+        overlap_fraction : float, optional
+            The fraction of overlap required to consider two pointings as the same. Default is 0.6.
             Maximum is 1.0. See also JwstInfo.is_same_pointing method.
         same_instrument : bool, optional
             If True, the method will only return JwstInfo objects that have the same instrument attributes (pupil, filter, detector) as the target.
@@ -652,7 +655,7 @@ class FileBox(BaseModel):
             target = random.choice(self.info_list)
         matched_infos = []
         for info in self.info_list:
-            if info.is_same_pointing(target, stage_with_wcs=stage_with_wcs, overlap_percent=overlap_percent, same_instrument=same_instrument):
+            if info.is_same_pointing(target, stage_with_wcs=stage_with_wcs, overlap_fraction=overlap_fraction, same_instrument=same_instrument):
                 matched_infos.append(info)
         if not matched_infos:
             raise ValueError(f"Using an external target JwstInfo will lead to undefined behavior, no footprints match the target. Please check whether the target is included in the FileBox or the overlap_percent is too high.")
@@ -722,8 +725,176 @@ class FileBox(BaseModel):
         grouped_fileboxes = []
         for component in components:
             grouped_fileboxes.append(self[component])
+        ## Sort the grouped_fileboxes by the ra and dec of the CompoundFootPrint center, first by ra, then by dec
+        grouped_center = []
+        for fb in grouped_fileboxes:
+            cfp = CompoundFootPrint(footprints=fb.footprints(stage=stage_with_wcs).values())
+            center_ra, center_dec = cfp.center
+            grouped_center.append((center_ra, center_dec))
+        sorted_indices = sort_pointings(pointings=grouped_center)
+        grouped_fileboxes = [grouped_fileboxes[i] for i in sorted_indices]
         return grouped_fileboxes
- 
+    
+    def extract(
+        self,
+        ra: float,
+        dec: float,
+        stage_with_wcs: str = '2b',
+        aperture_size: float = 40,
+        wave_end_short: float = 3.8,
+        wave_end_long: float = 5.0,
+        extract_mode: Literal['CLEAR', 'GRISMR', 'GRISMC'] = 'GRISMR',
+    )-> dict[str, dict[str, np.ndarray]]:
+
+        sub_box = self.select(
+            condition={'pupil': [extract_mode]}
+        )
+        if len(sub_box) == 0:
+            raise ValueError(f"No files with pupil '{extract_mode}' found in the FileBox for extraction.")
+        
+         ## Find the closest footprint center to the given RA and Dec
+         ## Compute the distance from each footprint center to the given RA and Dec
+        fp_centers = np.array([info[stage_with_wcs].footprint.center for info in sub_box.info_list])
+        distance_to_center = np.sum((fp_centers - [ra, dec]) ** 2, axis=1)
+        ordered_indices = np.argsort(distance_to_center)
+        closest_info: JwstInfo = sub_box.info_list[int(ordered_indices[0])]
+        extracted_data = closest_info.extract(
+            ra=ra,
+            dec=dec,
+            stage_with_wcs=stage_with_wcs,
+            aperture_size=aperture_size,
+            wave_end_short=wave_end_short,
+            wave_end_long=wave_end_long,
+        )
+        if extract_mode == "GRISMR":
+            world_short = extracted_data['world_short']
+            world_long = extracted_data['world_long']
+            info_cover_list: list[JwstInfo] = [
+                info for info in sub_box.info_list
+                if np.any(info[stage_with_wcs].footprint.contains(
+                    points=[world_short, world_long]
+                ))
+            ]
+            
+            result = {}
+            for info in info_cover_list:
+                result[info.basename] = info.extract(
+                    ra=ra,
+                    dec=dec,
+                    stage_with_wcs=stage_with_wcs,
+                    aperture_size=aperture_size,
+                    wave_end_short=wave_end_short,
+                    wave_end_long=wave_end_long,
+                )
+            return result
+
+    @classmethod
+    def resample_and_combine(
+        cls,
+        extracted_dict: dict[str, dict[str, np.ndarray]],
+        resample_grid: np.ndarray | None = None,
+        grid_strategy: Literal['median', 'mean'] = 'median',
+        combine_method: Literal['sum', 'mean', 'median'] = 'mean',
+    ) -> dict[str, np.ndarray]:
+        """
+        Resamples and combines extracted spectra from multiple JwstInfo objects onto a common wavelength grid.
+        
+        Parameters
+        ----------
+        extracted_dict : dict[str, dict[str, np.ndarray]]
+            The return value from the `extract` method, containing extracted spectra from multiple JwstInfo objects. Or 
+            custom dictionary with the same structure.
+        resample_grid : np.ndarray | None, optional
+            The wavelength grid to resample the spectra onto. If None, a common grid will be created based on the input spectra.
+        grid_strategy : Literal['median', 'mean'], optional
+            The strategy to use for creating the common wavelength grid if resample_grid is None. Default is 'median'.
+        combine_method : Literal['sum', 'mean', 'median'], optional
+            The method to use for combining the resampled spectra. Default is 'median'.
+            This determines how the flux values are combined across different spectra.
+            
+        Returns
+        -------
+        dict[str, np.ndarray]
+            A dictionary containing the combined wavelength grid and flux values. The keys are 'wavelength', 'spectrum_2d', and 'errors_2d'.
+        """
+        spec_2d_list = [result['spectrum_2d'] for result in extracted_dict.values()]
+        err_2d_list = [result['error_2d'] for result in extracted_dict.values()]
+        wave_list = [result['wavelength'] for result in extracted_dict.values()]
+
+        return resample_and_combine_spectra_2d(
+            spec_2d_list=spec_2d_list,
+            err_2d_list=err_2d_list,
+            wavelengths_list=wave_list,
+            resample_grid=resample_grid,
+            grid_strategy=grid_strategy,
+            combine_method=combine_method,
+        )
+        
+    def counterpart(
+        self,
+        grism_info: JwstInfo,
+        stage_grism: str = '2b',
+        stage_image: str = '3a',
+        shape_out: tuple[int, int] | None = None,
+        center: tuple[int, int] | None = None,
+        order: int = 3,
+    ):
+        clear_subbox = self.select(condition={'pupil': ['CLEAR']})
+        if len(clear_subbox) == 0:
+            raise ValueError("No CLEAR pupil files found in the FileBox for counterpart search.")
+        grism_wcs = grism_info[stage_grism].wcs
+        w2d = grism_wcs.fix_inputs({"x": 0, "y": 0, "order": 1})
+        if shape_out is None:
+            shape_grism = grism_info[stage_grism].data.shape
+            shape_out = (shape_grism[0] * 2, shape_grism[1] * 2)
+        if center is None:
+            center = (shape_out[0] // 2, shape_out[1] // 2)
+        ny, nx = shape_out
+        y_indices, x_indices = np.mgrid[0:ny, 0:nx]
+        x0 = x_indices - (nx / 2) + center[0]
+        y0 = y_indices - (ny / 2) + center[1]
+        ra_grid, dec_grid, *_ = w2d(x0, y0, with_bounding_box=False)
+        fp_out = FootPrint(
+            vertices=[
+                (ra_grid[0, 0], dec_grid[0, 0]),
+                (ra_grid[0, -1], dec_grid[0, -1]),
+                (ra_grid[-1, -1], dec_grid[-1, -1]),
+                (ra_grid[-1, 0], dec_grid[-1, 0]),
+            ],
+            vertex_marker=[
+                (x0[0, 0], y0[0, 0]),
+                (x0[0, -1], y0[0, -1]),
+                (x0[-1, -1], y0[-1, -1]),
+                (x0[-1, 0], y0[-1, 0]),
+            ]
+        )
+        overlap_box = clear_subbox.search(
+            target=fp_out,
+            stage_with_wcs=stage_image,
+            overlap_fraction=0.01,
+        )
+        
+        
+        counterpart_filters = Counter(overlap_box.filters.values())
+        result = {
+            filter_name: np.full((count, *shape_out), np.nan) for filter_name, count in counterpart_filters.items()
+        }
+        filter_indices = {filter_name: 0 for filter_name in counterpart_filters.keys()}
+        for info in overlap_box.info_list:
+            clear_data = info[stage_image].data
+            clear_wcs = info[stage_image].wcs
+            filter_name = info.filter
+            filter_index = filter_indices[filter_name]
+            result[filter_name][filter_index] = reproject_by_coordinate(
+                ra_grid,
+                dec_grid,
+                clear_wcs,
+                clear_data,
+                order=order,
+            )
+            filter_indices[filter_name] += 1
+        return result 
+         
     ## Methods for visualization
     @classmethod
     def sky_figure(cls,

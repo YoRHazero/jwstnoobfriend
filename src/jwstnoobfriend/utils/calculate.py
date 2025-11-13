@@ -3,6 +3,7 @@ import numpy as np
 from scipy import stats
 from scipy.interpolate import SmoothBivariateSpline
 from typing import Literal
+import networkx as nx
 
 __all__ = ['mad_clipped_stats', 'gaussian_smoothing', 'segmentation_mask']
 
@@ -264,3 +265,54 @@ def background_model(
     background_model = spline.ev(x_full.ravel(), y_full.ravel()).reshape(height, width)
 
     return background_model
+
+def sort_pointings(
+    pointings: list[tuple[float, float]],
+    eps_deg: float = 0.1,
+)-> np.ndarray:
+    """
+    Sort pointings by their position on the sky.
+    
+    Parameters
+    ----------
+    pointings : list[list[float]]
+        A list of pointings, each represented as [ra, dec] in degrees.
+    eps_deg : float, optional
+        The maximum separation in degrees to consider pointings as connected. Default is 0.1 degrees.
+        
+    Returns
+    -------
+    np.ndarray
+        An array of indices representing the sorted order of the pointings.
+    """
+    if not pointings:
+        return []
+    pts = np.asarray(pointings)
+    ra, dec = pts[:, 0], pts[:, 1]
+    n = len(pts)
+    
+    ra_rad, dec_rad = np.deg2rad(ra), np.deg2rad(dec)
+    sin_dec, cos_dec = np.sin(dec_rad), np.cos(dec_rad)
+    cos_d = sin_dec[:, None] * sin_dec[None, :] + cos_dec[:, None] * cos_dec[None, :] * np.cos(ra_rad[:, None] - ra_rad[None, :])
+    sep_deg = np.rad2deg(np.arccos(np.clip(cos_d, -1.0, 1.0)))
+    
+    G = nx.Graph()
+    G.add_nodes_from(range(n))
+    ii, jj = np.where((sep_deg > 0) & (sep_deg < eps_deg))
+    G.add_edges_from(zip(ii.tolist(), jj.tolist()))
+    
+    components = list(nx.connected_components(G))
+    components.sort(key=lambda S: np.max(dec[list(S)]), reverse=True)
+    
+    def sort_within_group(idx_list: list[int]) -> list[int]:
+        idx = np.array(sorted(idx_list))
+        ra_sub = ra[idx]
+        ra_ref = np.rad2deg(np.arctan2(np.mean(np.sin(np.deg2rad(ra_sub))), np.mean(np.cos(np.deg2rad(ra_sub)))))
+        ra_wrapped = (ra_sub - ra_ref + 540) % 360 - 180
+        order = np.lexsort((ra_wrapped, -dec[idx]))
+        return idx[order].tolist()
+    
+    order_all = []
+    for comp in components:
+        order_all.extend(sort_within_group(list(comp)))
+    return np.array(order_all, dtype=int)
