@@ -12,8 +12,8 @@ from jwstnoobfriend.utils.display import plotly_figure_and_mask
 from jwstnoobfriend.navigation.footprint import FootPrint
 from jwstnoobfriend.navigation._cache import (
     _open_and_cache_datamodel,
-    _open_and_cache_wcs,
 )
+from jwstnoobfriend.utils.io import direct_read_data, direct_read_err, direct_read_dq, direct_read_gwcs
 from jwstnoobfriend.utils.calculate import mad_clipped_stats, gaussian_smoothing, segmentation_mask, background_model
 
 logger = getLogger(__name__)
@@ -89,7 +89,7 @@ class JwstCover(BaseModel):
     @property
     def wcs(self) -> WCS:
         """Get the WCS object for this file."""
-        wcs = _open_and_cache_wcs(self.filepath)
+        wcs = direct_read_gwcs(self.filepath)
         return wcs
 
     @property
@@ -101,20 +101,20 @@ class JwstCover(BaseModel):
     @property
     def data(self) -> Any:
         """Get the data for this file."""
-        datamodel = self.datamodel
-        return datamodel.data
+        data = direct_read_data(self.filepath)
+        return data
 
     @property
     def err(self) -> Any:
         """Get the error data for this file."""
-        datamodel = self.datamodel
-        return datamodel.err
+        err = direct_read_err(self.filepath)
+        return err
 
     @property
     def dq(self) -> Any:
         """Get the data quality data for this file."""
-        datamodel = self.datamodel
-        return datamodel.dq
+        dq = direct_read_dq(self.filepath)
+        return dq
     
     def read_catalog(
         self,

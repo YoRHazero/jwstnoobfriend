@@ -835,24 +835,50 @@ class FileBox(BaseModel):
         grism_info: JwstInfo,
         stage_grism: str = '2b',
         stage_image: str = '3a',
-        shape_out: tuple[int, int] | None = None,
-        center: tuple[int, int] | None = None,
+        minus_extension: tuple[int, int] | None = None,
+        plux_extension: tuple[int, int] | None = None,
         order: int = 3,
     ):
+        """
+        Finds and reprojects counterpart imaging data for a given grism observation.
+        
+        Parameters
+        ----------
+        grism_info : JwstInfo
+            The JwstInfo object representing the grism observation.
+        stage_grism : str, optional
+            The stage of the JwstCover for the grism observation. Default is '2b'.
+        stage_image : str, optional
+            The stage of the JwstCover for the imaging observations. Default is '3a'.
+        minus_extension : tuple[int, int] | None, optional
+            The (x, y) or (column, row) extension that the region will be extended on the negative side. If None, default values based on the detector will be used.
+        plux_extension : tuple[int, int] | None, optional
+            The (x, y) or (column, row) extension that the region will be extended on the positive side. If None, default values based on the detector will be used.
+        order : int, optional
+            The order of the spline interpolation used in reprojection. Default is 3.
+            
+        Returns
+        -------
+        dict[str, np.ndarray]
+            A dictionary where keys are filter names and values are arrays of reprojected images for each filter.
+        """
         clear_subbox = self.select(condition={'pupil': ['CLEAR']})
         if len(clear_subbox) == 0:
             raise ValueError("No CLEAR pupil files found in the FileBox for counterpart search.")
         grism_wcs = grism_info[stage_grism].wcs
         w2d = grism_wcs.fix_inputs({"x": 0, "y": 0, "order": 1})
-        if shape_out is None:
-            shape_grism = grism_info[stage_grism].data.shape
-            shape_out = (shape_grism[0] * 2, shape_grism[1] * 2)
-        if center is None:
-            center = (shape_out[0] // 2, shape_out[1] // 2)
-        ny, nx = shape_out
-        y_indices, x_indices = np.mgrid[0:ny, 0:nx]
-        x0 = x_indices - (nx / 2) + center[0]
-        y0 = y_indices - (ny / 2) + center[1]
+        if minus_extension is None:
+            if grism_info.detector[:4] == 'NRCA':
+                minus_extension = (1100, 100)
+                plux_extension = (200, 100)
+            if grism_info.detector[:4] == 'NRCB':
+                minus_extension = (200, 100)
+                plux_extension = (1100, 100)
+                
+         
+        ny, nx = grism_info[stage_grism].data.shape
+        y0, x0 = np.mgrid[0 - minus_extension[1]:ny+plux_extension[1], 0 - minus_extension[0]:nx+plux_extension[0]]
+
         ra_grid, dec_grid, *_ = w2d(x0, y0, with_bounding_box=False)
         fp_out = FootPrint(
             vertices=[
@@ -862,10 +888,10 @@ class FileBox(BaseModel):
                 (ra_grid[-1, 0], dec_grid[-1, 0]),
             ],
             vertex_marker=[
-                (x0[0, 0], y0[0, 0]),
-                (x0[0, -1], y0[0, -1]),
-                (x0[-1, -1], y0[-1, -1]),
-                (x0[-1, 0], y0[-1, 0]),
+                (int(x0[0, 0]), int(y0[0, 0])),
+                (int(x0[0, -1]), int(y0[0, -1])),
+                (int(x0[-1, -1]), int(y0[-1, -1])),
+                (int(x0[-1, 0]), int(y0[-1, 0])),
             ]
         )
         overlap_box = clear_subbox.search(
@@ -877,8 +903,15 @@ class FileBox(BaseModel):
         
         counterpart_filters = Counter(overlap_box.filters.values())
         result = {
-            filter_name: np.full((count, *shape_out), np.nan) for filter_name, count in counterpart_filters.items()
+            filter_name: np.full((count, ny + minus_extension[1] + plux_extension[1], nx + minus_extension[0] + plux_extension[0]), np.nan) 
+            for filter_name, count in counterpart_filters.items()
         }
+        
+        clearbox_filters = list(set(clear_subbox.filters.values()))
+        for filter_name in clearbox_filters:
+            if filter_name not in result:
+                result[filter_name] = np.full((1, ny + minus_extension[1] + plux_extension[1], nx + minus_extension[0] + plux_extension[0]), np.nan)
+
         filter_indices = {filter_name: 0 for filter_name in counterpart_filters.keys()}
         for info in overlap_box.info_list:
             clear_data = info[stage_image].data
@@ -893,7 +926,10 @@ class FileBox(BaseModel):
                 order=order,
             )
             filter_indices[filter_name] += 1
-        return result 
+        return {
+            'result': result,
+            'footprint': fp_out,
+        }
          
     ## Methods for visualization
     @classmethod
