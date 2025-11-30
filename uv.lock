@@ -1414,10 +1414,12 @@ dependencies = [
 dev = [
     { name = "ipykernel" },
     { name = "jupyter" },
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
     { name = "pytest" },
     { name = "ruff" },
+]
+docs = [
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
     { name = "termynal" },
 ]
 
@@ -1450,10 +1452,12 @@ requires-dist = [
 dev = [
     { name = "ipykernel", specifier = ">=6.29.5" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "mkdocs-material", specifier = ">=9.6.14" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.29.1" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "ruff", specifier = ">=0.12.3" },
+]
+docs = [
+    { name = "mkdocs-material", specifier = ">=9.6.14" },
+    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.29.1" },
     { name = "termynal", specifier = ">=0.13.0" },
 ]
 
