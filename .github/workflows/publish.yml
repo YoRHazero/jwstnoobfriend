@@ -1,37 +1,37 @@
-name: docs-ci
+name: publish-ci
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*.*.*"
 
-permissions:
-  contents: write
+  workflow_dispatch:
+
 
 jobs:
-    deploy:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Checkout repository
-          uses: actions/checkout@v4
-        
-        - name: Configure Git
-          run: |
-            git config user.name "github-actions[bot]"
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-        
-        - name: Install uv 
-          uses: astral-sh/setup-uv@v7
+  run:
+    runs-on: ubuntu-latest
 
-        - name: Setup Python
-          uses: actions/setup-python@v6
-          with:
-            python-version-file: "pyproject.toml"
+    permissions:
+      contents: read
+      id-token: write
 
-        - name: Install Dev Dependencies
-          run: uv sync --group docs
+    environment:
+      name: pypi
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Build
+        run: uv build
         
-        - name: Build and Deploy Documentation
-          run: uv run mkdocs gh-deploy --force
-
-      
+      - name: Publish
+        run: uv publish
