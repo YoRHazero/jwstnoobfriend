@@ -1,6 +1,6 @@
 # Welcome to the documentation of NOOB project
 
-**NOOB** (abbreviation for *Not Only Observational Bundle*) project consists of 3 key components.
+**NOOB** (abbreviation for *Not Only Observational Bundle*) project consists of 3 key components. You can find the documentation [here](https://yorhazero.github.io/jwstnoobfriend/).
 
 * **NOOBFRIEND** Stands for *Not Only Observational Bundle For Reduction, Inference, Extraction & Navigation of Data*: a python library built mainly on top of [jwst](https://jwst-pipeline.readthedocs.io/en/latest/), [Pydantic](https://docs.pydantic.dev/latest/), [plotly](https://plotly.com/python/), and etc. It provides several CLI applications to help with data reduction, analysis, management, and visualization. (1) 
 { .annotate }
