@@ -2,8 +2,7 @@
 
 import logging
 
-from noobfriend.core.console import console
-from noobfriend.core.log import setup_logging
+from noobfriend.core import console, setup_logging
 
 logging.getLogger("noobfriend").addHandler(logging.NullHandler())
 

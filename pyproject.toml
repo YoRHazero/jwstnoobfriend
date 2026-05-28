@@ -26,5 +26,6 @@ convention = "numpy"
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.2.0",
     "ruff>=0.15.14",
 ]
