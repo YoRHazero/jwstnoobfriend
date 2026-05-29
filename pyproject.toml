@@ -12,6 +12,7 @@ dependencies = [
     "aiohttp>=3.13.5",
     "astropy>=7.2.0",
     "gwcs>=1.0.3",
+    "noobase>=0.0.4",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
@@ -30,9 +31,13 @@ convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104"]
+# Test methods/functions are self-describing via their names; module- and
+# class-level docstrings are still required.
+"tests/**" = ["D102", "D103"]
 
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
+    "pytest>=9.0.3",
     "ruff>=0.15.14",
 ]
