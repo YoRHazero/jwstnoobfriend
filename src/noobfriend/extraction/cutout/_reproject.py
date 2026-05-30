@@ -84,4 +84,5 @@ def reproject_onto(
         source_world_to_pixel=source_world_to_pixel,
         coarse_step=coarse_step,
     )
-    return reproject_exact(_as_native_float(data), pixel_corners)
+    result = reproject_exact(_as_native_float(data), pixel_corners)
+    return result.image, result.footprint, result.weight
