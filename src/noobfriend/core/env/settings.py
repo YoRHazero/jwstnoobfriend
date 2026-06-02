@@ -12,12 +12,13 @@ The blessed entry point is :func:`get_settings`, which merges the layered
 import logging
 import os
 from pathlib import Path
+from typing import get_args
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from noobfriend.core.env._loader import load_environment
-from noobfriend.core.env.schema import EnvGroup, stage_path_var
+from noobfriend.core.env.schema import EnvField, EnvGroup, stage_path_var
 
 logger = logging.getLogger(__name__)
 
@@ -103,3 +104,39 @@ def get_settings() -> NoobSettings:
     """
     load_environment()
     return NoobSettings()
+
+
+def env_fields() -> list[EnvField]:
+    """Derive the render-friendly view of the configuration from :class:`NoobSettings`.
+
+    Returns one :class:`EnvField` per model field, in declaration order, so the
+    ``env`` CLI's rendering and checking stay in lockstep with the runtime
+    model: adding a field to :class:`NoobSettings` automatically makes it appear
+    in generated ``.env`` files.
+
+    Returns
+    -------
+    list of EnvField
+        The configuration variables, ordered as declared on the model.
+    """
+    fields: list[EnvField] = []
+    for name, info in NoobSettings.model_fields.items():
+        extra = info.json_schema_extra or {}
+        group = (
+            extra.get("group", EnvGroup.setup)
+            if isinstance(extra, dict)
+            else EnvGroup.setup
+        )
+        annotation = info.annotation
+        is_path = annotation is Path or Path in get_args(annotation)
+        default = info.default
+        fields.append(
+            EnvField(
+                name=name.upper(),
+                group=group,
+                comment=info.description or "",
+                default=None if default is None else str(default),
+                is_path=is_path,
+            )
+        )
+    return fields

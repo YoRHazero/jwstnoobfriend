@@ -6,6 +6,7 @@ command group rely on, so the configuration layout is described in exactly one
 place.
 """
 
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -19,6 +20,36 @@ class EnvGroup(str, Enum):
     setup = "Setup"
     storage = "Storage"
     remote = "Remote"
+
+
+@dataclass(frozen=True)
+class EnvField:
+    """A single configuration variable as seen by the ``env`` CLI.
+
+    A flattened, render-friendly view of one :class:`NoobSettings` field,
+    produced by :func:`noobfriend.core.env.env_fields`. Keeping this as plain
+    data (rather than handing the CLI a live pydantic field) lets the renderer
+    and checker stay decoupled from pydantic internals.
+
+    Attributes
+    ----------
+    name : str
+        The environment-variable name, e.g. ``"NOOB_SERVER"``.
+    group : EnvGroup
+        Section the variable is rendered under.
+    comment : str
+        Human-readable description, written as a comment above the variable.
+    default : str or None
+        Default value to pre-fill, or ``None`` when the variable has no default.
+    is_path : bool
+        Whether the value denotes a filesystem path (drives ``env check``).
+    """
+
+    name: str
+    group: EnvGroup
+    comment: str
+    default: str | None
+    is_path: bool
 
 
 def stage_path_var(stage: str) -> str:
