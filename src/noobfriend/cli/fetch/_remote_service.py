@@ -26,7 +26,7 @@ from typing import Literal
 
 from rich.progress import Progress
 
-from noobfriend.cli.fetch.options import (
+from noobfriend.cli.fetch._options import (
     MAST_JWST_BASE_URL,
     MAST_JWST_DOWNLOAD_URL,
 )

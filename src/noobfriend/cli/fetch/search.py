@@ -21,7 +21,7 @@ from noobfriend.cli.fetch._search_service import (
     fetch_products_for_file_sets,
     fetch_proposal_file_sets,
 )
-from noobfriend.cli.fetch.options import (
+from noobfriend.cli.fetch._options import (
     DEFAULT_RETRY_LIMIT,
     product_level_callback,
     proposal_id_callback,
@@ -133,11 +133,3 @@ def cli_search(
         console.print(f"[teal]Opening {output_file} [/teal]...")
         save_products(results, output_file)
         console.print("[green] Saved [/green]")
-
-
-def register_search_command(app: typer.Typer) -> None:
-    """Register :func:`cli_search` on ``app`` as the ``search`` command."""
-    app.command(
-        name="search",
-        help="Search MAST for the products of the given proposal ID.",
-    )(cli_search)

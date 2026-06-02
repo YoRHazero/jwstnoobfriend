@@ -7,7 +7,7 @@ from typing import Literal
 
 from rich.progress import Progress
 
-from noobfriend.cli.fetch.options import MAST_JWST_DOWNLOAD_URL
+from noobfriend.cli.fetch._options import MAST_JWST_DOWNLOAD_URL
 from noobfriend.core.io import HTTPSession
 
 logger = logging.getLogger(__name__)

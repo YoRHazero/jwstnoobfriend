@@ -2,9 +2,9 @@
 
 import typer
 
-from noobfriend.cli.fetch.download import register_download_command
-from noobfriend.cli.fetch.manifest import register_manifest_commands
-from noobfriend.cli.fetch.search import register_search_command
+from noobfriend.cli.fetch.download import cli_download
+from noobfriend.cli.fetch.manifest import manifest_app
+from noobfriend.cli.fetch.search import cli_search
 
 fetch_app = typer.Typer(
     rich_markup_mode="rich",
@@ -12,6 +12,6 @@ fetch_app = typer.Typer(
     help="Search, download, and inspect JWST data products from MAST.",
 )
 
-register_search_command(fetch_app)
-register_download_command(fetch_app)
-register_manifest_commands(fetch_app)
+fetch_app.command("search")(cli_search)
+fetch_app.command("download")(cli_download)
+fetch_app.add_typer(manifest_app, name="manifest")

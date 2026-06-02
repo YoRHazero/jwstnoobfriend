@@ -12,7 +12,7 @@ from noobfriend.cli.fetch._manifest_service import (
     summarize_manifest_column,
     validate_columns,
 )
-from noobfriend.cli.fetch.options import (
+from noobfriend.cli.fetch._options import (
     product_level_callback,
     proposal_id_callback,
 )

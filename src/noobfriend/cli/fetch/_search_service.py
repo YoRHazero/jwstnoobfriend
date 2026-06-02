@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Iterable
 
-from noobfriend.cli.fetch.options import (
+from noobfriend.cli.fetch._options import (
     DEFAULT_RETRY_LIMIT,
     MAST_JWST_PRODUCT_URL,
     MAST_JWST_SEARCH_URL,

@@ -23,7 +23,7 @@ from noobfriend.cli.fetch._remote_service import (
     remote_download,
     resolve_target,
 )
-from noobfriend.cli.fetch.options import DownloadMode
+from noobfriend.cli.fetch._options import DownloadMode
 from noobfriend.core.console import console
 
 
@@ -188,11 +188,3 @@ def _choose_remote_direct(dest: str, mode: DownloadMode) -> bool:
             "[yellow]Remote cannot reach MAST directly; falling back to relay mode.[/yellow]"
         )
     return direct
-
-
-def register_download_command(app: typer.Typer) -> None:
-    """Register :func:`cli_download` on ``app`` as the ``download`` command."""
-    app.command(
-        name="download",
-        help="Download the JWST data of given products list, locally or to a remote host.",
-    )(cli_download)

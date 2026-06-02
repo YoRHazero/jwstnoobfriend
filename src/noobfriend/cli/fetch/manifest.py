@@ -27,10 +27,7 @@ manifest_app = typer.Typer(
 )
 
 
-@manifest_app.command(
-    name="schema",
-    help="Show which columns exist in a products manifest and how many terms contain each column.",
-)
+@manifest_app.command(name="schema")
 def cli_manifest_schema(
     products_file: Annotated[
         Path,
@@ -43,7 +40,7 @@ def cli_manifest_schema(
         ),
     ],
 ) -> None:
-    """Print the column schema of a products manifest."""
+    """Show which columns exist in a manifest and how many terms contain each."""
     products = load_manifest_terms(products_file)
     if not products:
         console.print("[yellow]Manifest is empty.[/yellow]")
@@ -55,10 +52,7 @@ def cli_manifest_schema(
     )
 
 
-@manifest_app.command(
-    name="summary",
-    help="Summarize distinct values and term counts for one or more manifest columns.",
-)
+@manifest_app.command(name="summary")
 def cli_manifest_summary(
     products_file: Annotated[
         Path,
@@ -78,7 +72,7 @@ def cli_manifest_summary(
         ),
     ],
 ) -> None:
-    """Print value summaries for the requested manifest columns."""
+    """Summarize distinct values and term counts for one or more manifest columns."""
     products = load_manifest_terms(products_file)
     if not products:
         console.print("[yellow]Manifest is empty.[/yellow]")
@@ -95,10 +89,7 @@ def cli_manifest_summary(
         )
 
 
-@manifest_app.command(
-    name="filter",
-    help="Filter a manifest by column values and write the matching terms to a JSON file.",
-)
+@manifest_app.command(name="filter")
 def cli_manifest_filter(
     products_file: Annotated[
         Path,
@@ -138,7 +129,7 @@ def cli_manifest_filter(
         ),
     ] = None,
 ) -> None:
-    """Filter a manifest by column values and write the result to disk."""
+    """Filter a manifest by column values and write the matching terms to a JSON file."""
     if not values:
         raise typer.BadParameter("At least one --value must be provided.")
 
@@ -155,8 +146,3 @@ def cli_manifest_filter(
 
     if not filtered_products:
         console.print("[yellow]No terms matched the requested column values.[/yellow]")
-
-
-def register_manifest_commands(app: typer.Typer) -> None:
-    """Mount the manifest sub-application on ``app`` under the ``manifest`` name."""
-    app.add_typer(manifest_app, name="manifest")
