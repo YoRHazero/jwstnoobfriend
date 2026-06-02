@@ -16,6 +16,7 @@ dependencies = [
     "jupyter-bokeh>=4.0.5",
     "noobase>=0.0.5",
     "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.1",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
     "stdatamodels>=5.0.2",

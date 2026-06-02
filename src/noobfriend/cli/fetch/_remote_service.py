@@ -26,12 +26,11 @@ from typing import Literal
 
 from rich.progress import Progress
 
-from noobfriend.cli.fetch._io import env_stage_path
 from noobfriend.cli.fetch.options import (
     MAST_JWST_BASE_URL,
     MAST_JWST_DOWNLOAD_URL,
 )
-from noobfriend.core.env import load_environment
+from noobfriend.core.env import get_settings
 from noobfriend.core.io import HTTPSession
 
 logger = logging.getLogger(__name__)
@@ -109,9 +108,9 @@ def resolve_target(output: str | None, current_folder: bool) -> DownloadTarget:
     """Resolve the download destination from arguments, then the environment.
 
     Priority: ``current_folder`` > ``output`` > environment. The environment
-    layer reads ``NOOB_SERVER`` (the destination host; unset / ``localhost`` /
-    ``local`` mean local) and reuses the existing ``START_STAGE`` /
-    ``STAGE_<STAGE>_PATH`` mechanism for the path on that host.
+    layer reads :class:`~noobfriend.core.env.NoobSettings`: ``NOOB_SERVER`` (the
+    destination host; unset / ``localhost`` / ``local`` mean local) and the
+    ``START_STAGE`` / ``STAGE_<STAGE>_PATH`` mechanism for the path on that host.
 
     Parameters
     ----------
@@ -131,9 +130,9 @@ def resolve_target(output: str | None, current_folder: bool) -> DownloadTarget:
     if output is not None:
         return parse_destination(output)
 
-    stage_path = env_stage_path()  # also loads the layered .env files
-    load_environment()
-    server = (os.getenv("NOOB_SERVER") or "").strip()
+    settings = get_settings()  # also loads the layered .env files
+    stage_path = settings.start_stage_path()
+    server = settings.noob_server.strip()
     if server.lower() in _LOCAL_SENTINELS:
         return DownloadTarget(
             ssh_dest=None, path=stage_path or str(Path.cwd() / "downloads")
