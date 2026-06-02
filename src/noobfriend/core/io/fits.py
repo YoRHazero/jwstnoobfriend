@@ -8,6 +8,15 @@ handles) and Python variables already serve as a perfectly fine per-call
 cache. If a specific call site needs memoisation, wrap it locally with
 :func:`functools.cache`.
 
+Every reader accepts either a local :class:`~pathlib.Path` or an already-open
+binary file object, so a file whose bytes were fetched from a remote host can
+be read straight from memory without first writing it to disk::
+
+    read_data(BytesIO(fetch_bytes("host:/path/x_cal.fits")))
+
+Fetching the bytes (:func:`noobfriend.core.io.fetch_bytes`) and parsing them
+stay separate concerns: the readers here never touch the network.
+
 The readers raise the underlying library exceptions directly
 (:exc:`FileNotFoundError`, :exc:`KeyError`, :exc:`OSError` ...) so the caller
 can react to specific failures instead of seeing every problem flattened into
@@ -17,7 +26,7 @@ a generic ``ValueError``.
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import numpy as np
 from asdf.exceptions import AsdfPackageVersionWarning
@@ -46,13 +55,14 @@ def _silence_asdf_version_warning() -> Any:
         yield
 
 
-def read_meta(path: Path) -> AttrView:
+def read_meta(source: Path | BinaryIO) -> AttrView:
     """Read the ASDF-in-FITS metadata tree as an :class:`AttrView`.
 
     Parameters
     ----------
-    path : Path
-        Path to a JWST FITS file that embeds an ASDF metadata tree.
+    source : Path or file-like
+        Path to a local JWST FITS file, or an open binary file object holding
+        its content, that embeds an ASDF metadata tree.
 
     Returns
     -------
@@ -64,21 +74,22 @@ def read_meta(path: Path) -> AttrView:
     Raises
     ------
     FileNotFoundError
-        ``path`` does not exist.
+        ``source`` is a path that does not exist.
     KeyError
         The file does not contain a ``meta`` ASDF subtree.
     """
-    with _silence_asdf_version_warning(), asdf_in_fits.open(path) as af:
+    with _silence_asdf_version_warning(), asdf_in_fits.open(source) as af:
         return AttrView(af.tree["meta"])
 
 
-def read_gwcs(path: Path) -> WCS:
+def read_gwcs(source: Path | BinaryIO) -> WCS:
     """Read the GWCS object stored in the ASDF metadata tree.
 
     Parameters
     ----------
-    path : Path
-        Path to a JWST FITS file that embeds a GWCS in its ASDF tree.
+    source : Path or file-like
+        Path to a local JWST FITS file, or an open binary file object holding
+        its content, that embeds a GWCS in its ASDF tree.
 
     Returns
     -------
@@ -88,32 +99,32 @@ def read_gwcs(path: Path) -> WCS:
     Raises
     ------
     FileNotFoundError
-        ``path`` does not exist.
+        ``source`` is a path that does not exist.
     KeyError
         The file does not contain a ``meta.wcs`` entry (typical for products
         before the assign_wcs step has been run).
     """
-    with _silence_asdf_version_warning(), asdf_in_fits.open(path) as af:
+    with _silence_asdf_version_warning(), asdf_in_fits.open(source) as af:
         return af.tree["meta"]["wcs"]
 
 
-def _read_image_extension(path: Path, ext: str) -> np.ndarray:
-    """Open ``path``, copy the data of HDU ``ext`` into memory, and return it.
+def _read_image_extension(source: Path | BinaryIO, ext: str) -> np.ndarray:
+    """Open ``source``, copy the data of HDU ``ext`` into memory, and return it.
 
     The ``.copy()`` detaches the array from astropy's memory map so the file
     can be closed safely before the caller uses the result.
     """
-    with fits.open(path) as hdul:
+    with fits.open(source) as hdul:
         return hdul[ext].data.copy()
 
 
-def read_data(path: Path) -> np.ndarray:
+def read_data(source: Path | BinaryIO) -> np.ndarray:
     """Read the ``SCI`` extension of a JWST FITS file.
 
     Parameters
     ----------
-    path : Path
-        Path to the FITS file.
+    source : Path or file-like
+        Path to a local FITS file, or an open binary file object holding it.
 
     Returns
     -------
@@ -123,20 +134,20 @@ def read_data(path: Path) -> np.ndarray:
     Raises
     ------
     FileNotFoundError
-        ``path`` does not exist.
+        ``source`` is a path that does not exist.
     KeyError
         The file has no ``SCI`` extension.
     """
-    return _read_image_extension(path, "SCI")
+    return _read_image_extension(source, "SCI")
 
 
-def read_err(path: Path) -> np.ndarray:
+def read_err(source: Path | BinaryIO) -> np.ndarray:
     """Read the ``ERR`` extension of a JWST FITS file.
 
     Parameters
     ----------
-    path : Path
-        Path to the FITS file.
+    source : Path or file-like
+        Path to a local FITS file, or an open binary file object holding it.
 
     Returns
     -------
@@ -146,20 +157,20 @@ def read_err(path: Path) -> np.ndarray:
     Raises
     ------
     FileNotFoundError
-        ``path`` does not exist.
+        ``source`` is a path that does not exist.
     KeyError
         The file has no ``ERR`` extension.
     """
-    return _read_image_extension(path, "ERR")
+    return _read_image_extension(source, "ERR")
 
 
-def read_dq(path: Path) -> np.ndarray:
+def read_dq(source: Path | BinaryIO) -> np.ndarray:
     """Read the ``DQ`` (data-quality) extension of a JWST FITS file.
 
     Parameters
     ----------
-    path : Path
-        Path to the FITS file.
+    source : Path or file-like
+        Path to a local FITS file, or an open binary file object holding it.
 
     Returns
     -------
@@ -169,8 +180,8 @@ def read_dq(path: Path) -> np.ndarray:
     Raises
     ------
     FileNotFoundError
-        ``path`` does not exist.
+        ``source`` is a path that does not exist.
     KeyError
         The file has no ``DQ`` extension.
     """
-    return _read_image_extension(path, "DQ")
+    return _read_image_extension(source, "DQ")
