@@ -9,7 +9,8 @@ from noobfriend.core.display.plot._footprint import (
     reference_center,
 )
 from noobfriend.core.display.plot._image import _grid_axis
-from noobfriend.core.display.plot._norm import percentile_limits
+from noobfriend.core.display.plot._norm import percentile_limits, resolve_limits
+from noobfriend.core.display.plot._stack import _broadcast_limits, _union_bounds
 
 
 class TestPercentileLimits:
@@ -34,6 +35,75 @@ class TestPercentileLimits:
     def test_invalid_percentiles_raise(self) -> None:
         with pytest.raises(ValueError, match="0 <= pmin < pmax <= 100"):
             percentile_limits(np.arange(10.0), 99.0, 1.0)
+
+
+class TestResolveLimits:
+    """Explicit ``vmin``/``vmax`` taking precedence over percentile fallback."""
+
+    def test_both_explicit_skip_percentiles(self) -> None:
+        # Data is all-NaN, so any percentile use would fall back to (0, 1);
+        # getting (-2, 5) proves the percentile path was not taken.
+        data = np.full(4, np.nan)
+        assert resolve_limits(data, -2.0, 5.0, 1.0, 99.0) == (-2.0, 5.0)
+
+    def test_vmin_only_uses_percentile_for_upper(self) -> None:
+        data = np.arange(101, dtype=float)
+        assert resolve_limits(data, 10.0, None, 0.0, 100.0) == (10.0, 100.0)
+
+    def test_vmax_only_uses_percentile_for_lower(self) -> None:
+        data = np.arange(101, dtype=float)
+        assert resolve_limits(data, None, 42.0, 0.0, 100.0) == (0.0, 42.0)
+
+    def test_neither_is_pure_percentile(self) -> None:
+        data = np.arange(101, dtype=float)
+        assert resolve_limits(data, None, None, 0.0, 100.0) == (0.0, 100.0)
+
+    def test_equal_explicit_limits_widened(self) -> None:
+        low, high = resolve_limits(np.arange(10.0), 5.0, 5.0, 1.0, 99.0)
+        assert low < high
+
+    def test_inverted_explicit_limits_raise(self) -> None:
+        with pytest.raises(ValueError, match="require vmin < vmax"):
+            resolve_limits(np.arange(10.0), 9.0, 1.0, 1.0, 99.0)
+
+
+class TestBroadcastLimits:
+    """Broadcasting a scalar/sequence/None ``vmin``/``vmax`` to one per image."""
+
+    def test_none_broadcasts_none(self) -> None:
+        assert _broadcast_limits(None, 3, "vmin") == [None, None, None]
+
+    def test_scalar_broadcasts(self) -> None:
+        assert _broadcast_limits(2.0, 3, "vmin") == [2.0, 2.0, 2.0]
+
+    def test_numpy_scalar_is_scalar(self) -> None:
+        assert _broadcast_limits(np.float32(2.0), 2, "vmin") == [2.0, 2.0]
+
+    def test_sequence_is_per_image(self) -> None:
+        assert _broadcast_limits([1.0, 2.0, 3.0], 3, "vmax") == [1.0, 2.0, 3.0]
+
+    def test_sequence_length_mismatch_raises(self) -> None:
+        with pytest.raises(ValueError, match="vmax has length 2, expected 3"):
+            _broadcast_limits([1.0, 2.0], 3, "vmax")
+
+
+class TestUnionBounds:
+    """Axis-aligned bounds of offset frames, origin lower-left."""
+
+    def test_single_frame_at_origin(self) -> None:
+        img = np.zeros((4, 6))  # 4 rows, 6 cols
+        assert _union_bounds([img], [(0.0, 0.0)]) == (0.0, 6.0, 0.0, 4.0)
+
+    def test_offsets_extend_bounds_both_ways(self) -> None:
+        a = np.zeros((4, 4))
+        b = np.zeros((4, 4))
+        # b shifted to (-2, 3): union spans x in [-2, 4], y in [0, 7].
+        assert _union_bounds([a, b], [(0.0, 0.0), (-2.0, 3.0)]) == (-2.0, 4.0, 0.0, 7.0)
+
+    def test_differing_shapes(self) -> None:
+        a = np.zeros((2, 2))
+        b = np.zeros((5, 3))  # 5 rows, 3 cols
+        assert _union_bounds([a, b], [(0.0, 0.0), (1.0, 0.0)]) == (0.0, 4.0, 0.0, 5.0)
 
 
 class TestGridAxis:

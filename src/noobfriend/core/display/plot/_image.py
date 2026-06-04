@@ -33,7 +33,7 @@ from bokeh.palettes import (
 from bokeh.plotting import figure
 
 from noobfriend.core.display.plot._bokeh import display
-from noobfriend.core.display.plot._norm import percentile_limits
+from noobfriend.core.display.plot._norm import resolve_limits
 
 #: Selectable colormaps, ``name -> Bokeh palette``.
 CMAPS: dict[str, Sequence[str]] = {
@@ -196,6 +196,8 @@ def _radec_formatter(
 def imshow(
     data: np.ndarray,
     *,
+    vmin: float | None = None,
+    vmax: float | None = None,
     pmin: float = 1.0,
     pmax: float = 99.0,
     cmap: str = "Greys",
@@ -219,8 +221,13 @@ def imshow(
     data : numpy.ndarray
         A 2-D image array. It is cast to ``float32`` before upload to halve the
         transferred payload (a 2048x2048 frame is ~17 MB at float32).
+    vmin, vmax : float, optional
+        Explicit lower/upper limits for the color stretch. Each takes
+        precedence over the corresponding percentile cut; a side left as
+        ``None`` falls back to ``pmin``/``pmax`` (so the two can be mixed,
+        e.g. lock ``vmin`` while the upper bound still tracks ``pmax``).
     pmin, pmax : float, default 1.0, 99.0
-        Percentile cuts for the color stretch limits.
+        Percentile cuts used for whichever of ``vmin``/``vmax`` is not given.
     cmap : str, default ``"Greys"``
         Colormap; one of the keys of :data:`CMAPS`.
     stretch : str, default ``"linear"``
@@ -277,7 +284,7 @@ def imshow(
     else:
         fig_w, fig_h = max(1, round(size * n_cols / n_rows)), size
 
-    low, high = percentile_limits(arr, pmin, pmax)
+    low, high = resolve_limits(arr, vmin, vmax, pmin, pmax)
     mapper = _make_mapper(stretch, CMAPS[cmap], low, high)
 
     fig = figure(
