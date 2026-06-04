@@ -61,15 +61,21 @@ def _find_dispersion_model(model: Model, class_name: str) -> Model | None:
 
 
 def read_wavelength_domain(
-    wcs: WCS, ra: float, dec: float, *, order: int = 1
+    wcs: WCS,
+    ra: float,
+    dec: float,
+    *,
+    order: int = 1,
+    t_range: tuple[float, float] = (0.0, 1.0),
 ) -> tuple[float, float]:
     """Return the calibrated wavelength domain of a grism order.
 
     Reads the dispersion model's wavelength polynomial and evaluates it at the
-    trace-parameter endpoints ``t = 0`` and ``t = 1``, at the direct-image
-    position of ``(ra, dec)``. The result is the wavelength interval over which
-    the trace/dispersion solution was fit; sampling the trace outside it is
-    meaningless (the model clamps to the endpoints).
+    trace-parameter endpoints ``t_range`` (by default the full fit domain
+    ``t = 0`` to ``t = 1``), at the direct-image position of ``(ra, dec)``. The
+    default result is the wavelength interval over which the trace/dispersion
+    solution was fit; sampling the trace outside it is meaningless (the model
+    clamps to the endpoints).
 
     This does real work — it locates the grism dispersion submodel inside the
     compound GWCS transform and evaluates astropy polynomials — so it is meant
@@ -86,6 +92,11 @@ def read_wavelength_domain(
         the source's direct-image position, so it is evaluated there.
     order : int, optional
         Spectral order whose domain to read, by default ``1``.
+    t_range : tuple[float, float], optional
+        Trace-parameter endpoints to evaluate, by default ``(0.0, 1.0)`` (the
+        full fit domain). Pass a sub-range (e.g. ``(0.05, 0.90)``) to get the
+        wavelengths bounding a trimmed, well-behaved interior of the trace,
+        away from the band edges where the polynomial inverse turns unreliable.
 
     Returns
     -------
@@ -127,6 +138,7 @@ def read_wavelength_domain(
     idx = orders.index(order)
     coeffs: list[Any] = model.lmodels[idx]
 
-    lam0 = sum(float(coeff(x0, y0)) * (0.0**k) for k, coeff in enumerate(coeffs))
-    lam1 = sum(float(coeff(x0, y0)) * (1.0**k) for k, coeff in enumerate(coeffs))
-    return tuple(sorted((lam0, lam1)))
+    t_lo, t_hi = t_range
+    lam_lo = sum(float(coeff(x0, y0)) * (t_lo**k) for k, coeff in enumerate(coeffs))
+    lam_hi = sum(float(coeff(x0, y0)) * (t_hi**k) for k, coeff in enumerate(coeffs))
+    return tuple(sorted((lam_lo, lam_hi)))

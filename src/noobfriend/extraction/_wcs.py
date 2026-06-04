@@ -61,41 +61,48 @@ def world_detector_transforms(wcs: WCS) -> tuple[Transform, Transform]:
     )
 
 
-def grism_trace_transform(wcs: WCS) -> Callable[[Any, Any, Any], tuple[Any, Any]]:
-    """Return the order-1 grism trace transform.
+def grism_trace_transform(
+    wcs: WCS, *, order: int = 1
+) -> Callable[[Any, Any, Any], tuple[Any, Any]]:
+    """Return the grism trace transform for a spectral order.
 
     Wraps the ``detector -> grism_detector`` transform of a JWST WFSS WCS so it
-    can be called as ``f(x0, y0, wavelength) -> (x_grism, y_grism)`` for spectral
-    order 1, hiding the extra spectral-order input and the trailing pass-through
-    outputs of the underlying model.
+    can be called as ``f(x0, y0, wavelength) -> (x_grism, y_grism)``, hiding the
+    extra spectral-order input and the trailing pass-through outputs of the
+    underlying model.
 
     Parameters
     ----------
     wcs : gwcs.WCS
         A JWST WFSS grism WCS (one exposing a ``grism_detector`` frame).
+    order : int, optional
+        Spectral order to trace, by default ``1``. NIRCam grisms have no 0th
+        order and place order 2 largely off the detector, so order 1 is the
+        only one normally needed.
 
     Returns
     -------
     Callable[[Any, Any, Any], tuple[Any, Any]]
         ``f(x0, y0, wavelength) -> (x_grism, y_grism)`` mapping a source's
         undispersed detector position ``(x0, y0)`` and a wavelength in microns to
-        the dispersed pixel position of the order-1 trace.
+        the dispersed pixel position of the trace.
 
     Notes
     -----
     The raw ``detector -> grism_detector`` transform takes
     ``(x0, y0, wavelength, order)`` and returns
-    ``(x_grism, y_grism, x0, y0, order)``; the wrapper fixes ``order = 1`` and
-    keeps only the first two outputs. Inputs may be scalars or broadcastable
-    arrays. The underlying NIRCam model requires ``x0``, ``y0``, and
-    ``wavelength`` to share the same shape when given arrays; ``order`` stays a
-    scalar. The wrapper forwards its arguments unchanged, so callers must pass
-    same-shaped arrays.
+    ``(x_grism, y_grism, x0, y0, order)``; the wrapper fixes ``order`` and keeps
+    only the first two outputs. Inputs may be scalars or broadcastable arrays.
+    The underlying NIRCam model requires ``x0``, ``y0``, and ``wavelength`` to
+    share the same shape when given arrays; ``order`` stays a scalar. When all
+    three are passed as equal-length 1-D arrays the model broadcasts them
+    outer-product style, returning a 2-D grid whose diagonal holds the
+    element-wise result (see :func:`~noobfriend.extraction.grism.source_locus`).
     """
     raw = wcs.get_transform("detector", "grism_detector")
 
     def trace(x0: Any, y0: Any, wavelength: Any) -> tuple[Any, Any]:
-        return raw(x0, y0, wavelength, 1)[:2]
+        return raw(x0, y0, wavelength, order)[:2]
 
     return trace
 
