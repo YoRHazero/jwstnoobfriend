@@ -15,10 +15,13 @@ dependencies = [
     "gwcs>=1.0.3",
     "jupyter-bokeh>=4.0.5",
     "noobase>=0.0.5",
+    "numpy>=2.4.6",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
+    "scikit-image>=0.26.0",
+    "scipy>=1.17.1",
     "stdatamodels>=5.0.2",
     "typer>=0.26.6",
 ]

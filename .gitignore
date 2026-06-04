@@ -15,6 +15,7 @@ CLAUDE.local.md
 
 # Large example data (FITS files; document download source in README)
 example_data/
+example_scripts/
 
 # Notebooks (ignored during development phase)
 notebooks/

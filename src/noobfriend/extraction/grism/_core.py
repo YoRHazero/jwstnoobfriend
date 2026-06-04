@@ -28,32 +28,8 @@ from noobase.image import reproject_exact
 from noobase.spectroscopy import Spectrum
 
 from noobfriend.extraction._wcs import grism_trace_transform
+from noobfriend.extraction.grism._array import _native
 from noobfriend.extraction.grism._coverage import FrameCoverage
-
-
-def _native(a: np.ndarray) -> np.ndarray:
-    """Coerce an array to a contiguous, native-endian float array.
-
-    ``reproject_exact`` requires native-endian float32/float64 input, but JWST
-    cal arrays are big-endian ``>f4``; this rebrands the byte order (preserving
-    precision for float inputs) and contiguously copies.
-
-    Parameters
-    ----------
-    a : numpy.ndarray
-        Input array (typically a big-endian float JWST data/error plane).
-
-    Returns
-    -------
-    numpy.ndarray
-        Native-endian, C-contiguous float array.
-    """
-    arr = np.asarray(a)
-    if arr.dtype.kind == "f" and arr.dtype.itemsize in (4, 8):
-        dt = np.dtype(f"=f{arr.dtype.itemsize}")
-    else:
-        dt = np.dtype("=f8")
-    return np.ascontiguousarray(arr, dtype=dt)
 
 
 def _trace_centerline(
