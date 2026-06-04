@@ -151,3 +151,55 @@ def fetch_bytes(spec: str | Path) -> bytes:
             detail or f"ssh cat {host}:{path} exited with status {proc.returncode}"
         )
     return proc.stdout
+
+
+def list_remote_dir(spec: str) -> list[str]:
+    """List the regular-file names in a remote directory, one level deep.
+
+    Runs ``ssh <host> find <path> -maxdepth 1 -type f`` and returns the bare
+    file names (no directory part), so the caller can match them against a glob
+    and rebuild full ``host:path`` specs. Like :func:`fetch_bytes`, it reuses
+    the shared ``ControlMaster`` connection and delegates authentication and
+    host resolution to the system ``ssh``.
+
+    Parameters
+    ----------
+    spec : str
+        A remote ``[user@]host:path`` directory spec.
+
+    Returns
+    -------
+    list of str
+        The names of the regular files in the directory (not full paths), in
+        the order ``find`` reports them.
+
+    Raises
+    ------
+    ValueError
+        ``spec`` is local (has no ``host:`` part), or is otherwise malformed
+        (see :func:`_parse_spec`).
+    RemoteReadError
+        The remote ``ssh``/``find`` failed (unreachable host, missing
+        directory, authentication declined under ``BatchMode``, ...).
+
+    Notes
+    -----
+    Assumes a GNU/Linux remote: it relies on ``find``'s ``-printf`` (as the
+    fetch CLI's remote helpers do). Listing is non-recursive (``-maxdepth 1``)
+    and excludes directories.
+    """
+    host, path = _parse_spec(spec)
+    if host is None:
+        raise ValueError(f"Not a remote spec: {spec!r}. Expected '[user@]host:path'.")
+
+    remote_cmd = f"find {shlex.quote(path)} -maxdepth 1 -type f -printf '%f\\n'"
+    proc = subprocess.run(  # noqa: S603
+        ["ssh", *_ssh_opts(), host, remote_cmd],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip()
+        raise RemoteReadError(
+            detail or f"ssh find {host}:{path} exited with status {proc.returncode}"
+        )
+    return [name for name in proc.stdout.decode(errors="replace").splitlines() if name]

@@ -1,10 +1,16 @@
 """Unit tests for the remote-read spec parsing and local byte fetching."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from noobfriend.core.io.remote import _parse_spec, fetch_bytes
+from noobfriend.core.io.remote import (
+    RemoteReadError,
+    _parse_spec,
+    fetch_bytes,
+    list_remote_dir,
+)
 
 
 class TestParseSpec:
@@ -61,3 +67,38 @@ class TestFetchBytesLocal:
     def test_missing_local_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             fetch_bytes(tmp_path / "does-not-exist.fits")
+
+
+class TestListRemoteDir:
+    """Remote one-level file listing over SSH (the subprocess is mocked)."""
+
+    def test_parses_find_output_into_names(self, monkeypatch) -> None:
+        captured: dict[str, list[str]] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return SimpleNamespace(
+                returncode=0, stdout=b"a_cal.fits\nb_cal.fits\n", stderr=b""
+            )
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+
+        assert list_remote_dir("icrhome08:/data/stage2") == ["a_cal.fits", "b_cal.fits"]
+        assert captured["cmd"][0] == "ssh"
+        assert "icrhome08" in captured["cmd"]
+        assert any("find" in part for part in captured["cmd"])
+
+    def test_local_spec_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Not a remote spec"):
+            list_remote_dir("/data/stage2")
+
+    def test_failure_raises_remote_read_error(self, monkeypatch) -> None:
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(
+                returncode=1, stdout=b"", stderr=b"no such directory"
+            )
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+
+        with pytest.raises(RemoteReadError, match="no such directory"):
+            list_remote_dir("icrhome08:/missing")

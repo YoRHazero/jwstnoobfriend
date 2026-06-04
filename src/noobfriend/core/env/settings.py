@@ -56,6 +56,11 @@ class NoobSettings(BaseSettings):
         description="Root directory of the data; base for auto-named stage dirs.",
         json_schema_extra={"group": EnvGroup.storage},
     )
+    noobox_path: Path | None = Field(
+        default=None,
+        description="Path to the NooBox manifest file used by NooBox.save / load.",
+        json_schema_extra={"group": EnvGroup.storage},
+    )
     noob_server: str = Field(
         default="localhost",
         description=(

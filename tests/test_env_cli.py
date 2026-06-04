@@ -21,6 +21,7 @@ class TestEnvFields:
             "START_STAGE",
             "CRDS_PATH",
             "DATA_ROOT_PATH",
+            "NOOBOX_PATH",
             "NOOB_SERVER",
         }
 
@@ -28,6 +29,7 @@ class TestEnvFields:
         fields = {field.name: field for field in env_fields()}
         assert fields["CRDS_PATH"].is_path
         assert fields["DATA_ROOT_PATH"].is_path
+        assert fields["NOOBOX_PATH"].is_path
         assert not fields["NOOB_SERVER"].is_path
 
     def test_defaults_and_groups(self) -> None:
