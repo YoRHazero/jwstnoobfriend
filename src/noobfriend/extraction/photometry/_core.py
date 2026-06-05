@@ -1,7 +1,10 @@
 """High-level multi-band aperture photometry and SED results."""
 
+import asyncio
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -25,6 +28,8 @@ class _BandFrame:
     error: np.ndarray | None
     wavelength: float | None
     wavelength_error: tuple[float, float] | None
+    flux_scale_mjy: float | None
+    flux_unit: str | None
     label_map: np.ndarray | None
     label_allowed: tuple[int, ...] | None
 
@@ -46,6 +51,16 @@ class BandPhotometry:
     error : float or None
         Quadrature sum of per-pixel errors inside the union aperture, or
         ``None`` if no error image was supplied for the band.
+    flux_mjy : float or None
+        Flux converted from the raw aperture sum to mJy when a per-band
+        conversion scale is known.
+    error_mjy : float or None
+        Error converted to mJy when both :attr:`error` and the per-band
+        conversion scale are known.
+    flux_scale_mjy : float or None
+        Multiplicative scale from one raw flux unit to mJy.
+    flux_unit : str or None
+        Original image unit or calibration source used for the scale.
     n_pixels : int
         Number of reference-grid pixels in the union aperture.
     n_valid_pixels : int
@@ -65,6 +80,10 @@ class BandPhotometry:
     wavelength_error: tuple[float, float] | None
     flux: float
     error: float | None
+    flux_mjy: float | None
+    error_mjy: float | None
+    flux_scale_mjy: float | None
+    flux_unit: str | None
     n_pixels: int
     n_valid_pixels: int
     bad_fraction: float
@@ -89,6 +108,8 @@ class ApertureSEDResult:
         Per-band aperture masks after alignment to the reference grid.
     source_apertures : mapping
         Per-band noobase aperture results on each source band's native grid.
+    source_metadata : mapping
+        Optional provenance metadata, e.g. grizli-cutout URLs and filters.
     """
 
     measurements: tuple[BandPhotometry, ...]
@@ -96,6 +117,7 @@ class ApertureSEDResult:
     union_mask: np.ndarray
     band_masks: Mapping[str, np.ndarray]
     source_apertures: Mapping[str, ApertureMask]
+    source_metadata: Mapping[str, Any]
 
     def to_table(self) -> Any:
         """Return the SED measurements as an :class:`astropy.table.Table`.
@@ -119,6 +141,10 @@ class ApertureSEDResult:
                 else m.wavelength_error[1],
                 "flux": m.flux,
                 "error": m.error,
+                "flux_mjy": m.flux_mjy,
+                "error_mjy": m.error_mjy,
+                "flux_scale_mjy": m.flux_scale_mjy,
+                "flux_unit": m.flux_unit,
                 "n_pixels": m.n_pixels,
                 "n_valid_pixels": m.n_valid_pixels,
                 "bad_fraction": m.bad_fraction,
@@ -137,7 +163,7 @@ class ApertureSEDResult:
         display_plot: bool = True,
         height: int = 500,
     ) -> Any:
-        """Plot the measured SED with flux and wavelength error bars.
+        """Plot the measured SED in mJy with flux and wavelength error bars.
 
         Parameters
         ----------
@@ -161,7 +187,7 @@ class ApertureSEDResult:
         Raises
         ------
         ValueError
-            If no plotted band has a wavelength.
+            If no included band has both a wavelength and mJy flux.
         """
         from bokeh.models import ColumnDataSource, HoverTool, Whisker
         from bokeh.plotting import figure
@@ -171,16 +197,20 @@ class ApertureSEDResult:
         measurements = [
             m
             for m in self.measurements
-            if m.wavelength is not None and (include_flagged or not m.flagged)
+            if m.wavelength is not None
+            and m.flux_mjy is not None
+            and (include_flagged or not m.flagged)
         ]
         if not measurements:
-            raise ValueError("Cannot plot SED: no included band has a wavelength.")
+            raise ValueError(
+                "Cannot plot SED: no included band has both wavelength and flux_mjy."
+            )
         measurements = sorted(measurements, key=lambda m: float(m.wavelength))
 
         x = np.asarray([m.wavelength for m in measurements], dtype=float)
-        y = np.asarray([m.flux for m in measurements], dtype=float)
+        y = np.asarray([m.flux_mjy for m in measurements], dtype=float)
         yerr = np.asarray(
-            [np.nan if m.error is None else m.error for m in measurements],
+            [np.nan if m.error_mjy is None else m.error_mjy for m in measurements],
             dtype=float,
         )
         xerr_left = np.asarray(
@@ -203,9 +233,9 @@ class ApertureSEDResult:
                 "wavelength": x,
                 "wave_lower": x - xerr_left,
                 "wave_upper": x + xerr_right,
-                "flux": y,
-                "flux_lower": y - yerr,
-                "flux_upper": y + yerr,
+                "flux_mjy": y,
+                "flux_mjy_lower": y - yerr,
+                "flux_mjy_upper": y + yerr,
                 "bad_fraction": [m.bad_fraction for m in measurements],
                 "flagged": [m.flagged for m in measurements],
                 "color": ["#c43b3b" if m.flagged else "#1f6f8b" for m in measurements],
@@ -215,15 +245,14 @@ class ApertureSEDResult:
         p = figure(
             title=title or "Aperture SED",
             x_axis_label="Wavelength",
-            y_axis_label="Flux",
+            y_axis_label="Flux (mJy)",
             tools="pan,wheel_zoom,box_zoom,reset,save",
             height=420,
             width=680,
         )
-        p.line("wavelength", "flux", source=source, color="#5f6b73", line_width=1)
         p.scatter(
             "wavelength",
-            "flux",
+            "flux_mjy",
             source=source,
             marker="circle",
             size=9,
@@ -235,15 +264,15 @@ class ApertureSEDResult:
             Whisker(
                 source=source,
                 base="wavelength",
-                lower="flux_lower",
-                upper="flux_upper",
+                lower="flux_mjy_lower",
+                upper="flux_mjy_upper",
                 line_color="#5f6b73",
             )
         )
         p.add_layout(
             Whisker(
                 source=source,
-                base="flux",
+                base="flux_mjy",
                 lower="wave_lower",
                 upper="wave_upper",
                 dimension="width",
@@ -255,7 +284,7 @@ class ApertureSEDResult:
                 tooltips=[
                     ("band", "@band"),
                     ("wavelength", "@wavelength"),
-                    ("flux", "@flux"),
+                    ("flux_mjy", "@flux_mjy"),
                     ("bad fraction", "@bad_fraction"),
                     ("flagged", "@flagged"),
                 ]
@@ -289,6 +318,11 @@ class ApertureSED:
         (``NaN`` or strict ``0.0``) are flagged.
     coarse_step : tuple[int, int], optional
         Passed to the photometry-local reprojection helpers.
+    source_metadata : mapping, optional
+        Provenance metadata stored on results. Mostly used by remote loaders.
+    default_seed_world : tuple[float, float], optional
+        Default source coordinate used when :meth:`measure` is called without an
+        explicit seed. Set by :meth:`from_grizli_cutout`.
     """
 
     def __init__(
@@ -299,6 +333,8 @@ class ApertureSED:
         mask_threshold: float = 0.5,
         flag_bad_fraction: float = 0.10,
         coarse_step: tuple[int, int] | None = None,
+        source_metadata: Mapping[str, Any] | None = None,
+        default_seed_world: tuple[float, float] | None = None,
     ) -> None:
         self._bands = tuple(_normalize_band(name, spec) for name, spec in bands.items())
         if not self._bands:
@@ -319,6 +355,94 @@ class ApertureSED:
         self.mask_threshold = float(mask_threshold)
         self.flag_bad_fraction = float(flag_bad_fraction)
         self.coarse_step = coarse_step
+        self.source_metadata = dict(source_metadata or {})
+        self.default_seed_world = default_seed_world
+
+    @classmethod
+    async def from_grizli_cutout_async(
+        cls,
+        ra: float,
+        dec: float,
+        *,
+        size: float = 5.0,
+        filters: str | tuple[str, ...] | list[str] = "sed-default",
+        reference: str = "finest",
+        mask_threshold: float = 0.5,
+        flag_bad_fraction: float = 0.10,
+        coarse_step: tuple[int, int] | None = None,
+        cache: bool = False,
+        cache_dir: str | Path | None = None,
+        overwrite: bool = False,
+        allow_missing: bool = True,
+        timeout: float = 120.0,
+    ) -> "ApertureSED":
+        """Build an :class:`ApertureSED` from grizli-cutout.
+
+        The default filter preset, ``"sed-default"``, queries grizli overlap
+        metadata and greedily selects every covered JWST imaging band plus
+        covered HST ``f435w`` / ``f606w``. The FITS payload is fetched as bytes
+        and opened through ``BytesIO``; no file is written unless ``cache=True``
+        or ``cache_dir`` is supplied.
+        """
+        from noobfriend.extraction.photometry._grizli import load_grizli_cutout
+
+        cutout = await load_grizli_cutout(
+            ra,
+            dec,
+            size_arcsec=size,
+            filters=filters,
+            cache=cache,
+            cache_dir=cache_dir,
+            overwrite=overwrite,
+            allow_missing=allow_missing,
+            timeout=timeout,
+        )
+        return cls(
+            cutout.bands,
+            reference=reference,
+            mask_threshold=mask_threshold,
+            flag_bad_fraction=flag_bad_fraction,
+            coarse_step=coarse_step,
+            source_metadata=cutout.metadata,
+            default_seed_world=(float(ra), float(dec)),
+        )
+
+    @classmethod
+    def from_grizli_cutout(
+        cls,
+        ra: float,
+        dec: float,
+        *,
+        size: float = 5.0,
+        filters: str | tuple[str, ...] | list[str] = "sed-default",
+        reference: str = "finest",
+        mask_threshold: float = 0.5,
+        flag_bad_fraction: float = 0.10,
+        coarse_step: tuple[int, int] | None = None,
+        cache: bool = False,
+        cache_dir: str | Path | None = None,
+        overwrite: bool = False,
+        allow_missing: bool = True,
+        timeout: float = 120.0,
+    ) -> "ApertureSED":
+        """Build from grizli-cutout through the synchronous convenience API."""
+        return _run_coroutine_blocking(
+            cls.from_grizli_cutout_async(
+                ra,
+                dec,
+                size=size,
+                filters=filters,
+                reference=reference,
+                mask_threshold=mask_threshold,
+                flag_bad_fraction=flag_bad_fraction,
+                coarse_step=coarse_step,
+                cache=cache,
+                cache_dir=cache_dir,
+                overwrite=overwrite,
+                allow_missing=allow_missing,
+                timeout=timeout,
+            )
+        )
 
     def measure(
         self,
@@ -329,7 +453,9 @@ class ApertureSED:
     ) -> ApertureSEDResult:
         """Measure all bands through the union of their grown apertures.
 
-        Exactly one seed form is required:
+        Exactly one seed form is required, unless this object was constructed
+        by :meth:`from_grizli_cutout`, in which case its requested sky position
+        is used by default:
 
         - ``seed_world=(ra, dec)`` maps the source through each band's WCS.
         - ``seed_xy_by_band={band: (x, y)}`` supplies band-local pixel seeds.
@@ -400,6 +526,7 @@ class ApertureSED:
             union_mask=union_mask,
             band_masks=aligned_masks,
             source_apertures=source_apertures,
+            source_metadata=self.source_metadata,
         )
 
     def _resolve_seeds(
@@ -408,6 +535,8 @@ class ApertureSED:
         seed_xy_by_band: Mapping[str, tuple[float, float]] | None,
     ) -> dict[str, tuple[float, float]]:
         """Resolve the caller's seed input into per-band pixel seeds."""
+        if seed_world is None and seed_xy_by_band is None:
+            seed_world = self.default_seed_world
         if (seed_world is None) == (seed_xy_by_band is None):
             raise ValueError("Provide exactly one of seed_world or seed_xy_by_band.")
         if seed_world is not None:
@@ -489,12 +618,22 @@ class ApertureSED:
                 error_out = float(np.sqrt(np.sum(error[valid_error] ** 2)))
 
         flagged = bad_fraction >= self.flag_bad_fraction
+        scale = band.flux_scale_mjy
+        flux_mjy = None if scale is None else float(flux * scale)
+        if scale is None or error_out is None:
+            error_mjy = None
+        else:
+            error_mjy = float(error_out * abs(scale))
         return BandPhotometry(
             band=band.name,
             wavelength=band.wavelength,
             wavelength_error=band.wavelength_error,
             flux=flux,
             error=error_out,
+            flux_mjy=flux_mjy,
+            error_mjy=error_mjy,
+            flux_scale_mjy=scale,
+            flux_unit=band.flux_unit,
             n_pixels=n_pixels,
             n_valid_pixels=n_valid,
             bad_fraction=bad_fraction,
@@ -536,6 +675,12 @@ def _normalize_band(name: str, spec: Mapping[str, Any]) -> _BandFrame:
     wavelength_error = _normalize_wavelength_error(name, spec.get("wavelength_error"))
     if wavelength_error is not None and wavelength is None:
         raise ValueError(f"band {name!r} provides wavelength_error but no wavelength.")
+    flux_scale_mjy = (
+        None if spec.get("flux_scale_mjy") is None else float(spec["flux_scale_mjy"])
+    )
+    if flux_scale_mjy is not None and not np.isfinite(flux_scale_mjy):
+        raise ValueError(f"band {name!r} flux_scale_mjy must be finite.")
+    flux_unit = None if spec.get("flux_unit") is None else str(spec["flux_unit"])
 
     return _BandFrame(
         name=str(name),
@@ -544,6 +689,8 @@ def _normalize_band(name: str, spec: Mapping[str, Any]) -> _BandFrame:
         error=error,
         wavelength=wavelength,
         wavelength_error=wavelength_error,
+        flux_scale_mjy=flux_scale_mjy,
+        flux_unit=flux_unit,
         label_map=label_map,
         label_allowed=label_allowed_out,
     )
@@ -570,3 +717,26 @@ def _normalize_wavelength_error(band: str, value: object) -> tuple[float, float]
             f"band {band!r} wavelength_error values must be finite and non-negative."
         )
     return (left, right)
+
+
+def _run_coroutine_blocking(coro):
+    """Run ``coro`` from sync code, including inside an existing event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 - re-raise in caller thread.
+            result["error"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
