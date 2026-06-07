@@ -33,6 +33,9 @@ noobfriend = "noobfriend.cli.app:main"
 requires = ["uv_build>=0.8.3,<0.9.0"]
 build-backend = "uv_build"
 
+[tool.uv.sources]
+noobase = { path = "/Users/zero/study/rust/noobase/crates/noobase-py", editable = true }
+
 [tool.ruff.lint]
 extend-select = ["D"]
 

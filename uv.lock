@@ -1224,17 +1224,13 @@ wheels = [
 
 [[package]]
 name = "noobase"
-version = "0.0.5"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "/Users/zero/study/rust/noobase/crates/noobase-py" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/a2/bfc376d4d78798deb82fbcae8fb50c9fdced3bb7c75065b29d4770bd88ad/noobase-0.0.5.tar.gz", hash = "sha256:c1e8c0e150984bc5e2ce014527c53e900eb78e73945855c1511b6e5f460c765f", size = 233627, upload-time = "2026-05-30T00:09:59.728Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/57/88/79633b463ea4984fd222e056eeabc67d48e2ed99fe73e5f422b1a1c59c9d/noobase-0.0.5-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:fa3fe727d91a994d6ff0c40bf6739b1ff759c4f17ed05e1ef7a326c7d2a99994", size = 558406, upload-time = "2026-05-30T00:09:54.807Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/c6/2c90380b106b07d9d1658af2e59bacd6bf64c6b915e764395c0134e30aee/noobase-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:72a90764b636d6342fe15276cb4d38233a07a78f120a0a6ffeb0ee197f8a19c2", size = 630822, upload-time = "2026-05-30T00:09:56.493Z" },
-    { url = "https://files.pythonhosted.org/packages/ed/db/c1e7eaabe34fc66329fac13dd8f310c2999865e6f1575e76fcf0175cb9d6/noobase-0.0.5-cp312-abi3-win_amd64.whl", hash = "sha256:b67a6c24e0b4950cbd0810261dacadd444050b356693d029bc9bfbf47665621a", size = 512826, upload-time = "2026-05-30T00:09:58.031Z" },
-]
+
+[package.metadata]
+requires-dist = [{ name = "numpy", specifier = ">=2" }]
 
 [[package]]
 name = "noobfriend"
@@ -1276,7 +1272,7 @@ requires-dist = [
     { name = "bokeh", specifier = ">=3.9.0" },
     { name = "gwcs", specifier = ">=1.0.3" },
     { name = "jupyter-bokeh", specifier = ">=4.0.5" },
-    { name = "noobase", specifier = ">=0.0.5" },
+    { name = "noobase", editable = "/Users/zero/study/rust/noobase/crates/noobase-py" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.14.1" },
