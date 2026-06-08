@@ -384,7 +384,7 @@ class ApertureSED:
         and opened through ``BytesIO``; no file is written unless ``cache=True``
         or ``cache_dir`` is supplied.
         """
-        from noobfriend.extraction.photometry._grizli import load_grizli_cutout
+        from noobfriend.core.io import load_grizli_cutout
 
         cutout = await load_grizli_cutout(
             ra,

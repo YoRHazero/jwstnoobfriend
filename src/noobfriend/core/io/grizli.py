@@ -1,8 +1,17 @@
-"""Load multi-band cutouts from the public grizli-cutout service.
+"""Client for the public grizli-cutout multi-band cutout service.
 
-The default path is intentionally in-memory: fetch the FITS response as bytes,
-open it through :class:`io.BytesIO`, and only write to disk when the caller
-explicitly asks for caching.
+This module is the data-acquisition adapter for ``grizli-cutout``: it builds the
+``/overlap`` and ``/thumb`` URLs, fetches the FITS payload through the shared
+:class:`~noobfriend.core.io.network.HTTPSession`, and parses the multi-extension
+response into per-band specs (``data`` / ``wcs`` / ``error`` plus wavelength and
+mJy-calibration metadata) ready for downstream analysis such as aperture SEDs.
+
+It also carries the small amount of JWST/HST imaging *reference data* needed to
+do that — the imaging-filter taxonomy and effective wavelengths — because that
+knowledge is a property of the instruments and the service, not of any one
+analysis. The acquisition is in-memory by default: the FITS response is fetched
+as bytes and opened through :class:`io.BytesIO`; nothing is written to disk
+unless the caller explicitly asks for caching.
 """
 
 from __future__ import annotations
