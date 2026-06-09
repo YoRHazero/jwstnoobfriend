@@ -1,8 +1,8 @@
-"""Array coercion helpers for photometry.
+"""Array coercion helpers at the :mod:`noobase` kernel boundary.
 
-``noobase``'s Rust-backed kernels are strict about dtype and byte order. JWST
-calibration arrays are commonly big-endian floats, so photometry normalizes
-inputs at the module boundary before calling those kernels.
+``noobase``'s Rust-backed kernels are strict about dtype and byte order, and
+JWST calibration arrays are commonly big-endian floats. Photometry normalizes
+inputs here, at the module boundary, before handing them to those kernels.
 """
 
 import numpy as np
@@ -24,27 +24,16 @@ def native_float64(data: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.asarray(data), dtype=np.dtype("=f8"))
 
 
-def native_int32(data: np.ndarray) -> np.ndarray:
-    """Return ``data`` as a C-contiguous, native-endian ``int32`` array.
-
-    Parameters
-    ----------
-    data : numpy.ndarray
-        Input integer-like array.
-
-    Returns
-    -------
-    numpy.ndarray
-        Native-endian ``int32`` array.
-    """
-    return np.ascontiguousarray(np.asarray(data), dtype=np.dtype("=i4"))
-
-
 def valid_data_mask(data: np.ndarray) -> np.ndarray:
-    """Mask pixels considered usable for aperture growth and photometry.
+    """Mask pixels usable as a seed/region for aperture growth.
 
-    In noobfriend photometry, strict ``0.0`` is treated the same as ``NaN``:
-    it marks missing data rather than real background-subtracted signal.
+    On the growth side, strict ``0.0`` is treated the same as ``NaN``: in JWST
+    calibration products an exact zero almost always marks an unexposed or
+    flagged pixel rather than real background-subtracted signal, and growing an
+    aperture into such pixels is never desired. Flux *measurement* does not use
+    this rule (see :mod:`noobfriend.extraction.photometry._measure`); there only
+    ``NaN`` marks missing data, so a genuine zero-valued science pixel still
+    contributes.
 
     Parameters
     ----------
@@ -58,20 +47,3 @@ def valid_data_mask(data: np.ndarray) -> np.ndarray:
     """
     arr = np.asarray(data)
     return np.isfinite(arr) & (arr != 0.0)
-
-
-def measurement_image(data: np.ndarray) -> np.ndarray:
-    """Coerce an image for measurement, replacing invalid pixels with ``NaN``.
-
-    Parameters
-    ----------
-    data : numpy.ndarray
-        Input image.
-
-    Returns
-    -------
-    numpy.ndarray
-        Native ``float64`` image where ``NaN`` and strict ``0.0`` are masked.
-    """
-    arr = native_float64(data)
-    return np.where(valid_data_mask(arr), arr, np.nan)

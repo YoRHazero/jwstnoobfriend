@@ -2,8 +2,11 @@
 
 The noobase primitive accepts ``(row, col)`` seed pixels and strict native
 ``float64`` arrays. This module adapts that to noobfriend's user-facing
-``(x, y)`` pixel convention, applies the project rule that ``0.0`` is invalid,
-and optionally restricts growth with a segmentation label map.
+``(x, y)`` pixel convention, applies the growth-side rule that ``0.0`` is
+invalid, and optionally restricts growth with a segmentation label map. The
+mask it returns is binary and lives on the band's own native grid; combining
+masks across bands is the caller's job (see
+:mod:`noobfriend.extraction.photometry._coverage`).
 """
 
 from collections.abc import Mapping, Sequence
@@ -13,10 +16,7 @@ from typing import Any, Literal, cast
 import numpy as np
 from noobase.aperture import grow_mask
 
-from noobfriend.extraction.photometry._array import (
-    native_float64,
-    valid_data_mask,
-)
+from noobfriend.extraction.photometry._array import native_float64, valid_data_mask
 
 StopReason = Literal["snr_below", "gradient_flip", "filled"]
 
@@ -28,7 +28,7 @@ class ApertureMask:
     Attributes
     ----------
     mask : numpy.ndarray
-        Boolean source mask on the image grid.
+        Boolean source mask on the band's native image grid.
     stop_reason : {"snr_below", "gradient_flip", "filled"}
         Termination reason reported by noobase.
     n_iterations : int
