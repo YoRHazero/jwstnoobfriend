@@ -1,6 +1,6 @@
 """Switchable multi-image viewer: a Bokeh "blink comparator" for notebooks.
 
-The public entry point :func:`imshow_stack` overlays several 2-D arrays at their
+The public entry point :func:`imshow_blink` overlays several 2-D arrays at their
 own pixel offsets and renders one segmented control to flip between them, plus an
 optional auto-blink. Every frame is drawn up front as its own Bokeh ``image``
 glyph (own color mapper, own placement); switching only toggles glyph
@@ -126,7 +126,7 @@ if (play.active) {
 """
 
 
-def imshow_stack(
+def imshow_blink(
     images: Sequence[np.ndarray],
     *,
     offsets: Sequence[tuple[float, float]] | None = None,
@@ -207,7 +207,7 @@ def imshow_stack(
     arrs = [np.asarray(im) for im in images]
     n = len(arrs)
     if n == 0:
-        raise ValueError("imshow_stack requires at least one image")
+        raise ValueError("imshow_blink requires at least one image")
     for k, a in enumerate(arrs):
         if a.ndim != 2:
             raise ValueError(f"images[{k}] must be 2-D, got shape {a.shape}")

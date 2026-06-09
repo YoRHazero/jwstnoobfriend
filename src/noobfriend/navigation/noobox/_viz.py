@@ -50,3 +50,34 @@ class BoxViz:
         polygons = [np.array(book.footprint.corners, dtype=float) for book in books]
         kwargs.setdefault("labels", [book.id for book in books])
         return plot_footprints(polygons, **kwargs)
+
+    def imshow_blink(self, **kwargs: Any) -> Any:
+        """Blink-compare the ``SCI`` array of every member.
+
+        Each book becomes one frame, drawn in iteration order and labelled by
+        its :attr:`~NooBook.id`; a segmented control flips between them. The
+        members are expected to share a pixel grid, since frames are placed by
+        translation only (no rescale, no rotation) -- curate first with
+        :meth:`~NooBox.filter` so only co-gridded books remain (e.g. one
+        pointing's dither set, or one product's stage ladder). Pass
+        ``align="wcs"`` to place the members by their WCS (imaging only) instead
+        of stacking them at a common origin. Files are read only when the frames
+        are drawn.
+
+        Parameters
+        ----------
+        **kwargs
+            Forwarded to
+            :func:`~noobfriend.navigation._blink.blink_frames` -- ``align`` /
+            ``atol`` for WCS placement, and ``offsets``, ``labels``, ``vmin``,
+            ``vmax``, ``cmap``, ``stretch``, ``size``, ``title``, ``blink`` on to
+            :func:`noobfriend.core.display.plot.imshow_blink`.
+
+        Returns
+        -------
+        Any
+            The display handle returned by ``imshow_blink``.
+        """
+        from noobfriend.navigation._blink import blink_frames
+
+        return blink_frames(list(self._box), **kwargs)

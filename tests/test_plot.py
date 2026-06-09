@@ -10,7 +10,7 @@ from noobfriend.core.display.plot._footprint import (
 )
 from noobfriend.core.display.plot._image import _grid_axis
 from noobfriend.core.display.plot._norm import percentile_limits, resolve_limits
-from noobfriend.core.display.plot._stack import _broadcast_limits, _union_bounds
+from noobfriend.core.display.plot._blink import _broadcast_limits, _union_bounds
 
 
 class TestPercentileLimits:
