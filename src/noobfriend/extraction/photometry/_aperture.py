@@ -66,6 +66,7 @@ def grow_aperture_mask(
     error: np.ndarray | None = None,
     label_map: np.ndarray | None = None,
     label_allowed: Sequence[int] | None = None,
+    allow_background: bool = True,
     grow_kwargs: Mapping[str, Any] | None = None,
 ) -> ApertureMask:
     """Grow one aperture mask from a band-local ``(x, y)`` seed.
@@ -80,9 +81,17 @@ def grow_aperture_mask(
         1-sigma error image for noobase's SNR stop.
     label_map : numpy.ndarray, optional
         Segmentation labels. When provided without ``label_allowed``, growth is
-        restricted to the seed pixel's label.
+        restricted to the seed pixel's label (plus the background label, unless
+        ``allow_background`` is ``False``).
     label_allowed : sequence of int, optional
         Labels from ``label_map`` allowed for aperture growth.
+    allow_background : bool, default True
+        When a ``label_map`` is given, also admit the background label ``0`` to
+        the allowed set, so the aperture may grow off the source's own segment
+        into surrounding sky (it is still blocked by *other* sources' labels)
+        and is halted by the SNR/gradient stop rather than the segment edge.
+        Set ``False`` to hard-confine growth to ``label_allowed`` / the seed's
+        own label. No effect when ``label_map`` is ``None``.
     grow_kwargs : mapping, optional
         Additional keyword arguments forwarded to
         :func:`noobase.aperture.grow_mask`.
@@ -119,6 +128,8 @@ def grow_aperture_mask(
             if label_allowed is None
             else {int(label) for label in label_allowed}
         )
+        if allow_background:
+            allowed_labels.add(0)
         allowed &= np.isin(labels, list(allowed_labels))
 
     if not bool(allowed[seed_y, seed_x]):

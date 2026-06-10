@@ -2,11 +2,20 @@
 
 from typing import Any, Callable
 
+import matplotlib
 import numpy as np
 import pytest
 
+matplotlib.use("Agg")
+
 from noobfriend.extraction.photometry import ApertureSED
+from noobfriend.extraction.photometry._aperture import grow_aperture_mask
+from noobfriend.extraction.photometry._core import _generic_floor, _label_floor
 from noobfriend.extraction.photometry._coverage import reproject_coverage
+from noobfriend.extraction.photometry._thumbnails import (
+    _aperture_bbox,
+    aperture_montage,
+)
 
 
 class LinearWCS:
@@ -73,13 +82,20 @@ def _band(
     flux_scale_mjy: float | None = None,
     flux_unit: str | None = None,
     label_pixels: set[tuple[int, int]] | None = None,
+    allow_background: bool = False,
     error: np.ndarray | None = None,
 ) -> dict[str, object]:
-    """Build one public band spec for tests."""
+    """Build one public band spec for tests.
+
+    ``allow_background`` defaults to ``False`` here (unlike the library default
+    of ``True``) so labelled tests stay hard-confined to their segment and their
+    deterministic flux assertions hold.
+    """
     spec: dict[str, object] = {
         "data": np.asarray(data, dtype=float),
         "wcs": wcs or LinearWCS(),
         "wavelength": wavelength,
+        "allow_background": allow_background,
     }
     if wavelength_error is not None:
         spec["wavelength_error"] = wavelength_error
@@ -361,3 +377,172 @@ class TestApertureSEDResult:
         assert fig.xaxis[0].axis_label == "Wavelength (µm)"
         assert {r.glyph.__class__.__name__ for r in fig.renderers} == {"Scatter"}
         assert fig.renderers[0].glyph.y == "flux_mjy"
+
+
+def _three_band_result() -> Any:
+    """Measure a 3-band SED whose apertures all contain the seed pixel (3, 3)."""
+    sed = ApertureSED(
+        bands={
+            "F090W": _band(
+                np.ones((7, 7)),
+                wavelength=0.9,
+                flux_scale_mjy=0.01,
+                label_pixels=_block(range(3, 5), range(2, 5)),
+                error=np.ones((7, 7)),
+            ),
+            "F150W": _band(
+                np.ones((7, 7)),
+                wavelength=1.5,
+                flux_scale_mjy=0.01,
+                label_pixels=_block(range(2, 4), range(3, 6)),
+                error=np.ones((7, 7)),
+            ),
+            "F200W": _band(
+                np.ones((7, 7)),
+                wavelength=2.0,
+                flux_scale_mjy=0.01,
+                label_pixels=_block(range(3, 6), range(3, 5)),
+                error=np.ones((7, 7)),
+            ),
+        },
+        reference="F090W",
+    )
+    return sed.measure(
+        seed_xy_by_band={k: (3.0, 3.0) for k in ("F090W", "F150W", "F200W")},
+        grow_kwargs=_grow_all_label_kwargs(),
+    )
+
+
+class TestApertureBBox:
+    """Footprint bounding box used to crop each thumbnail panel."""
+
+    def test_tight_box_with_no_pad(self) -> None:
+        fp = np.zeros((10, 10), dtype=bool)
+        fp[4:6, 4:6] = True
+        rsl, csl = _aperture_bbox(fp, pad=0.0)
+        assert (rsl.start, rsl.stop) == (4, 6)
+        assert (csl.start, csl.stop) == (4, 6)
+
+    def test_pad_grows_box_by_extent_fraction(self) -> None:
+        fp = np.zeros((10, 10), dtype=bool)
+        fp[4:6, 4:6] = True  # 2x2 extent -> pad 0.5 grows by 1 each side.
+        rsl, csl = _aperture_bbox(fp, pad=0.5)
+        assert (rsl.start, rsl.stop) == (3, 7)
+        assert (csl.start, csl.stop) == (3, 7)
+
+    def test_pad_clips_to_array(self) -> None:
+        fp = np.zeros((6, 6), dtype=bool)
+        fp[0, 0] = fp[5, 5] = True
+        rsl, csl = _aperture_bbox(fp, pad=1.0)
+        assert (rsl.start, rsl.stop) == (0, 6)
+        assert (csl.start, csl.stop) == (0, 6)
+
+    def test_empty_footprint_returns_none(self) -> None:
+        assert _aperture_bbox(np.zeros((4, 4), dtype=bool), pad=0.3) is None
+
+
+class TestApertureThumbnails:
+    """Self-contained matplotlib aperture montage and single-band thumbnail."""
+
+    def test_result_keeps_native_band_images(self) -> None:
+        result = _three_band_result()
+        assert set(result.band_images) == {"F090W", "F150W", "F200W"}
+        for name, image in result.band_images.items():
+            assert image.shape == result.band_coverage[name].shape
+            np.testing.assert_array_equal(image, np.ones((7, 7)))
+
+    def test_montage_titles_one_panel_per_band(self) -> None:
+        result = _three_band_result()
+        fig = result.plot_apertures()
+        titled = [ax for ax in fig.axes if ax.get_title()]
+        assert len(titled) == 3
+        # Default grid for 3 panels is 2 columns x 2 rows (one cell blank).
+        assert fig.axes[0].get_subplotspec().get_geometry()[:2] == (2, 2)
+        assert len(fig.axes) == 4
+
+    def test_ncols_controls_grid(self) -> None:
+        result = _three_band_result()
+        fig = aperture_montage(result, ncols=3)
+        assert fig.axes[0].get_subplotspec().get_geometry()[:2] == (1, 3)
+
+    def test_unknown_band_raises(self) -> None:
+        result = _three_band_result()
+        with pytest.raises(ValueError, match="unknown band"):
+            result.plot_apertures(bands=["F999W"])
+
+    def test_coverage_overlay_toggle(self) -> None:
+        result = _three_band_result()
+        # Background image plus the union-coverage fill image when enabled.
+        on = result.plot_thumbnail("F090W", show_coverage=True)
+        assert len(on.axes[0].images) == 2
+        off = result.plot_thumbnail("F090W", show_coverage=False)
+        assert len(off.axes[0].images) == 1
+
+    def test_seed_marker_toggle(self) -> None:
+        result = _three_band_result()
+        on = result.plot_thumbnail("F090W", show_seed=True)
+        assert len(on.axes[0].lines) == 1
+        off = result.plot_thumbnail("F090W", show_seed=False)
+        assert len(off.axes[0].lines) == 0
+
+
+class TestAllowBackground:
+    """Default growth admits the background; ``allow_background=False`` confines."""
+
+    def test_background_lets_growth_into_sky(self) -> None:
+        data = np.ones((5, 5))
+        labels = _label((5, 5), {(2, 2)})  # one source pixel, rest is background.
+
+        confined = grow_aperture_mask(
+            data,
+            seed_xy=(2.0, 2.0),
+            label_map=labels,
+            allow_background=False,
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+        spread = grow_aperture_mask(
+            data,
+            seed_xy=(2.0, 2.0),
+            label_map=labels,
+            allow_background=True,
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+
+        # Confined: only the lone source pixel is admissible.
+        assert int(confined.mask.sum()) == 1
+        # Background allowed: growth leaves the segment into the sky.
+        assert int(spread.mask.sum()) > 1
+        assert bool((spread.mask & (labels == 0)).any())
+
+
+class TestApertureFloor:
+    """Area-scaled stop-check floor and its segment cap."""
+
+    def test_generic_floor_finest_keeps_base(self) -> None:
+        assert _generic_floor(scale=10.0, finest_scale=10.0, base=40) == 40
+
+    def test_generic_floor_scales_by_area(self) -> None:
+        # Half the linear scale (pixels/deg) -> a quarter of the sky area.
+        assert _generic_floor(scale=5.0, finest_scale=10.0, base=40) == 10
+
+    def test_generic_floor_clamped_at_lo(self) -> None:
+        assert _generic_floor(scale=1.0, finest_scale=10.0, base=30) == 8
+
+    def test_generic_floor_degenerate_scale_keeps_base(self) -> None:
+        assert _generic_floor(scale=0.0, finest_scale=0.0, base=30) == 30
+
+    def test_label_floor_caps_at_segment(self) -> None:
+        labels = _label((6, 6), _block(range(2, 4), range(2, 4)))  # 4-pixel source
+        data = np.ones((6, 6))
+        assert _label_floor(30, labels, data, (2.0, 2.0)) == 4
+
+    def test_label_floor_uses_generic_when_smaller(self) -> None:
+        labels = _label((10, 10), _block(range(1, 9), range(1, 9)))  # 64-pixel source
+        data = np.ones((10, 10))
+        assert _label_floor(8, labels, data, (4.0, 4.0)) == 8
+
+    def test_label_floor_background_seed_is_one(self) -> None:
+        labels = _label((6, 6), {(2, 2)})
+        data = np.ones((6, 6))
+        # Seed (col 0, row 0) sits on the background label 0.
+        assert _label_floor(30, labels, data, (0.0, 0.0)) == 1

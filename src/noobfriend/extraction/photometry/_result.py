@@ -28,6 +28,10 @@ class ApertureSEDResult:
         native grid (the weight maps the measurement summed over).
     source_apertures : mapping
         Per-band grown apertures on each band's native grid.
+    band_images : mapping
+        Per-band native science image, kept so the result is self-contained for
+        the aperture thumbnails (see :meth:`plot_apertures`); same grid and
+        shape as the matching ``band_coverage`` and ``source_apertures`` entry.
     source_metadata : mapping
         Optional provenance metadata, e.g. grizli-cutout URLs and filters.
     """
@@ -37,6 +41,7 @@ class ApertureSEDResult:
     union_mask: np.ndarray
     band_coverage: Mapping[str, np.ndarray]
     source_apertures: Mapping[str, ApertureMask]
+    band_images: Mapping[str, np.ndarray]
     source_metadata: Mapping[str, Any]
 
     def to_table(self) -> Any:
@@ -116,3 +121,53 @@ class ApertureSEDResult:
         if not display_plot:
             return figure
         return display(figure, height=height)
+
+    def plot_apertures(self, **kwargs: Any) -> Any:
+        """Montage every band's thumbnail with its aperture and union overlays.
+
+        One matplotlib panel per band, drawn on the band's own native grid: the
+        science thumbnail, the band's grown aperture as a contour, and the union
+        aperture as measured on this band (:attr:`band_coverage`) as a
+        translucent fill whose opacity tracks the coverage fraction. The
+        reference band and any flagged band are badged.
+
+        Parameters
+        ----------
+        **kwargs
+            Forwarded to
+            :func:`~noobfriend.extraction.photometry._thumbnails.aperture_montage`
+            (``bands``, ``ncols``, ``crop``, ``cmap``, ``stretch``,
+            ``vmin``/``vmax``/``pmin``/``pmax``, the overlay colours and
+            toggles, ``panel_size``, ``title``, ``save``).
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The assembled montage.
+        """
+        from noobfriend.extraction.photometry._thumbnails import aperture_montage
+
+        return aperture_montage(self, **kwargs)
+
+    def plot_thumbnail(self, band: str, **kwargs: Any) -> Any:
+        """Draw one band's thumbnail with its aperture and union overlays, enlarged.
+
+        The single-band counterpart of :meth:`plot_apertures` (identical
+        overlays) for inspecting one band closely.
+
+        Parameters
+        ----------
+        band : str
+            Band to draw.
+        **kwargs
+            Forwarded to
+            :func:`~noobfriend.extraction.photometry._thumbnails.aperture_thumbnail`.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The single-panel figure.
+        """
+        from noobfriend.extraction.photometry._thumbnails import aperture_thumbnail
+
+        return aperture_thumbnail(self, band, **kwargs)

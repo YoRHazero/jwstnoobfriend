@@ -40,6 +40,10 @@ class Band:
         Segmentation labels restricting aperture growth, or ``None``.
     label_allowed : tuple[int, ...] or None
         Labels allowed for aperture growth, or ``None``.
+    allow_background : bool
+        When a ``label_map`` is present, whether aperture growth may extend off
+        the source's own segment into the background label ``0`` (blocked only
+        by other sources). ``True`` by default; ignored without a ``label_map``.
     """
 
     name: str
@@ -52,6 +56,7 @@ class Band:
     flux_unit: str | None
     label_map: np.ndarray | None
     label_allowed: tuple[int, ...] | None
+    allow_background: bool
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -69,9 +74,10 @@ def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
     spec : mapping
         Plain mapping with required ``"data"`` and ``"wcs"`` entries, plus
         optional ``"error"``, ``"wavelength"``, ``"wavelength_error"``,
-        ``"flux_scale_mjy"``, ``"flux_unit"``, ``"label_map"``, and
-        ``"label_allowed"``. ``wavelength_error`` must be a tuple of length 1
-        or 2; ``(value,)`` is read as symmetric.
+        ``"flux_scale_mjy"``, ``"flux_unit"``, ``"label_map"``,
+        ``"label_allowed"``, and ``"allow_background"`` (default ``True``).
+        ``wavelength_error`` must be a tuple of length 1 or 2; ``(value,)`` is
+        read as symmetric.
 
     Returns
     -------
@@ -122,6 +128,8 @@ def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
         raise ValueError(f"band {name!r} flux_scale_mjy must be finite.")
     flux_unit = None if spec.get("flux_unit") is None else str(spec["flux_unit"])
 
+    allow_background = spec.get("allow_background", True)
+
     return Band(
         name=str(name),
         data=data,
@@ -133,6 +141,7 @@ def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
         flux_unit=flux_unit,
         label_map=label_map,
         label_allowed=label_allowed_out,
+        allow_background=bool(allow_background),
     )
 
 

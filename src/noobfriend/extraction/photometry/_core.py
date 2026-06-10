@@ -25,10 +25,85 @@ import numpy as np
 
 from noobfriend.extraction._wcs import pixel_scale_per_deg, world_detector_transforms
 from noobfriend.extraction.photometry._aperture import ApertureMask, grow_aperture_mask
+from noobfriend.extraction.photometry._array import valid_data_mask
 from noobfriend.extraction.photometry._band import Band, normalize_band
 from noobfriend.extraction.photometry._coverage import reproject_coverage
 from noobfriend.extraction.photometry._measure import measure_band
 from noobfriend.extraction.photometry._result import ApertureSEDResult
+
+#: Lower bound on the scale-adjusted stop-check floor, so the annulus ring keeps
+#: enough pixels for a stable SNR estimate even on the coarsest bands.
+_LO_FLOOR = 8
+
+
+def _generic_floor(scale: float, finest_scale: float, base: int) -> int:
+    """Scale the grow stop-check warm-up floor by sky area across bands.
+
+    ``min_pixels_before_stop_check`` is a pixel count, so for the minimum
+    aperture to subtend a consistent sky *area* on grids of different pixel
+    scale the base floor is multiplied by ``(scale / finest_scale) ** 2``. The
+    scales are in pixels-per-degree, so a coarser band has a *smaller* value and
+    thus a smaller floor (the finest band keeps ``base``); the result is clamped
+    below at :data:`_LO_FLOOR` so the annulus ring stays measurable.
+
+    Parameters
+    ----------
+    scale, finest_scale : float
+        Local pixel scale (pixels-per-degree) of this band and of the finest
+        band.
+    base : int
+        Floor at the finest band (the user value or the noobase default of 30).
+
+    Returns
+    -------
+    int
+    """
+    if finest_scale <= 0.0:
+        return max(_LO_FLOOR, base)
+    scaled = base * (scale / finest_scale) ** 2
+    return max(_LO_FLOOR, int(round(scaled)))
+
+
+def _label_floor(
+    generic: int,
+    label_map: np.ndarray,
+    data: np.ndarray,
+    seed_xy: tuple[float, float],
+) -> int:
+    """Cap the warm-up floor at the seed's own segment, ``min(segment, generic)``.
+
+    The segment size is the count of growable (finite, non-zero) pixels sharing
+    the seed pixel's label. A seed on the background label ``0`` has no segment,
+    so its size is ``1`` -- there is no stable signal to grow, and the stop check
+    is left free to fire immediately.
+
+    Parameters
+    ----------
+    generic : int
+        The scale-adjusted floor from :func:`_generic_floor`.
+    label_map : numpy.ndarray
+        Segmentation labels on this band's grid.
+    data : numpy.ndarray
+        Band image, used to count only growable (valid) segment pixels.
+    seed_xy : tuple[float, float]
+        Seed ``(x, y)`` pixel.
+
+    Returns
+    -------
+    int
+    """
+    seed_x, seed_y = int(round(seed_xy[0])), int(round(seed_xy[1]))
+    n_rows, n_cols = data.shape
+    if not (0 <= seed_y < n_rows and 0 <= seed_x < n_cols):
+        return generic  # out of bounds: grow_aperture_mask raises the real error
+    seed_label = int(label_map[seed_y, seed_x])
+    if seed_label == 0:
+        segment_size = 1
+    else:
+        segment_size = int(
+            np.count_nonzero((label_map == seed_label) & valid_data_mask(data))
+        )
+    return min(segment_size, generic)
 
 
 class ApertureSED:
@@ -40,7 +115,8 @@ class ApertureSED:
         ``{band_name: spec}``; each ``spec`` is a plain mapping with required
         ``"data"`` and ``"wcs"`` entries, plus optional ``"error"``,
         ``"wavelength"``, ``"wavelength_error"``, ``"flux_scale_mjy"``,
-        ``"flux_unit"``, ``"label_map"``, and ``"label_allowed"`` (see
+        ``"flux_unit"``, ``"label_map"``, ``"label_allowed"``, and
+        ``"allow_background"`` (see
         :func:`noobfriend.extraction.photometry._band.normalize_band`).
     reference : {"finest"} or str, default "finest"
         Grid used to rasterize the union aperture. ``"finest"`` selects the band
@@ -202,7 +278,13 @@ class ApertureSED:
         seed_xy_by_band : mapping, optional
             Per-band ``(x, y)`` source pixels.
         grow_kwargs : mapping, optional
-            Extra keyword arguments forwarded to noobase aperture growth.
+            Extra keyword arguments forwarded to noobase aperture growth. A
+            ``"min_pixels_before_stop_check"`` here is treated as the *base*
+            floor at the finest band: each band's actual floor is that base
+            scaled down by relative sky area (a coarser grid gets a smaller
+            floor, clamped at 8 px) and, where a ``label_map`` is present,
+            further capped at the seed's own segment size (1 when the seed sits
+            on the background). Omit it to use the noobase default base of 30.
 
         Returns
         -------
@@ -215,19 +297,30 @@ class ApertureSED:
             aperture is empty.
         """
         seeds = self._resolve_seeds(seed_world, seed_xy_by_band)
-        reference = self._resolve_reference(seeds)
+        scales = self._band_scales(seeds)
+        reference = self._resolve_reference(scales)
 
-        source_apertures: dict[str, ApertureMask] = {
-            band.name: grow_aperture_mask(
+        user_grow_kwargs = dict(grow_kwargs or {})
+        base_floor = int(user_grow_kwargs.pop("min_pixels_before_stop_check", 30))
+        finest_scale = max(scales.values(), default=0.0)
+
+        source_apertures: dict[str, ApertureMask] = {}
+        for band in self._bands:
+            generic = _generic_floor(scales[band.name], finest_scale, base_floor)
+            floor = (
+                generic
+                if band.label_map is None
+                else _label_floor(generic, band.label_map, band.data, seeds[band.name])
+            )
+            source_apertures[band.name] = grow_aperture_mask(
                 band.data,
                 seed_xy=seeds[band.name],
                 error=band.error,
                 label_map=band.label_map,
                 label_allowed=band.label_allowed,
-                grow_kwargs=grow_kwargs,
+                allow_background=band.allow_background,
+                grow_kwargs={**user_grow_kwargs, "min_pixels_before_stop_check": floor},
             )
-            for band in self._bands
-        }
 
         union = self._build_union(reference, source_apertures)
         if not bool(union.any()):
@@ -261,6 +354,7 @@ class ApertureSED:
             union_mask=union,
             band_coverage=band_coverage,
             source_apertures=source_apertures,
+            band_images={band.name: band.data for band in self._bands},
             source_metadata=self.source_metadata,
         )
 
@@ -316,21 +410,30 @@ class ApertureSED:
             for name, seed_xy in seed_xy_by_band.items()
         }
 
-    def _resolve_reference(self, seeds: Mapping[str, tuple[float, float]]) -> Band:
-        """Return the band whose grid rasterizes the union."""
-        if self.reference != "finest":
-            return self._by_name[self.reference]
+    def _band_scales(
+        self, seeds: Mapping[str, tuple[float, float]]
+    ) -> dict[str, float]:
+        """Local pixel scale (pixels-per-degree) at the seed for every band.
 
-        def score(band: Band) -> float:
+        A larger value is a finer grid. Reused for both the reference choice and
+        the area-scaled aperture floor.
+        """
+        scales: dict[str, float] = {}
+        for band in self._bands:
             _, detector_to_world = world_detector_transforms(band.wcs)
             x, y = seeds[band.name]
             scale_x, scale_y = pixel_scale_per_deg(
                 detector_to_world, int(np.round(x)), int(np.round(y))
             )
             positive = [v for v in (scale_x, scale_y) if v > 0]
-            return float(np.mean(positive)) if positive else 0.0
+            scales[band.name] = float(np.mean(positive)) if positive else 0.0
+        return scales
 
-        return max(self._bands, key=score)
+    def _resolve_reference(self, scales: Mapping[str, float]) -> Band:
+        """Return the band whose grid rasterizes the union (finest, by default)."""
+        if self.reference != "finest":
+            return self._by_name[self.reference]
+        return max(self._bands, key=lambda band: scales[band.name])
 
 
 def _run_coroutine_blocking(coro: Any) -> Any:
