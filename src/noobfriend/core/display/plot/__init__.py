@@ -13,11 +13,30 @@ notebook cell's last expression (or via :func:`bokeh.io.show`):
 
 Render mode defaults to ``"html"`` (a self-contained iframe, robust in VS Code);
 call :func:`set_render_mode` with ``"widget"`` for the jupyter_bokeh path.
+
+Spectra are the one exception to the Bokeh backend, rendered with static
+matplotlib instead (no interactivity needed, trivial ``savefig`` export):
+
+- :func:`plot_spectrum1d` — one or more 1-D spectra with optional model overlays
+  described by :class:`ModelSpec`.
+- :func:`plot_spectrum2d` — a 2-D spectrum image stacked over its 1-D collapse
+  on a shared wavelength axis.
 """
 
 from noobfriend.core.display.plot._bokeh import set_render_mode
 from noobfriend.core.display.plot._footprint import plot_footprints
 from noobfriend.core.display.plot._image import imshow
 from noobfriend.core.display.plot._blink import imshow_blink
+from noobfriend.core.display.plot._spectrum import ModelSpec
+from noobfriend.core.display.plot._spectrum1d import plot_spectrum1d
+from noobfriend.core.display.plot._spectrum2d import plot_spectrum2d
 
-__all__ = ["imshow", "imshow_blink", "plot_footprints", "set_render_mode"]
+__all__ = [
+    "ModelSpec",
+    "imshow",
+    "imshow_blink",
+    "plot_footprints",
+    "plot_spectrum1d",
+    "plot_spectrum2d",
+    "set_render_mode",
+]
