@@ -34,12 +34,19 @@ class BandPhotometry:
         Coverage-weighted sum ``sum(w * data)`` over finite aperture pixels, in
         the band's raw per-pixel units.
     error : float or None
-        Coverage-weighted quadrature error ``sqrt(sum(w**2 * sigma**2))``, or
-        ``None`` if the band has no error image.
+        Primary 1-sigma aperture error (raw units): the *correlation-aware*
+        estimate when it can be computed (see
+        :mod:`noobfriend.extraction.photometry._noise`), otherwise the
+        :attr:`error_uncorrelated` fallback; ``None`` only when neither is
+        available.
     flux_mjy : float or None
         :attr:`flux` converted to mJy when ``flux_scale_mjy`` is known.
     error_mjy : float or None
         :attr:`error` converted to mJy when both are known.
+    error_uncorrelated : float or None
+        Independent-pixel quadrature error ``sqrt(sum(w**2 * sigma**2))``, or
+        ``None`` if the band has no error image. Underestimates correlated
+        (e.g. drizzled) noise; kept beside :attr:`error` for reference.
     flux_scale_mjy : float or None
         Multiplicative scale from one raw per-pixel value to mJy.
     flux_unit : str or None
@@ -52,6 +59,13 @@ class BandPhotometry:
     bad_fraction : float
         ``1 - valid_area / covered_area``: the fraction of the aperture area
         that is missing (non-finite) in this band.
+    background_level : float or None
+        Median per-pixel sky background (raw units), or ``None`` when the sky
+        could not be sampled (e.g. too few blank pixels).
+    snr : float or None
+        Detection signal-to-noise ``(flux - background_level * covered_area) /
+        error``, with the background taken as ``0`` when
+        :attr:`background_level` is ``None``; ``None`` when no error is known.
     flagged : bool
         ``True`` when :attr:`bad_fraction` meets the configured threshold.
     """
@@ -63,11 +77,14 @@ class BandPhotometry:
     error: float | None
     flux_mjy: float | None
     error_mjy: float | None
+    error_uncorrelated: float | None
     flux_scale_mjy: float | None
     flux_unit: str | None
     covered_area: float
     valid_area: float
     bad_fraction: float
+    background_level: float | None
+    snr: float | None
     flagged: bool
 
 
@@ -108,13 +125,14 @@ def measure_band(
         else float("nan")
     )
 
-    error_out = _measure_error(band, weight, finite, valid_area)
+    error_uncorrelated = _measure_error(band, weight, finite, valid_area)
 
     scale = band.flux_scale_mjy
     flux_mjy = None if scale is None else float(flux * scale)
-    error_mjy = (
-        None if (scale is None or error_out is None) else float(error_out * abs(scale))
-    )
+    # The primary error defaults to the uncorrelated value; the correlation-aware
+    # estimate (when computable) replaces it in measure_aperture_noise.
+    error = error_uncorrelated
+    error_mjy = None if (scale is None or error is None) else float(error * abs(scale))
 
     flagged = bad_fraction >= flag_bad_fraction
     return BandPhotometry(
@@ -122,16 +140,38 @@ def measure_band(
         wavelength=band.wavelength,
         wavelength_error=band.wavelength_error,
         flux=flux,
-        error=error_out,
+        error=error,
         flux_mjy=flux_mjy,
         error_mjy=error_mjy,
+        error_uncorrelated=error_uncorrelated,
         flux_scale_mjy=scale,
         flux_unit=band.flux_unit,
         covered_area=covered_area,
         valid_area=valid_area,
         bad_fraction=bad_fraction,
+        background_level=None,
+        snr=aperture_snr(flux, error, None, covered_area),
         flagged=flagged,
     )
+
+
+def aperture_snr(
+    flux: float,
+    error: float | None,
+    background_level: float | None,
+    covered_area: float,
+) -> float | None:
+    """Background-subtracted detection SNR, or ``None`` when not computable.
+
+    ``snr = (flux - background_level * covered_area) / error``; the background is
+    taken as ``0`` when ``background_level`` is ``None``. Returns ``None`` when
+    ``error`` is missing or non-positive, or when the result is non-finite.
+    """
+    if error is None or not error > 0.0:
+        return None
+    background = 0.0 if background_level is None else background_level * covered_area
+    value = (flux - background) / error
+    return float(value) if np.isfinite(value) else None
 
 
 def _measure_error(

@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -66,6 +67,7 @@ class ApertureSEDResult:
                 else m.wavelength_error[1],
                 "flux": m.flux,
                 "error": m.error,
+                "error_uncorrelated": m.error_uncorrelated,
                 "flux_mjy": m.flux_mjy,
                 "error_mjy": m.error_mjy,
                 "flux_scale_mjy": m.flux_scale_mjy,
@@ -73,6 +75,8 @@ class ApertureSEDResult:
                 "covered_area": m.covered_area,
                 "valid_area": m.valid_area,
                 "bad_fraction": m.bad_fraction,
+                "background_level": m.background_level,
+                "snr": m.snr,
                 "flagged": m.flagged,
             }
             for m in self.measurements
@@ -83,19 +87,77 @@ class ApertureSEDResult:
         self,
         *,
         include_flagged: bool = True,
+        detection_snr: float = 2.0,
+        upper_limit_sigma: float = 2.0,
         title: str | None = None,
-        display_plot: bool = True,
-        height: int = 500,
+        size: int = 680,
+        save: str | Path | None = None,
     ) -> Any:
-        """Plot the measured SED in mJy with flux and wavelength error bars.
+        """Plot the measured SED as a static matplotlib figure.
+
+        Bands with :attr:`BandPhotometry.snr` at least ``detection_snr`` (or an
+        unknown SNR) are drawn as detections with flux and wavelength error bars;
+        the rest are downward upper-limit arrows at ``flux + upper_limit_sigma *
+        error``. For the interactive Bokeh view with hover, use :meth:`show`.
 
         Parameters
         ----------
         include_flagged : bool, default True
-            Include bands flagged for bad pixels. Flagged points are shown in a
-            contrasting colour.
+            Include bands flagged for bad pixels, shown in a contrasting colour.
+        detection_snr : float, default 2.0
+            Minimum SNR for a band to count as a detection; must be >= 1.
+        upper_limit_sigma : float, default 2.0
+            Non-detections are drawn at ``flux + upper_limit_sigma * error``;
+            must be > 0.
         title : str, optional
             Plot title. Defaults to ``"Aperture SED"``.
+        size : int, default 680
+            Figure width in pixels; the height follows a fixed aspect ratio.
+        save : str or pathlib.Path, optional
+            If given, write the figure to this path with ``savefig``.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+
+        Raises
+        ------
+        ValueError
+            If no included band has both a wavelength and mJy flux, or if
+            ``detection_snr`` < 1 or ``upper_limit_sigma`` <= 0.
+        """
+        from noobfriend.extraction.photometry._plot import sed_figure_mpl
+
+        return sed_figure_mpl(
+            self.measurements,
+            include_flagged=include_flagged,
+            detection_snr=detection_snr,
+            upper_limit_sigma=upper_limit_sigma,
+            title=title,
+            size=size,
+            save=save,
+        )
+
+    def show(
+        self,
+        *,
+        include_flagged: bool = True,
+        detection_snr: float = 2.0,
+        upper_limit_sigma: float = 2.0,
+        title: str | None = None,
+        display_plot: bool = True,
+        height: int = 500,
+    ) -> Any:
+        """Show the measured SED as an interactive Bokeh figure (notebook).
+
+        Same detection / upper-limit split as :meth:`plot`, but interactive
+        (hover reports band, wavelength, flux, SNR, and flag state). Use
+        :meth:`plot` for a static, savable matplotlib figure.
+
+        Parameters
+        ----------
+        include_flagged, detection_snr, upper_limit_sigma, title
+            See :meth:`plot`.
         display_plot : bool, default True
             When ``True``, return the notebook-display wrapper. When ``False``,
             return the raw Bokeh figure for tests or further customization.
@@ -110,13 +172,18 @@ class ApertureSEDResult:
         Raises
         ------
         ValueError
-            If no included band has both a wavelength and mJy flux.
+            If no included band has both a wavelength and mJy flux, or if
+            ``detection_snr`` < 1 or ``upper_limit_sigma`` <= 0.
         """
         from noobfriend.core.display.plot._bokeh import display
         from noobfriend.extraction.photometry._plot import sed_figure
 
         figure = sed_figure(
-            self.measurements, include_flagged=include_flagged, title=title
+            self.measurements,
+            include_flagged=include_flagged,
+            detection_snr=detection_snr,
+            upper_limit_sigma=upper_limit_sigma,
+            title=title,
         )
         if not display_plot:
             return figure

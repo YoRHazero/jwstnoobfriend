@@ -29,6 +29,7 @@ from noobfriend.extraction.photometry._array import valid_data_mask
 from noobfriend.extraction.photometry._band import Band, normalize_band
 from noobfriend.extraction.photometry._coverage import reproject_coverage
 from noobfriend.extraction.photometry._measure import measure_band
+from noobfriend.extraction.photometry._noise import measure_aperture_noise
 from noobfriend.extraction.photometry._result import ApertureSEDResult
 
 #: Lower bound on the scale-adjusted stop-check floor, so the annulus ring keeps
@@ -261,6 +262,9 @@ class ApertureSED:
         seed_world: tuple[float, float] | None = None,
         seed_xy_by_band: Mapping[str, tuple[float, float]] | None = None,
         grow_kwargs: Mapping[str, Any] | None = None,
+        correlated_error: bool = True,
+        noise_max_lag: int = 8,
+        other_source_dilation: int = 2,
     ) -> ApertureSEDResult:
         """Measure every band through the union of their grown apertures.
 
@@ -285,6 +289,16 @@ class ApertureSED:
             floor, clamped at 8 px) and, where a ``label_map`` is present,
             further capped at the seed's own segment size (1 when the seed sits
             on the background). Omit it to use the noobase default base of 30.
+        correlated_error : bool, default True
+            Estimate each band's correlation-aware aperture error, median sky
+            background, and detection SNR (see
+            :func:`noobfriend.extraction.photometry._noise.measure_aperture_noise`).
+            When ``False``, ``error`` stays the uncorrelated quadrature value and
+            ``background_level`` is ``None``.
+        noise_max_lag : int, default 8
+            Lag-window half-width (pixels) for the sky autocovariance.
+        other_source_dilation : int, default 2
+            Dilation (pixels) of non-target sources when masking the sky.
 
         Returns
         -------
@@ -340,9 +354,18 @@ class ApertureSED:
                     coarse_step=self.coarse_step,
                 )
             band_coverage[band.name] = coverage
-            measurements.append(
-                measure_band(band, coverage, flag_bad_fraction=self.flag_bad_fraction)
+            band_photometry = measure_band(
+                band, coverage, flag_bad_fraction=self.flag_bad_fraction
             )
+            if correlated_error:
+                band_photometry = measure_aperture_noise(
+                    band,
+                    coverage,
+                    band_photometry,
+                    max_lag=noise_max_lag,
+                    other_source_dilation=other_source_dilation,
+                )
+            measurements.append(band_photometry)
 
         measured = tuple(measurements)
         if all(m.wavelength is not None for m in measured):

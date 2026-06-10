@@ -10,8 +10,16 @@ matplotlib.use("Agg")
 
 from noobfriend.extraction.photometry import ApertureSED
 from noobfriend.extraction.photometry._aperture import grow_aperture_mask
+from noobfriend.extraction.photometry._band import normalize_band
 from noobfriend.extraction.photometry._core import _generic_floor, _label_floor
 from noobfriend.extraction.photometry._coverage import reproject_coverage
+from noobfriend.extraction.photometry._measure import (
+    BandPhotometry,
+    aperture_snr,
+    measure_band,
+)
+from noobfriend.extraction.photometry._noise import measure_aperture_noise
+from noobfriend.extraction.photometry._plot import sed_figure, sed_figure_mpl
 from noobfriend.extraction.photometry._thumbnails import (
     _aperture_bbox,
     aperture_montage,
@@ -371,12 +379,17 @@ class TestApertureSEDResult:
         assert "flux_mjy" in table.colnames
         assert "covered_area" in table.colnames
 
-        fig = result.plot(display_plot=False)
-        assert fig.title.text == "Aperture SED"
-        assert fig.yaxis[0].axis_label == "Flux (mJy)"
-        assert fig.xaxis[0].axis_label == "Wavelength (µm)"
-        assert {r.glyph.__class__.__name__ for r in fig.renderers} == {"Scatter"}
-        assert fig.renderers[0].glyph.y == "flux_mjy"
+        bokeh_fig = result.show(display_plot=False)
+        assert bokeh_fig.title.text == "Aperture SED"
+        assert bokeh_fig.yaxis[0].axis_label == "Flux (mJy)"
+        assert bokeh_fig.xaxis[0].axis_label == "Wavelength (µm)"
+        assert {r.glyph.__class__.__name__ for r in bokeh_fig.renderers} == {"Scatter"}
+        assert bokeh_fig.renderers[0].glyph.y == "flux_mjy"
+
+        mpl_fig = result.plot()
+        assert mpl_fig.axes[0].get_title() == "Aperture SED"
+        assert mpl_fig.axes[0].get_xlabel() == "Wavelength (µm)"
+        assert mpl_fig.axes[0].get_ylabel() == "Flux (mJy)"
 
 
 def _three_band_result() -> Any:
@@ -546,3 +559,159 @@ class TestApertureFloor:
         data = np.ones((6, 6))
         # Seed (col 0, row 0) sits on the background label 0.
         assert _label_floor(30, labels, data, (0.0, 0.0)) == 1
+
+
+class TestApertureSnr:
+    """Background-subtracted detection SNR helper."""
+
+    def test_no_background(self) -> None:
+        assert aperture_snr(10.0, 2.0, None, 5.0) == pytest.approx(5.0)
+
+    def test_with_background(self) -> None:
+        assert aperture_snr(10.0, 2.0, 1.0, 4.0) == pytest.approx(3.0)
+
+    def test_missing_error_is_none(self) -> None:
+        assert aperture_snr(10.0, None, None, 5.0) is None
+
+    def test_zero_error_is_none(self) -> None:
+        assert aperture_snr(10.0, 0.0, None, 5.0) is None
+
+    def test_nan_flux_is_none(self) -> None:
+        assert aperture_snr(float("nan"), 2.0, None, 5.0) is None
+
+
+class TestApertureNoise:
+    """Correlation-aware error / background / SNR enrichment of a band."""
+
+    def test_correlated_error_exceeds_formal(self) -> None:
+        from scipy.ndimage import gaussian_filter
+
+        rng = np.random.default_rng(5)
+        corr = gaussian_filter(rng.normal(size=(64, 64)), 1.5)
+        corr /= corr.std()  # unit per-pixel variance, but spatially correlated
+        band = normalize_band(
+            "t", _band(corr, error=np.ones((64, 64)), flux_scale_mjy=0.01)
+        )
+        cov = np.zeros((64, 64))
+        cov[30:35, 30:35] = 1.0
+        formal = measure_band(band, cov, flag_bad_fraction=0.1)
+
+        enriched = measure_aperture_noise(
+            band, cov, formal, max_lag=8, other_source_dilation=2
+        )
+
+        assert enriched.background_level is not None
+        assert enriched.snr is not None
+        assert enriched.error_uncorrelated == pytest.approx(formal.error_uncorrelated)
+        # Positive spatial correlation inflates the aperture error over formal.
+        assert enriched.error > formal.error_uncorrelated
+
+    def test_too_little_sky_falls_back(self) -> None:
+        rng = np.random.default_rng(6)
+        band = normalize_band(
+            "t", _band(rng.normal(size=(10, 10)), error=np.ones((10, 10)))
+        )
+        cov = np.zeros((10, 10))
+        cov[4:6, 4:6] = 1.0
+        formal = measure_band(band, cov, flag_bad_fraction=0.1)
+
+        enriched = measure_aperture_noise(
+            band, cov, formal, max_lag=8, other_source_dilation=2
+        )
+
+        assert enriched is formal  # returned untouched
+        assert enriched.background_level is None
+        assert enriched.error == formal.error_uncorrelated  # uncorrelated fallback
+
+
+def _photometry(
+    *,
+    band: str,
+    wavelength: float,
+    flux_mjy: float,
+    error_mjy: float | None,
+    snr: float | None,
+    flagged: bool = False,
+) -> BandPhotometry:
+    """Build a BandPhotometry for the SED-figure tests."""
+    return BandPhotometry(
+        band=band,
+        wavelength=wavelength,
+        wavelength_error=(0.05, 0.05),
+        flux=flux_mjy * 100.0,
+        error=None if error_mjy is None else error_mjy * 100.0,
+        flux_mjy=flux_mjy,
+        error_mjy=error_mjy,
+        error_uncorrelated=None if error_mjy is None else error_mjy * 100.0,
+        flux_scale_mjy=0.01,
+        flux_unit=None,
+        covered_area=10.0,
+        valid_area=10.0,
+        bad_fraction=0.0,
+        background_level=None,
+        snr=snr,
+        flagged=flagged,
+    )
+
+
+class TestSedFigure:
+    """Detection vs upper-limit rendering in the SED plot."""
+
+    def test_splits_detections_and_upper_limits(self) -> None:
+        ms = [
+            _photometry(
+                band="A", wavelength=1.0, flux_mjy=0.1, error_mjy=0.01, snr=10.0
+            ),
+            _photometry(
+                band="B", wavelength=2.0, flux_mjy=0.001, error_mjy=0.01, snr=0.1
+            ),
+        ]
+        fig = sed_figure(ms, detection_snr=2.0, upper_limit_sigma=2.0)
+        markers = {r.glyph.marker for r in fig.renderers if hasattr(r.glyph, "marker")}
+        assert "circle" in markers  # the detection
+        assert "inverted_triangle" in markers  # the upper limit
+
+    def test_unknown_snr_is_drawn_as_detection(self) -> None:
+        ms = [
+            _photometry(
+                band="A", wavelength=1.0, flux_mjy=0.1, error_mjy=None, snr=None
+            )
+        ]
+        fig = sed_figure(ms)
+        markers = {r.glyph.marker for r in fig.renderers if hasattr(r.glyph, "marker")}
+        assert markers == {"circle"}
+
+    def test_rejects_low_detection_snr(self) -> None:
+        ms = [
+            _photometry(band="A", wavelength=1.0, flux_mjy=0.1, error_mjy=0.01, snr=5.0)
+        ]
+        with pytest.raises(ValueError, match="detection_snr"):
+            sed_figure(ms, detection_snr=0.5)
+
+    def test_rejects_nonpositive_upper_limit_sigma(self) -> None:
+        ms = [
+            _photometry(band="A", wavelength=1.0, flux_mjy=0.1, error_mjy=0.01, snr=5.0)
+        ]
+        with pytest.raises(ValueError, match="upper_limit_sigma"):
+            sed_figure(ms, upper_limit_sigma=0.0)
+
+    def test_mpl_renders_detections_and_limits(self) -> None:
+        ms = [
+            _photometry(
+                band="A", wavelength=1.0, flux_mjy=0.1, error_mjy=0.01, snr=10.0
+            ),
+            _photometry(
+                band="B", wavelength=2.0, flux_mjy=0.001, error_mjy=0.01, snr=0.1
+            ),
+        ]
+        fig = sed_figure_mpl(ms, detection_snr=2.0, upper_limit_sigma=2.0)
+        assert fig.axes[0].get_ylabel() == "Flux (mJy)"
+        # one errorbar container for the detection, one for the upper limit
+        assert len(fig.axes[0].containers) >= 2
+
+    def test_mpl_rejects_low_detection_snr(self) -> None:
+        ms = [
+            _photometry(band="A", wavelength=1.0, flux_mjy=0.1, error_mjy=0.01, snr=5.0)
+        ]
+        with pytest.raises(ValueError, match="detection_snr"):
+            sed_figure_mpl(ms, detection_snr=0.5)
