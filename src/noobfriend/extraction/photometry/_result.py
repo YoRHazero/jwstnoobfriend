@@ -17,6 +17,10 @@ class ApertureSEDResult:
 
     Attributes
     ----------
+    source_id : str
+        Identifier of the measured source (used as the default SED plot title).
+    ra, dec : float
+        Source world coordinate in degrees (ICRS).
     measurements : tuple[BandPhotometry, ...]
         Per-band photometry, sorted by wavelength when every band has one,
         otherwise in input band order.
@@ -33,17 +37,26 @@ class ApertureSEDResult:
         Per-band native science image, kept so the result is self-contained for
         the aperture thumbnails (see :meth:`plot_apertures`); same grid and
         shape as the matching ``band_coverage`` and ``source_apertures`` entry.
-    source_metadata : mapping
-        Optional provenance metadata, e.g. grizli-cutout URLs and filters.
+    label_maps : mapping
+        Per-band segmentation map that actually confined the band's growth
+        (``None`` where it grew unconstrained), kept so :meth:`plot_segmentation`
+        can show the segmentation that was used.
     """
 
+    source_id: str
+    ra: float
+    dec: float
     measurements: tuple[BandPhotometry, ...]
     reference_band: str
     union_mask: np.ndarray
     band_coverage: Mapping[str, np.ndarray]
     source_apertures: Mapping[str, ApertureMask]
     band_images: Mapping[str, np.ndarray]
-    source_metadata: Mapping[str, Any]
+    label_maps: Mapping[str, np.ndarray | None]
+
+    def _default_title(self) -> str:
+        """SED plot title from the source id, or a generic fallback."""
+        return f"{self.source_id} aperture SED" if self.source_id else "Aperture SED"
 
     def to_table(self) -> Any:
         """Return the SED measurements as an :class:`astropy.table.Table`.
@@ -133,7 +146,7 @@ class ApertureSEDResult:
             include_flagged=include_flagged,
             detection_snr=detection_snr,
             upper_limit_sigma=upper_limit_sigma,
-            title=title,
+            title=title or self._default_title(),
             size=size,
             save=save,
         )
@@ -183,7 +196,7 @@ class ApertureSEDResult:
             include_flagged=include_flagged,
             detection_snr=detection_snr,
             upper_limit_sigma=upper_limit_sigma,
-            title=title,
+            title=title or self._default_title(),
         )
         if not display_plot:
             return figure
@@ -201,11 +214,21 @@ class ApertureSEDResult:
         Parameters
         ----------
         **kwargs
-            Forwarded to
-            :func:`~noobfriend.extraction.photometry._thumbnails.aperture_montage`
-            (``bands``, ``ncols``, ``crop``, ``cmap``, ``stretch``,
-            ``vmin``/``vmax``/``pmin``/``pmax``, the overlay colours and
-            toggles, ``panel_size``, ``title``, ``save``).
+            Display options (all keyword-only):
+
+            - ``zoom_in`` (bool, default ``False``) frames each panel on the
+              source instead of the full cutout, with a ``zoom_pad`` (default
+              ``0.3``) margin as a fraction of the source extent;
+            - ``bands`` selects which bands to draw (default all) and ``ncols``
+              the montage column count;
+            - ``cmap``, ``stretch`` (``"linear"`` or ``"log"``) and
+              ``vmin`` / ``vmax`` / ``pmin`` / ``pmax`` set the thumbnail
+              background scaling;
+            - ``show_aperture`` / ``show_coverage`` / ``show_seed`` toggle the
+              overlays and ``aperture_color`` / ``coverage_color`` /
+              ``coverage_alpha`` style them;
+            - ``panel_size`` is the panel side length in inches;
+            - ``title`` and ``save`` set the figure title and an output path.
 
         Returns
         -------
@@ -214,7 +237,7 @@ class ApertureSEDResult:
         """
         from noobfriend.extraction.photometry._thumbnails import aperture_montage
 
-        return aperture_montage(self, **kwargs)
+        return aperture_montage(self._scene(), **kwargs)
 
     def plot_thumbnail(self, band: str, **kwargs: Any) -> Any:
         """Draw one band's thumbnail with its aperture and union overlays, enlarged.
@@ -227,8 +250,17 @@ class ApertureSEDResult:
         band : str
             Band to draw.
         **kwargs
-            Forwarded to
-            :func:`~noobfriend.extraction.photometry._thumbnails.aperture_thumbnail`.
+            Display options (all keyword-only):
+
+            - ``zoom_in`` (bool, default ``False``) frames the source instead of
+              the full cutout, with a ``zoom_pad`` (default ``0.3``) margin;
+            - ``cmap``, ``stretch`` (``"linear"`` or ``"log"``) and
+              ``vmin`` / ``vmax`` / ``pmin`` / ``pmax`` set the background scaling;
+            - ``show_aperture`` / ``show_coverage`` / ``show_seed`` toggle the
+              overlays and ``aperture_color`` / ``coverage_color`` /
+              ``coverage_alpha`` style them;
+            - ``size`` is the figure side length in inches;
+            - ``title`` and ``save`` set the figure title and an output path.
 
         Returns
         -------
@@ -237,4 +269,74 @@ class ApertureSEDResult:
         """
         from noobfriend.extraction.photometry._thumbnails import aperture_thumbnail
 
-        return aperture_thumbnail(self, band, **kwargs)
+        return aperture_thumbnail(self._scene(), band, **kwargs)
+
+    def plot_segmentation(self, band: str, **kwargs: Any) -> Any:
+        """Draw the segmentation map that confined one band's growth, with the image.
+
+        Shows the ``label_map`` that was *actually used* to grow ``band`` beside
+        its science image (seed marked, the seed's segment outlined). The
+        segmentation is fixed once measured, so -- unlike the draft's live
+        preview -- this takes no ``segment`` parameters. Raises if the band grew
+        unconstrained (no segmentation map).
+
+        Parameters
+        ----------
+        band : str
+            Band to draw.
+        **kwargs
+            Display options (all keyword-only):
+
+            - ``zoom_in`` (bool, default ``False``) frames both panels on the
+              seed's segment instead of the full cutout, with a ``zoom_pad``
+              (default ``0.3``) margin;
+            - ``cmap``, ``stretch`` (``"linear"`` or ``"log"``) and
+              ``vmin`` / ``vmax`` / ``pmin`` / ``pmax`` set the science-image
+              scaling, and ``labels_cmap`` the label panel's colormap;
+            - ``show_seed`` toggles the seed marker;
+            - ``panel_size`` is each panel's side length in inches;
+            - ``title`` (default the band name) and ``save`` set the figure title
+              and an output path.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The two-panel figure.
+
+        Raises
+        ------
+        ValueError
+            If ``band`` is unknown, or it grew without a segmentation map.
+        """
+        from noobfriend.extraction.photometry._thumbnails import segmentation_montage
+
+        if band not in self.band_images:
+            raise ValueError(
+                f"unknown band {band!r}; available: {sorted(self.band_images)}."
+            )
+        labels = self.label_maps.get(band)
+        if labels is None:
+            raise ValueError(
+                f"band {band!r} grew without a segmentation map; nothing to show."
+            )
+        kwargs.setdefault("title", band)
+        return segmentation_montage(
+            self.band_images[band],
+            labels,
+            self.source_apertures[band].seed_xy,
+            **kwargs,
+        )
+
+    def _scene(self) -> Any:
+        """Build the thumbnail scene from the measured bands."""
+        from noobfriend.extraction.photometry._thumbnails import ThumbnailScene
+
+        return ThumbnailScene(
+            band_images=self.band_images,
+            source_apertures=self.source_apertures,
+            band_coverage=self.band_coverage,
+            reference_band=self.reference_band,
+            order=tuple(m.band for m in self.measurements),
+            wavelengths={m.band: m.wavelength for m in self.measurements},
+            flagged={m.band: m.flagged for m in self.measurements},
+        )

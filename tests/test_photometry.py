@@ -1,5 +1,6 @@
 """Tests for native-grid multi-band aperture photometry and SED plotting."""
 
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import matplotlib
@@ -11,8 +12,9 @@ matplotlib.use("Agg")
 from noobfriend.extraction.photometry import ApertureSED
 from noobfriend.extraction.photometry._aperture import grow_aperture_mask
 from noobfriend.extraction.photometry._band import normalize_band
-from noobfriend.extraction.photometry._core import _generic_floor, _label_floor
+from noobfriend.extraction.photometry._core import _auto_label_map
 from noobfriend.extraction.photometry._coverage import reproject_coverage
+from noobfriend.extraction.photometry._floor import _generic_floor, _label_floor
 from noobfriend.extraction.photometry._measure import (
     BandPhotometry,
     aperture_snr,
@@ -20,10 +22,7 @@ from noobfriend.extraction.photometry._measure import (
 )
 from noobfriend.extraction.photometry._noise import measure_aperture_noise
 from noobfriend.extraction.photometry._plot import sed_figure, sed_figure_mpl
-from noobfriend.extraction.photometry._thumbnails import (
-    _aperture_bbox,
-    aperture_montage,
-)
+from noobfriend.extraction.photometry._thumbnails import _aperture_bbox
 
 
 class LinearWCS:
@@ -71,6 +70,11 @@ class LinearWCS:
             (x - self.x0) * self.scale + self.ra0,
             (y - self.y0) * self.scale + self.dec0,
         )
+
+
+def _sed(bands: dict[str, Any], **kwargs: Any) -> ApertureSED:
+    """Build an ApertureSED with a fixed test identity."""
+    return ApertureSED("TEST", 0.0, 0.0, bands=bands, **kwargs)
 
 
 def _label(shape: tuple[int, int], pixels: set[tuple[int, int]]) -> np.ndarray:
@@ -136,8 +140,8 @@ class TestApertureSEDInputs:
 
     def test_wavelength_error_must_be_tuple(self) -> None:
         with pytest.raises(ValueError, match="wavelength_error must be a tuple"):
-            ApertureSED(
-                bands={
+            _sed(
+                {
                     "F090W": {
                         "data": np.ones((3, 3)),
                         "wcs": LinearWCS(),
@@ -149,8 +153,8 @@ class TestApertureSEDInputs:
 
     def test_wavelength_error_len_one_is_symmetric(self) -> None:
         data = np.ones((3, 3))
-        sed = ApertureSED(
-            bands={
+        sed = _sed(
+            {
                 "F090W": _band(
                     data,
                     wavelength=0.9,
@@ -160,17 +164,17 @@ class TestApertureSEDInputs:
             }
         )
 
-        result = sed.measure(
+        result = sed.draft(
             seed_xy_by_band={"F090W": (1.0, 1.0)},
             grow_kwargs=_grow_all_label_kwargs(),
-        )
+        ).measure()
 
         assert result.measurements[0].wavelength_error == (0.05, 0.05)
 
     def test_wavelength_error_other_lengths_raise(self) -> None:
         with pytest.raises(ValueError, match="length 1 or 2"):
-            ApertureSED(
-                bands={
+            _sed(
+                {
                     "F090W": _band(
                         np.ones((3, 3)),
                         wavelength=0.9,
@@ -179,13 +183,98 @@ class TestApertureSEDInputs:
                 }
             )
 
+    def test_empty_bands_raise(self) -> None:
+        with pytest.raises(ValueError, match="at least one band"):
+            ApertureSED("TEST", 0.0, 0.0)
+
+
+class TestOptionalWCS:
+    """WCS-less bands get a synthesised tangent-plane WCS from the cutout size."""
+
+    def test_unknown_band_key_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unknown key"):
+            ApertureSED(
+                "T",
+                10.0,
+                20.0,
+                bands={
+                    "A": {
+                        "data": np.ones((3, 3)),
+                        "wcs": LinearWCS(),
+                        "lable_map": None,  # typo for label_map
+                    }
+                },
+            )
+
+    def test_no_wcs_no_size_raises(self) -> None:
+        with pytest.raises(ValueError, match="no 'wcs'"):
+            ApertureSED("T", 10.0, 20.0, bands={"A": {"data": np.ones((5, 5))}})
+
+    def test_synthesized_wcs_seeds_at_centre(self) -> None:
+        sed = ApertureSED(
+            "T",
+            10.0,
+            20.0,
+            bands={"A": {"data": np.ones((5, 5)), "wavelength": 1.0}},
+            cutout_size_arcsec=5.0,
+        )
+        draft = sed.draft(grow_kwargs=_grow_all_label_kwargs())
+        # (ra, dec) maps to the centre pixel (2, 2) of the 5x5 image.
+        assert draft.source_apertures["A"].seed_xy == (2, 2)
+        result = draft.measure(correlated_error=False)
+        assert bool(result.union_mask.any())
+        assert bool(result.union_mask[2, 2])  # the union grows from the centre seed
+
+    def test_synthesized_wcs_pixel_scale(self) -> None:
+        from noobfriend.extraction._wcs import (
+            pixel_scale_per_deg,
+            tangent_plane_wcs,
+            world_detector_transforms,
+        )
+
+        wcs = tangent_plane_wcs(10.0, 20.0, size_arcsec=5.0, shape=(10, 10))
+        _, detector_to_world = world_detector_transforms(wcs)
+        scale_x, scale_y = pixel_scale_per_deg(detector_to_world, 5, 5)
+        # 10 px over 5" -> 0.5"/px -> 3600 / 0.5 = 7200 px/deg.
+        assert scale_x == pytest.approx(7200.0, rel=1e-3)
+        assert scale_y == pytest.approx(7200.0, rel=1e-3)
+
+    def test_two_wcsless_bands_share_a_union(self) -> None:
+        # Co-centred cutouts at two resolutions, both WCS synthesised.
+        sed = ApertureSED(
+            "T",
+            10.0,
+            20.0,
+            bands={
+                "fine": {
+                    "data": np.ones((8, 8)),
+                    "wavelength": 1.0,
+                    "flux_scale_mjy": 0.01,
+                },
+                "coarse": {
+                    "data": np.full((4, 4), 4.0),
+                    "wavelength": 2.0,
+                    "flux_scale_mjy": 0.01,
+                },
+            },
+            cutout_size_arcsec=4.0,
+            reference="finest",
+        )
+        result = sed.draft(grow_kwargs=_grow_all_label_kwargs()).measure(
+            correlated_error=False
+        )
+        by_band = {m.band: m for m in result.measurements}
+        assert result.reference_band == "fine"  # the smaller pixels
+        assert by_band["fine"].flux_mjy > 0
+        assert by_band["coarse"].flux_mjy > 0
+
 
 class TestApertureSEDMeasure:
     """Union-aperture measurement behaviour."""
 
     def test_single_band_native_sum(self) -> None:
-        sed = ApertureSED(
-            bands={
+        sed = _sed(
+            {
                 "F090W": _band(
                     np.ones((5, 5)),
                     wavelength=0.9,
@@ -197,10 +286,10 @@ class TestApertureSEDMeasure:
             }
         )
 
-        result = sed.measure(
+        result = sed.draft(
             seed_xy_by_band={"F090W": (2.0, 2.0)},
             grow_kwargs=_grow_all_label_kwargs(),
-        )
+        ).measure()
 
         m = result.measurements[0]
         assert m.flux == pytest.approx(3.0)
@@ -213,14 +302,28 @@ class TestApertureSEDMeasure:
         assert m.bad_fraction == pytest.approx(0.0)
         assert not m.flagged
 
+    def test_result_carries_source_identity(self) -> None:
+        sed = ApertureSED(
+            "GOODS-1",
+            12.5,
+            -7.25,
+            bands={"F090W": _band(np.ones((3, 3)), label_pixels={(1, 1)})},
+        )
+        result = sed.draft(
+            seed_xy_by_band={"F090W": (1.0, 1.0)},
+            grow_kwargs=_grow_all_label_kwargs(),
+        ).measure()
+        assert result.source_id == "GOODS-1"
+        assert (result.ra, result.dec) == (12.5, -7.25)
+
     def test_union_flags_band_with_nan_in_aperture(self) -> None:
         a = np.ones((5, 5))
         b = np.ones((5, 5))
         b[2, 1] = np.nan  # In the union via band A, missing for band B.
         err = np.ones((5, 5))
 
-        sed = ApertureSED(
-            bands={
+        sed = _sed(
+            {
                 "F090W": _band(
                     a,
                     wavelength=0.9,
@@ -239,10 +342,10 @@ class TestApertureSEDMeasure:
             flag_bad_fraction=0.10,
         )
 
-        result = sed.measure(
+        result = sed.draft(
             seed_xy_by_band={"F090W": (2.0, 2.0), "F115W": (2.0, 2.0)},
             grow_kwargs=_grow_all_label_kwargs(),
-        )
+        ).measure()
 
         assert result.reference_band == "F090W"
         assert int(result.union_mask.sum()) == 3
@@ -258,8 +361,8 @@ class TestApertureSEDMeasure:
         assert by_band["F115W"].flagged
 
     def test_reference_finest_selects_smallest_pixel_scale_band(self) -> None:
-        sed = ApertureSED(
-            bands={
+        sed = _sed(
+            {
                 "coarse": _band(
                     np.ones((5, 5)),
                     wcs=LinearWCS(scale=2.0),
@@ -276,24 +379,235 @@ class TestApertureSEDMeasure:
             reference="finest",
         )
 
-        result = sed.measure(
+        result = sed.draft(
             seed_world=(2.0, 2.0),
             grow_kwargs=_grow_all_label_kwargs(),
-        )
+        ).measure()
 
         assert result.reference_band == "fine"
         assert result.union_mask.shape == (5, 5)
 
-    def test_seed_keys_must_match_bands(self) -> None:
+    def test_seed_defaults_to_source_position(self) -> None:
+        # Source at (ra, dec) = (2, 2) maps to pixel (2, 2) under the identity WCS.
         sed = ApertureSED(
-            bands={"F090W": _band(np.ones((3, 3)), label_pixels={(1, 1)})}
+            "TEST",
+            2.0,
+            2.0,
+            bands={"F090W": _band(np.ones((5, 5)), label_pixels={(2, 2)})},
         )
+        result = sed.draft(grow_kwargs=_grow_all_label_kwargs()).measure()
+        assert int(result.union_mask.sum()) == 1
+
+    def test_seed_keys_must_match_bands(self) -> None:
+        sed = _sed({"F090W": _band(np.ones((3, 3)), label_pixels={(1, 1)})})
 
         with pytest.raises(ValueError, match="keys must match band names"):
-            sed.measure(
+            sed.draft(
                 seed_xy_by_band={"F115W": (1.0, 1.0)},
                 grow_kwargs=_grow_all_label_kwargs(),
             )
+
+
+class TestApertureSEDBuild:
+    """The synchronous ``build`` assembler and its database merge."""
+
+    def test_merge_prefers_existing_band(self, monkeypatch: Any) -> None:
+        async def fake_loader(ra: float, dec: float, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                bands={
+                    "f090w": _band(np.ones((5, 5)), wavelength=0.9),
+                    "f150w": _band(np.ones((5, 5)), wavelength=1.5),
+                },
+                metadata={},
+            )
+
+        monkeypatch.setattr("noobfriend.core.io.load_grizli_cutout", fake_loader)
+
+        sed = ApertureSED.build(
+            "S",
+            0.0,
+            0.0,
+            bands={"f090w": _band(np.ones((3, 3)), wavelength=0.9)},
+            extra_database="grizli",
+        )
+
+        assert set(sed._by_name) == {"f090w", "f150w"}
+        # The directly-provided band wins on conflict (3x3, not the fetched 5x5).
+        assert sed._by_name["f090w"].data.shape == (3, 3)
+        assert sed._by_name["f150w"].data.shape == (5, 5)
+
+    def test_rejects_unknown_database(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported extra_database"):
+            ApertureSED.build(
+                "S",
+                0.0,
+                0.0,
+                bands={"a": _band(np.ones((3, 3)))},
+                extra_database="sdss",
+            )
+
+
+class TestApertureSEDDraft:
+    """The inspectable draft: union selection and per-band re-growth."""
+
+    def _two_band_draft(self) -> Any:
+        sed = _sed(
+            {
+                "A": _band(
+                    np.ones((5, 5)),
+                    wavelength=1.0,
+                    label_pixels={(2, 1), (2, 2)},
+                ),
+                "B": _band(
+                    np.ones((5, 5)),
+                    wavelength=2.0,
+                    label_pixels={(2, 2), (2, 3)},
+                ),
+            },
+            reference="A",
+        )
+        return sed.draft(
+            seed_xy_by_band={"A": (2.0, 2.0), "B": (2.0, 2.0)},
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+
+    def test_union_bands_selects_subset(self) -> None:
+        draft = self._two_band_draft()
+        assert int(draft.union_mask().sum()) == 3  # A and B apertures combined
+        assert int(draft.union_mask(union_bands=["A"]).sum()) == 2  # A only
+
+    def test_union_bands_unknown_raises(self) -> None:
+        draft = self._two_band_draft()
+        with pytest.raises(ValueError, match="unknown union band"):
+            draft.union_mask(union_bands=["Z"])
+
+    def test_measure_through_subset_union(self) -> None:
+        draft = self._two_band_draft()
+        result = draft.measure(union_bands=["A"], correlated_error=False)
+        # Both bands are still measured, but through A's 2-pixel union.
+        by_band = {m.band: m for m in result.measurements}
+        assert by_band["A"].covered_area == pytest.approx(2.0)
+        assert by_band["B"].covered_area == pytest.approx(2.0)
+
+    def test_regrow_replaces_one_band(self) -> None:
+        sed = _sed({"A": _band(np.ones((5, 5)), wavelength=1.0)})
+        draft = sed.draft(
+            seed_xy_by_band={"A": (2.0, 2.0)},
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+        before = int(draft.source_apertures["A"].mask.sum())
+
+        labels = _label((5, 5), {(2, 2)})
+        regrown = draft.regrow("A", label_map=labels, allow_background=False)
+
+        assert int(regrown.source_apertures["A"].mask.sum()) == 1  # confined
+        assert before > 1
+        # The original draft is untouched (frozen, returns a new instance).
+        assert int(draft.source_apertures["A"].mask.sum()) == before
+
+    def test_regrow_unknown_band_raises(self) -> None:
+        draft = self._two_band_draft()
+        with pytest.raises(ValueError, match="unknown band"):
+            draft.regrow("Z")
+
+    def test_plot_apertures_previews_before_measure(self) -> None:
+        draft = self._two_band_draft()
+        fig = draft.plot_apertures()
+        titled = [ax for ax in fig.axes if ax.get_title()]
+        assert len(titled) == 2
+
+
+class TestPlotSegmentation:
+    """Side-by-side image / segmentation diagnostic (draft live, result used)."""
+
+    def _blob_sed(self) -> ApertureSED:
+        data = np.zeros((9, 9))
+        data[3:6, 3:6] = 1.0  # a detectable source at the seed
+        return _sed({"A": _band(data, wavelength=1.0)})
+
+    def test_draft_segmentation_renders_two_panels(self) -> None:
+        draft = self._blob_sed().draft(
+            seed_xy_by_band={"A": (4.0, 4.0)}, grow_kwargs=_grow_all_label_kwargs()
+        )
+        fig = draft.plot_segmentation("A")
+        assert len(fig.axes) == 2  # image | labels
+
+    def test_draft_segmentation_unknown_band(self) -> None:
+        draft = self._blob_sed().draft(
+            seed_xy_by_band={"A": (4.0, 4.0)}, grow_kwargs=_grow_all_label_kwargs()
+        )
+        with pytest.raises(ValueError, match="unknown band"):
+            draft.plot_segmentation("Z")
+
+    def test_result_shows_used_label_map(self) -> None:
+        result = (
+            self._blob_sed()
+            .draft(
+                seed_xy_by_band={"A": (4.0, 4.0)},
+                auto_segment=True,
+                grow_kwargs=_grow_all_label_kwargs(),
+            )
+            .measure(correlated_error=False)
+        )
+        assert result.label_maps["A"] is not None
+        fig = result.plot_segmentation("A")
+        assert len(fig.axes) == 2
+
+    def test_result_raises_when_unconstrained(self) -> None:
+        result = (
+            self._blob_sed()
+            .draft(
+                seed_xy_by_band={"A": (4.0, 4.0)},
+                grow_kwargs=_grow_all_label_kwargs(),
+            )
+            .measure(correlated_error=False)
+        )
+        assert result.label_maps["A"] is None
+        with pytest.raises(ValueError, match="without a segmentation map"):
+            result.plot_segmentation("A")
+
+
+class TestAutoSegment:
+    """Auto-segmentation label resolution and its precedence."""
+
+    def test_auto_label_map_detected(self) -> None:
+        data = np.zeros((9, 9))
+        data[3:6, 3:6] = 1.0
+        lm = _auto_label_map(data, (4.0, 4.0), None)
+        assert lm is not None
+        assert lm[4, 4] > 0
+
+    def test_auto_label_map_not_detected(self) -> None:
+        data = np.zeros((9, 9))
+        data[0:3, 0:3] = 1.0  # source in the corner, seed on background
+        assert _auto_label_map(data, (5.0, 5.0), None) is None
+
+    def test_auto_segment_attaches_only_when_unconstrained(self) -> None:
+        data = np.zeros((9, 9))
+        data[3:6, 3:6] = 1.0
+        sed = _sed({"A": _band(data, wavelength=1.0)})
+        on = sed.draft(
+            seed_xy_by_band={"A": (4.0, 4.0)},
+            auto_segment=True,
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+        off = sed.draft(
+            seed_xy_by_band={"A": (4.0, 4.0)},
+            auto_segment=False,
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+        assert on.label_maps["A"] is not None
+        assert off.label_maps["A"] is None
+
+    def test_override_label_map_wins_over_spec(self) -> None:
+        override = _label((5, 5), {(1, 1), (2, 2)})
+        sed = _sed({"A": _band(np.ones((5, 5)), wavelength=1.0, label_pixels={(2, 2)})})
+        draft = sed.draft(
+            seed_xy_by_band={"A": (2.0, 2.0)},
+            label_map_by_band={"A": override},
+            grow_kwargs=_grow_all_label_kwargs(),
+        )
+        np.testing.assert_array_equal(draft.label_maps["A"], override)
 
 
 class TestFluxConservation:
@@ -307,8 +621,8 @@ class TestFluxConservation:
         # a common grid (the old behaviour) would make ``coarse`` read 4x high.
         fine = np.ones((8, 8))
         coarse = np.full((4, 4), 4.0)
-        sed = ApertureSED(
-            bands={
+        sed = _sed(
+            {
                 "fine": _band(
                     fine,
                     wcs=LinearWCS(scale=1.0),
@@ -327,10 +641,10 @@ class TestFluxConservation:
             reference="finest",
         )
 
-        result = sed.measure(
+        result = sed.draft(
             seed_world=(3.5, 3.5),
             grow_kwargs=_grow_all_label_kwargs(),
-        )
+        ).measure()
 
         by_band = {m.band: m for m in result.measurements}
         assert result.reference_band == "fine"
@@ -357,8 +671,8 @@ class TestApertureSEDResult:
     """Result export and plot helpers."""
 
     def test_to_table_and_plot_smoke(self) -> None:
-        sed = ApertureSED(
-            bands={
+        sed = _sed(
+            {
                 "F090W": _band(
                     np.ones((3, 3)),
                     wavelength=0.9,
@@ -368,10 +682,10 @@ class TestApertureSEDResult:
                 )
             }
         )
-        result = sed.measure(
+        result = sed.draft(
             seed_xy_by_band={"F090W": (1.0, 1.0)},
             grow_kwargs=_grow_all_label_kwargs(),
-        )
+        ).measure()
 
         table = result.to_table()
         assert table["band"][0] == "F090W"
@@ -380,22 +694,22 @@ class TestApertureSEDResult:
         assert "covered_area" in table.colnames
 
         bokeh_fig = result.show(display_plot=False)
-        assert bokeh_fig.title.text == "Aperture SED"
+        assert bokeh_fig.title.text == "TEST aperture SED"
         assert bokeh_fig.yaxis[0].axis_label == "Flux (mJy)"
         assert bokeh_fig.xaxis[0].axis_label == "Wavelength (µm)"
         assert {r.glyph.__class__.__name__ for r in bokeh_fig.renderers} == {"Scatter"}
         assert bokeh_fig.renderers[0].glyph.y == "flux_mjy"
 
         mpl_fig = result.plot()
-        assert mpl_fig.axes[0].get_title() == "Aperture SED"
+        assert mpl_fig.axes[0].get_title() == "TEST aperture SED"
         assert mpl_fig.axes[0].get_xlabel() == "Wavelength (µm)"
         assert mpl_fig.axes[0].get_ylabel() == "Flux (mJy)"
 
 
 def _three_band_result() -> Any:
     """Measure a 3-band SED whose apertures all contain the seed pixel (3, 3)."""
-    sed = ApertureSED(
-        bands={
+    sed = _sed(
+        {
             "F090W": _band(
                 np.ones((7, 7)),
                 wavelength=0.9,
@@ -420,14 +734,14 @@ def _three_band_result() -> Any:
         },
         reference="F090W",
     )
-    return sed.measure(
+    return sed.draft(
         seed_xy_by_band={k: (3.0, 3.0) for k in ("F090W", "F150W", "F200W")},
         grow_kwargs=_grow_all_label_kwargs(),
-    )
+    ).measure()
 
 
 class TestApertureBBox:
-    """Footprint bounding box used to crop each thumbnail panel."""
+    """Footprint bounding box used to frame a zoomed-in thumbnail panel."""
 
     def test_tight_box_with_no_pad(self) -> None:
         fp = np.zeros((10, 10), dtype=bool)
@@ -475,7 +789,7 @@ class TestApertureThumbnails:
 
     def test_ncols_controls_grid(self) -> None:
         result = _three_band_result()
-        fig = aperture_montage(result, ncols=3)
+        fig = result.plot_apertures(ncols=3)
         assert fig.axes[0].get_subplotspec().get_geometry()[:2] == (1, 3)
 
     def test_unknown_band_raises(self) -> None:
@@ -497,6 +811,17 @@ class TestApertureThumbnails:
         assert len(on.axes[0].lines) == 1
         off = result.plot_thumbnail("F090W", show_seed=False)
         assert len(off.axes[0].lines) == 0
+
+    def test_full_cutout_by_default_zoom_in_frames_source(self) -> None:
+        result = _three_band_result()
+        # Default: the whole 7x7 cutout is shown (imshow spans -0.5..6.5 = 7 px).
+        full = result.plot_thumbnail("F090W")
+        full_x = full.axes[0].get_xlim()
+        assert (full_x[1] - full_x[0]) >= 7.0
+        # zoom_in frames the source, a strict sub-window of the full cutout.
+        zoomed = result.plot_thumbnail("F090W", zoom_in=True)
+        zoom_x = zoomed.axes[0].get_xlim()
+        assert (zoom_x[1] - zoom_x[0]) < (full_x[1] - full_x[0])
 
 
 class TestAllowBackground:

@@ -10,9 +10,11 @@ The two non-obvious things this module isolates from the rest of the package:
    the grism dispersion convention.
 """
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from astropy.coordinates import SkyCoord
+from astropy.wcs import WCS as AstropyWCS
 from gwcs import WCS
 
 #: A 2-D coordinate transform: ``f(a, b) -> (c, d)``. Inputs and outputs may be
@@ -141,3 +143,63 @@ def pixel_scale_per_deg(
     pixel_per_deg_x = 1.0 / deg_per_pixel_x if deg_per_pixel_x > 0 else 0.0
     pixel_per_deg_y = 1.0 / deg_per_pixel_y if deg_per_pixel_y > 0 else 0.0
     return pixel_per_deg_x, pixel_per_deg_y
+
+
+@dataclass(frozen=True)
+class _AstropyWCSAdapter:
+    """Expose an astropy FITS WCS through noobfriend's transform protocol."""
+
+    wcs: AstropyWCS
+    available_frames: tuple[str, str] = ("detector", "world")
+
+    def get_transform(self, from_frame: str, to_frame: str) -> Transform:
+        """Return the detector/world transform using astropy's 0-based API."""
+        if (from_frame, to_frame) == ("world", "detector"):
+            return self.wcs.world_to_pixel_values
+        if (from_frame, to_frame) == ("detector", "world"):
+            return self.wcs.pixel_to_world_values
+        raise ValueError(f"Unsupported transform: {from_frame!r} -> {to_frame!r}.")
+
+
+def tangent_plane_wcs(
+    ra: float, dec: float, size_arcsec: float, shape: tuple[int, int]
+) -> _AstropyWCSAdapter:
+    """Synthesise an axis-aligned tangent-plane WCS for a WCS-less cutout.
+
+    Builds a ``TAN`` WCS centred on ``(ra, dec)`` -- the source is taken to sit
+    at the image centre -- whose pixel scale follows from the cutout spanning
+    ``size_arcsec`` along each axis over ``shape`` pixels. It makes a band that
+    carries no ``wcs`` behave like any real one for seeding, pixel-scale
+    estimation, and mask reprojection; see
+    :func:`noobfriend.extraction.photometry._band.normalize_band`.
+
+    Parameters
+    ----------
+    ra, dec : float
+        Source / cutout-centre world coordinate in degrees (ICRS).
+    size_arcsec : float
+        Full angular size of the cutout along each axis, in arcseconds.
+    shape : tuple[int, int]
+        Image ``(rows, cols)`` shape.
+
+    Returns
+    -------
+    _AstropyWCSAdapter
+        A WCS adapter exposing the detector/world transform protocol, so it is a
+        drop-in for the WCS objects the rest of the package consumes.
+
+    Notes
+    -----
+    The synthesised WCS is axis-aligned (no rotation) and centred on the source,
+    so multiple WCS-less bands are taken to be co-centred cutouts of the *same*
+    source -- correct for typical single-source stamps, but not for bands that
+    are not co-centred (give those a real WCS).
+    """
+    n_rows, n_cols = shape
+    size_deg = float(size_arcsec) / 3600.0
+    wcs = AstropyWCS(naxis=2)
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    wcs.wcs.crval = [float(ra), float(dec)]
+    wcs.wcs.crpix = [(n_cols + 1) / 2.0, (n_rows + 1) / 2.0]  # 1-based image centre
+    wcs.wcs.cdelt = [-size_deg / n_cols, size_deg / n_rows]
+    return _AstropyWCSAdapter(wcs)

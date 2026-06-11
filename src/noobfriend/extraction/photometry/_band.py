@@ -7,11 +7,61 @@ such as :func:`noobfriend.core.io.load_grizli_cutout` do not have to import or
 construct any photometry type.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
+
+
+class BandSpec(TypedDict, total=False):
+    """One photometry band as a plain dict, with statically-checked keys.
+
+    Because this is a :class:`~typing.TypedDict`, a dict literal passed to
+    :class:`~noobfriend.extraction.photometry.ApertureSED` is checked by editors
+    for key names and value types -- no import or construction needed. ``data``
+    is the only required key (enforced at runtime by :func:`normalize_band`);
+    ``wcs`` is optional -- omit it to have a tangent-plane WCS synthesised from
+    the source position and ``ApertureSED``'s ``cutout_size_arcsec``.
+
+    Keys
+    ----
+    data : numpy.ndarray
+        2-D science image on the band's native grid (required).
+    wcs : Any
+        WCS exposing the noobfriend transform protocol; omit to synthesise one.
+    error : numpy.ndarray or None
+        1-sigma error image.
+    wavelength : float or None
+        Effective wavelength in microns.
+    wavelength_error : tuple[float, ...] or None
+        Left/right wavelength uncertainty (a tuple of length 1 or 2).
+    flux_scale_mjy : float or None
+        Multiplicative scale from one raw per-pixel value to mJy.
+    flux_unit : str or None
+        Original image unit or calibration source behind the scale.
+    label_map : numpy.ndarray or None
+        Segmentation labels restricting aperture growth.
+    label_allowed : sequence of int or None
+        Labels from ``label_map`` allowed for aperture growth.
+    allow_background : bool
+        Whether growth may extend off the seed's segment into the background.
+    """
+
+    data: np.ndarray
+    wcs: Any
+    error: np.ndarray | None
+    wavelength: float | None
+    wavelength_error: tuple[float, ...] | None
+    flux_scale_mjy: float | None
+    flux_unit: str | None
+    label_map: np.ndarray | None
+    label_allowed: Sequence[int] | None
+    allow_background: bool
+
+
+#: Keys :func:`normalize_band` accepts; anything else is treated as a typo.
+_BAND_KEYS: frozenset[str] = frozenset(BandSpec.__annotations__)
 
 
 @dataclass(frozen=True)
@@ -64,7 +114,14 @@ class Band:
         return self.data.shape  # type: ignore[return-value]
 
 
-def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
+def normalize_band(
+    name: str,
+    spec: Mapping[str, Any],
+    *,
+    ra: float | None = None,
+    dec: float | None = None,
+    cutout_size_arcsec: float | None = None,
+) -> Band:
     """Validate one public band spec and freeze it into a :class:`Band`.
 
     Parameters
@@ -72,12 +129,18 @@ def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
     name : str
         Band name.
     spec : mapping
-        Plain mapping with required ``"data"`` and ``"wcs"`` entries, plus
-        optional ``"error"``, ``"wavelength"``, ``"wavelength_error"``,
+        A :class:`BandSpec`-shaped mapping: required ``"data"`` plus optional
+        ``"wcs"``, ``"error"``, ``"wavelength"``, ``"wavelength_error"``,
         ``"flux_scale_mjy"``, ``"flux_unit"``, ``"label_map"``,
         ``"label_allowed"``, and ``"allow_background"`` (default ``True``).
-        ``wavelength_error`` must be a tuple of length 1 or 2; ``(value,)`` is
-        read as symmetric.
+        Unknown keys are rejected. ``wavelength_error`` must be a tuple of length
+        1 or 2; ``(value,)`` is read as symmetric.
+    ra, dec : float, optional
+        Source world coordinate, used only to synthesise a WCS when ``spec`` has
+        no ``"wcs"``.
+    cutout_size_arcsec : float, optional
+        Cutout angular size, used only to synthesise a WCS when ``spec`` has no
+        ``"wcs"`` (see :func:`noobfriend.extraction._wcs.tangent_plane_wcs`).
 
     Returns
     -------
@@ -86,16 +149,34 @@ def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
     Raises
     ------
     ValueError
-        If a required key is missing or any field is malformed.
+        If an unknown key is present, ``"data"`` is missing or malformed, or
+        ``"wcs"`` is absent and no ``cutout_size_arcsec`` is available to
+        synthesise one.
     """
+    unknown = set(spec) - _BAND_KEYS
+    if unknown:
+        raise ValueError(
+            f"band {name!r} has unknown key(s) {sorted(unknown)}; "
+            f"allowed keys are {sorted(_BAND_KEYS)}."
+        )
     if "data" not in spec:
         raise ValueError(f"band {name!r} is missing required key 'data'.")
-    if "wcs" not in spec:
-        raise ValueError(f"band {name!r} is missing required key 'wcs'.")
 
     data = np.asarray(spec["data"])
     if data.ndim != 2:
         raise ValueError(f"band {name!r} data must be 2-D; got shape {data.shape}.")
+
+    wcs = spec.get("wcs")
+    if wcs is None:
+        if cutout_size_arcsec is None:
+            raise ValueError(
+                f"band {name!r} has no 'wcs'; either provide one, or pass "
+                "cutout_size_arcsec to ApertureSED so a tangent-plane WCS can be "
+                "synthesised from the source position and the cutout size."
+            )
+        from noobfriend.extraction._wcs import tangent_plane_wcs
+
+        wcs = tangent_plane_wcs(ra, dec, cutout_size_arcsec, data.shape)
 
     error = None if spec.get("error") is None else np.asarray(spec["error"])
     if error is not None and error.shape != data.shape:
@@ -133,7 +214,7 @@ def normalize_band(name: str, spec: Mapping[str, Any]) -> Band:
     return Band(
         name=str(name),
         data=data,
-        wcs=spec["wcs"],
+        wcs=wcs,
         error=error,
         wavelength=wavelength,
         wavelength_error=wavelength_error,

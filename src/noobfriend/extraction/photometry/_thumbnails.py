@@ -1,9 +1,15 @@
-"""Matplotlib aperture thumbnails for an :class:`ApertureSEDResult`.
+"""Matplotlib aperture thumbnails for an aperture SED.
 
-Isolated from :mod:`noobfriend.extraction.photometry._result` so the result
-object stays about data and the (heavier) matplotlib import stays local to the
+Isolated from :mod:`noobfriend.extraction.photometry._result` so the data
+objects stay about data and the (heavier) matplotlib import stays local to the
 functions that draw -- the same split as the SED plot in
 :mod:`noobfriend.extraction.photometry._plot`.
+
+Both the measured :class:`~noobfriend.extraction.photometry._result.ApertureSEDResult`
+and the pre-measurement
+:class:`~noobfriend.extraction.photometry._draft.ApertureSEDDraft` draw the same
+montage, so the drawing functions take a small structural :class:`ThumbnailScene`
+that either object can build, rather than a concrete result type.
 
 Each band is drawn on its *own* native grid, so the two overlays need no
 reprojection and line up with the science thumbnail pixel-for-pixel:
@@ -11,37 +17,31 @@ reprojection and line up with the science thumbnail pixel-for-pixel:
 - the science thumbnail is ``band_images[name]`` (NaN pixels transparent);
 - the band's own grown aperture is ``source_apertures[name].mask``, drawn as a
   crisp contour line -- "this band's mask";
-- the union aperture as it was actually measured on this band is
-  ``band_coverage[name]`` (fractional coverage in ``[0, 1]``), drawn as a
-  translucent fill whose opacity tracks the coverage fraction so the soft,
-  partially-weighted boundary pixels of the native-grid measurement are visible
-  -- "the total mask".
+- the union aperture as it falls on this band is ``band_coverage[name]``
+  (fractional coverage in ``[0, 1]``), drawn as a translucent fill whose opacity
+  tracks the coverage fraction -- "the total mask".
 
-The reference band's panel shows ``band_coverage == union_mask`` (binary), i.e.
-the total mask at its finest native resolution, so no separate union panel is
-needed.
-
-Like the spectrum plotters this is a static matplotlib figure (multi-panel
-montage with overlays, trivial ``savefig`` export); the interactive Bokeh
-``imshow`` is for single-frame inspection, not diagnostic montages.
+The reference band's panel shows the union at its finest native resolution, so
+no separate union panel is needed.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
 from noobfriend.core.display.plot._norm import resolve_limits
+from noobfriend.extraction.photometry._aperture import ApertureMask
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
-
-    from noobfriend.extraction.photometry._result import ApertureSEDResult
 
 #: Supported intensity stretches for the thumbnail background.
 _STRETCHES: tuple[str, ...] = ("linear", "log")
@@ -55,6 +55,40 @@ _DEFAULT_CMAP: str = "gray"
 _APERTURE_COLOR: str = "#28c8ff"
 _COVERAGE_COLOR: str = "#ff7a33"
 _SEED_COLOR: str = "#ffd400"
+
+
+@dataclass(frozen=True)
+class ThumbnailScene:
+    """Everything the thumbnail montage needs, decoupled from result vs draft.
+
+    Built by ``ApertureSEDResult`` (with measured coverage and flags) or
+    ``ApertureSEDDraft`` (with the candidate union and no flags).
+
+    Attributes
+    ----------
+    band_images : mapping
+        Per-band native science image.
+    source_apertures : mapping
+        Per-band grown aperture (carries the mask and seed pixel).
+    band_coverage : mapping
+        Per-band fractional union coverage on the band's grid.
+    reference_band : str
+        Band badged as the union's reference grid.
+    order : tuple[str, ...]
+        Default band order for the montage.
+    wavelengths : mapping
+        Per-band effective wavelength in microns (or ``None``), for titles.
+    flagged : mapping
+        Per-band bad-pixel flag, for the badge (all ``False`` pre-measurement).
+    """
+
+    band_images: Mapping[str, np.ndarray]
+    source_apertures: Mapping[str, ApertureMask]
+    band_coverage: Mapping[str, np.ndarray]
+    reference_band: str
+    order: tuple[str, ...]
+    wavelengths: Mapping[str, float | None]
+    flagged: Mapping[str, bool]
 
 
 def _log_low(low: float, high: float) -> float:
@@ -112,8 +146,8 @@ def _draw_band_panel(
     vmax: float | None,
     pmin: float,
     pmax: float,
-    crop: bool,
-    crop_pad: float,
+    zoom_in: bool,
+    zoom_pad: float,
     aperture_color: str,
     coverage_color: str,
     coverage_alpha: float,
@@ -126,9 +160,10 @@ def _draw_band_panel(
     The science image, the binary own-aperture contour, the fractional union
     fill, and the seed marker all share one absolute pixel-index frame (origin
     at lower-left, FITS convention), so they align without any coordinate
-    bookkeeping; cropping is applied as axis limits, not by slicing, to keep
-    that frame intact. The colour stretch is computed over the cropped window so
-    a faint source is not flattened by bright pixels elsewhere in the cutout.
+    bookkeeping. By default the whole cutout is shown; ``zoom_in`` instead frames
+    the source (applied as axis limits, not by slicing, to keep that frame
+    intact). The colour stretch is computed over whatever window is shown, so a
+    faint source is not flattened by bright pixels elsewhere when zoomed in.
     """
     from matplotlib import pyplot as plt
     from matplotlib.colors import to_rgb
@@ -137,7 +172,7 @@ def _draw_band_panel(
     own_mask = np.asarray(own_mask, dtype=bool)
     coverage = np.clip(np.asarray(coverage, dtype=float), 0.0, 1.0)
 
-    bbox = _aperture_bbox(own_mask | (coverage > 0.0), crop_pad) if crop else None
+    bbox = _aperture_bbox(own_mask | (coverage > 0.0), zoom_pad) if zoom_in else None
     window = data if bbox is None else data[bbox]
     low, high = resolve_limits(window, vmin, vmax, pmin, pmax)
 
@@ -183,32 +218,32 @@ def _draw_band_panel(
     ax.set_yticks([])
 
 
-def _validate_bands(result: ApertureSEDResult, bands: Any) -> list[str]:
-    """Resolve the band list to draw, defaulting to wavelength-sorted order."""
+def _validate_bands(scene: ThumbnailScene, bands: Any) -> list[str]:
+    """Resolve the band list to draw, defaulting to the scene's order."""
     if bands is None:
-        return [m.band for m in result.measurements]
+        return list(scene.order)
     names = [str(b) for b in bands]
     if not names:
         raise ValueError("bands must name at least one band.")
-    unknown = [n for n in names if n not in result.band_images]
+    unknown = [n for n in names if n not in scene.band_images]
     if unknown:
         raise ValueError(
-            f"unknown band(s) {unknown}; available: {sorted(result.band_images)}."
+            f"unknown band(s) {unknown}; available: {sorted(scene.band_images)}."
         )
     return names
 
 
-def _panel_title(result: ApertureSEDResult, name: str) -> str:
+def _panel_title(scene: ThumbnailScene, name: str) -> str:
     """Return ``"NAME  λ µm"`` when the band carries a wavelength, else ``NAME``."""
-    for m in result.measurements:
-        if m.band == name and m.wavelength is not None:
-            return f"{name}  {m.wavelength:g} µm"
+    wavelength = scene.wavelengths.get(name)
+    if wavelength is not None:
+        return f"{name}  {wavelength:g} µm"
     return name
 
 
-def _draw_badges(ax: Axes, result: ApertureSEDResult, name: str) -> None:
+def _draw_badges(ax: Axes, scene: ThumbnailScene, name: str) -> None:
     """Mark the reference band (top-left) and a flagged band (top-right)."""
-    if name == result.reference_band:
+    if name == scene.reference_band:
         ax.text(
             0.04,
             0.96,
@@ -220,8 +255,7 @@ def _draw_badges(ax: Axes, result: ApertureSEDResult, name: str) -> None:
             color="white",
             bbox={"facecolor": "#1f6f8b", "edgecolor": "none", "pad": 1.5},
         )
-    flagged = any(m.band == name and m.flagged for m in result.measurements)
-    if flagged:
+    if scene.flagged.get(name, False):
         ax.text(
             0.96,
             0.96,
@@ -237,29 +271,29 @@ def _draw_badges(ax: Axes, result: ApertureSEDResult, name: str) -> None:
 
 def _draw_panel_for_band(
     ax: Axes,
-    result: ApertureSEDResult,
+    scene: ThumbnailScene,
     name: str,
     **panel_kwargs: Any,
 ) -> None:
-    """Pull one band's arrays off the result and draw its panel onto ``ax``."""
-    aperture = result.source_apertures[name]
+    """Pull one band's arrays off the scene and draw its panel onto ``ax``."""
+    aperture = scene.source_apertures[name]
     _draw_band_panel(
         ax,
-        result.band_images[name],
+        scene.band_images[name],
         aperture.mask,
-        result.band_coverage[name],
+        scene.band_coverage[name],
         aperture.seed_xy,
         **panel_kwargs,
     )
 
 
 def aperture_montage(
-    result: ApertureSEDResult,
+    scene: ThumbnailScene,
     *,
     bands: Any = None,
     ncols: int | None = None,
-    crop: bool = True,
-    crop_pad: float = 0.3,
+    zoom_in: bool = False,
+    zoom_pad: float = 0.3,
     cmap: str = _DEFAULT_CMAP,
     stretch: Literal["linear", "log"] = "linear",
     vmin: float | None = None,
@@ -280,34 +314,35 @@ def aperture_montage(
 
     One panel per band, each on the band's own native grid: the greyscale
     science thumbnail, the band's grown aperture as a contour, and the union
-    aperture as it was measured on this band (``band_coverage``) as a
-    translucent fill whose opacity tracks the coverage fraction. The seed pixel
-    is marked, the reference band and any flagged band are badged, and each
-    panel is cropped to its source with a margin.
+    aperture as it falls on this band (``band_coverage``) as a translucent fill
+    whose opacity tracks the coverage fraction. The seed pixel is marked and the
+    reference band and any flagged band are badged. By default each panel shows
+    the whole cutout; ``zoom_in`` frames the source instead.
 
     Parameters
     ----------
-    result : ApertureSEDResult
-        The measured result carrying ``band_images``, ``band_coverage``, and
-        ``source_apertures``.
+    scene : ThumbnailScene
+        The band images, apertures, and coverage to draw (built by an
+        ``ApertureSEDResult`` or ``ApertureSEDDraft``).
     bands : sequence of str, optional
-        Bands to draw, in this order. Defaults to all bands in the result's
-        (wavelength-sorted) measurement order.
+        Bands to draw, in this order. Defaults to the scene's order.
     ncols : int, optional
         Number of columns. Defaults to roughly the square root of the band
         count.
-    crop : bool, default True
-        Crop each panel to its aperture footprint (own aperture plus covered
-        union pixels) with a ``crop_pad`` margin.
-    crop_pad : float, default 0.3
-        Margin added on each side as a fraction of the footprint extent.
+    zoom_in : bool, default False
+        When ``True``, frame each panel on its aperture footprint (own aperture
+        plus covered union pixels) with a ``zoom_pad`` margin; otherwise the
+        whole cutout is shown.
+    zoom_pad : float, default 0.3
+        Margin added on each side as a fraction of the footprint extent (only
+        used when ``zoom_in`` is ``True``).
     cmap : str, default "gray"
         Matplotlib colormap name for the science thumbnail.
     stretch : {"linear", "log"}, default "linear"
         Intensity stretch for the thumbnail background.
     vmin, vmax : float, optional
         Explicit colour limits; a side left unset falls back to the
-        ``pmin``/``pmax`` percentile of the cropped window.
+        ``pmin``/``pmax`` percentile of the shown window.
     pmin, pmax : float, default 1.0, 99.0
         Percentile cuts used for whichever of ``vmin``/``vmax`` is unset.
     aperture_color : str, default cyan
@@ -340,7 +375,7 @@ def aperture_montage(
     """
     import matplotlib.pyplot as plt
 
-    names = _validate_bands(result, bands)
+    names = _validate_bands(scene, bands)
     n = len(names)
     if ncols is None:
         ncols = max(1, round(math.sqrt(n)))
@@ -363,8 +398,8 @@ def aperture_montage(
         "vmax": vmax,
         "pmin": pmin,
         "pmax": pmax,
-        "crop": crop,
-        "crop_pad": crop_pad,
+        "zoom_in": zoom_in,
+        "zoom_pad": zoom_pad,
         "aperture_color": aperture_color,
         "coverage_color": coverage_color,
         "coverage_alpha": coverage_alpha,
@@ -373,9 +408,9 @@ def aperture_montage(
         "show_seed": show_seed,
     }
     for ax, name in zip(flat, names):
-        _draw_panel_for_band(ax, result, name, **panel_kwargs)
-        ax.set_title(_panel_title(result, name), fontsize=9)
-        _draw_badges(ax, result, name)
+        _draw_panel_for_band(ax, scene, name, **panel_kwargs)
+        ax.set_title(_panel_title(scene, name), fontsize=9)
+        _draw_badges(ax, scene, name)
     for ax in flat[n:]:
         ax.axis("off")
 
@@ -387,11 +422,11 @@ def aperture_montage(
 
 
 def aperture_thumbnail(
-    result: ApertureSEDResult,
+    scene: ThumbnailScene,
     band: str,
     *,
-    crop: bool = True,
-    crop_pad: float = 0.3,
+    zoom_in: bool = False,
+    zoom_pad: float = 0.3,
     cmap: str = _DEFAULT_CMAP,
     stretch: Literal["linear", "log"] = "linear",
     vmin: float | None = None,
@@ -410,16 +445,17 @@ def aperture_thumbnail(
 ) -> Figure:
     """Draw one band's thumbnail with its aperture and union overlays, enlarged.
 
-    The single-band counterpart of :func:`aperture_montage` (identical overlays
-    and cropping) for inspecting one band's aperture closely.
+    The single-band counterpart of :func:`aperture_montage` (identical overlays)
+    for inspecting one band's aperture closely. Shows the whole cutout by
+    default; pass ``zoom_in=True`` to frame the source.
 
     Parameters
     ----------
-    result : ApertureSEDResult
-        The measured result.
+    scene : ThumbnailScene
+        The band images, apertures, and coverage to draw.
     band : str
         Band to draw.
-    crop, crop_pad, cmap, stretch, vmin, vmax, pmin, pmax : see :func:`aperture_montage`
+    zoom_in, zoom_pad, cmap, stretch, vmin, vmax, pmin, pmax : see :func:`aperture_montage`
         Identical meaning.
     aperture_color, coverage_color, coverage_alpha : see :func:`aperture_montage`
         Identical meaning.
@@ -440,16 +476,16 @@ def aperture_thumbnail(
     Raises
     ------
     ValueError
-        If ``band`` is not in the result, or ``stretch`` / colour limits are
+        If ``band`` is not in the scene, or ``stretch`` / colour limits are
         invalid.
     """
     import matplotlib.pyplot as plt
 
-    _validate_bands(result, [band])
+    _validate_bands(scene, [band])
     fig, ax = plt.subplots(figsize=(size, size), layout="constrained")
     _draw_panel_for_band(
         ax,
-        result,
+        scene,
         band,
         cmap=cmap,
         stretch=stretch,
@@ -457,8 +493,8 @@ def aperture_thumbnail(
         vmax=vmax,
         pmin=pmin,
         pmax=pmax,
-        crop=crop,
-        crop_pad=crop_pad,
+        zoom_in=zoom_in,
+        zoom_pad=zoom_pad,
         aperture_color=aperture_color,
         coverage_color=coverage_color,
         coverage_alpha=coverage_alpha,
@@ -466,8 +502,122 @@ def aperture_thumbnail(
         show_aperture=show_aperture,
         show_seed=show_seed,
     )
-    _draw_badges(ax, result, band)
-    ax.set_title(title or _panel_title(result, band))
+    _draw_badges(ax, scene, band)
+    ax.set_title(title or _panel_title(scene, band))
+    if save is not None:
+        fig.savefig(save, dpi=200, bbox_inches="tight")
+    return fig
+
+
+#: Default colormap for the integer segmentation-label panel.
+_LABELS_CMAP: str = "nipy_spectral"
+
+
+def _seed_label(labels: np.ndarray, seed_xy: tuple[int, int] | None) -> int:
+    """Return the seed pixel's label, or ``0`` when off-image or on background."""
+    if seed_xy is None:
+        return 0
+    seed_x, seed_y = int(round(seed_xy[0])), int(round(seed_xy[1]))
+    n_rows, n_cols = labels.shape
+    if 0 <= seed_y < n_rows and 0 <= seed_x < n_cols:
+        return int(labels[seed_y, seed_x])
+    return 0
+
+
+def segmentation_montage(
+    image: np.ndarray,
+    labels: np.ndarray,
+    seed_xy: tuple[int, int] | None,
+    *,
+    cmap: str = _DEFAULT_CMAP,
+    labels_cmap: str = _LABELS_CMAP,
+    stretch: Literal["linear", "log"] = "linear",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    pmin: float = 1.0,
+    pmax: float = 99.0,
+    zoom_in: bool = False,
+    zoom_pad: float = 0.3,
+    show_seed: bool = True,
+    panel_size: float = 4.0,
+    title: str | None = None,
+    save: str | Path | None = None,
+) -> Figure:
+    """Draw a band's science image beside its segmentation labels.
+
+    Two panels on the band's native grid, sharing axes: the greyscale science
+    image and the integer ``labels`` map (background label ``0`` transparent,
+    each source a distinct colour). The seed pixel is marked on both, and -- when
+    it lands on a source -- that segment's boundary is outlined on both, so you
+    can see which label confines (or would confine) the aperture. By default the
+    whole cutout is shown; ``zoom_in`` frames the seed's segment.
+    """
+    import matplotlib.pyplot as plt
+
+    image = np.asarray(image, dtype=float)
+    labels = np.asarray(labels)
+    seed_label = _seed_label(labels, seed_xy)
+
+    footprint = (labels == seed_label) if seed_label else (labels > 0)
+    bbox = _aperture_bbox(footprint, zoom_pad) if zoom_in else None
+    window = image if bbox is None else image[bbox]
+    low, high = resolve_limits(window, vmin, vmax, pmin, pmax)
+
+    fig, (ax_img, ax_seg) = plt.subplots(
+        1,
+        2,
+        figsize=(2 * panel_size, panel_size),
+        sharex=True,
+        sharey=True,
+        layout="constrained",
+    )
+
+    img_cmap = plt.get_cmap(cmap).copy()
+    img_cmap.set_bad(alpha=0.0)
+    ax_img.imshow(
+        np.ma.masked_invalid(image),
+        origin="lower",
+        cmap=img_cmap,
+        norm=_make_norm(stretch, low, high),
+        interpolation="nearest",
+    )
+    ax_img.set_title("image")
+
+    n_sources = int(labels.max())
+    ax_seg.imshow(
+        np.ma.masked_where(labels == 0, labels),
+        origin="lower",
+        cmap=labels_cmap,
+        interpolation="nearest",
+    )
+    ax_seg.set_title(f"segment(): {n_sources} source{'' if n_sources == 1 else 's'}")
+
+    for ax in (ax_img, ax_seg):
+        if seed_label:
+            ax.contour(
+                (labels == seed_label).astype(float),
+                levels=[0.5],
+                colors=[_APERTURE_COLOR],
+                linewidths=1.3,
+            )
+        if show_seed and seed_xy is not None:
+            ax.plot(
+                seed_xy[0],
+                seed_xy[1],
+                marker="x",
+                color=_SEED_COLOR,
+                markersize=8,
+                markeredgewidth=1.8,
+            )
+        if bbox is not None:
+            rsl, csl = bbox
+            ax.set_xlim(csl.start - 0.5, csl.stop - 0.5)
+            ax.set_ylim(rsl.start - 0.5, rsl.stop - 0.5)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    if title:
+        fig.suptitle(title)
     if save is not None:
         fig.savefig(save, dpi=200, bbox_inches="tight")
     return fig
