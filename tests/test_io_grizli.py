@@ -81,6 +81,46 @@ class TestFilterSelection:
 
         assert selected == ("f090w", "f444w", "f770w", "f435w", "f606w")
 
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("f090w-clear", True),  # JWST imaging through the CLEAR pupil
+            ("f435w", True),  # bare HST filter
+            ("f1000w", True),  # bare MIRI filter
+            ("f150w2-f162m", False),  # NIRCam dual-filter combo (pupil F162M)
+            ("f150w-gr150c", False),  # NIRISS WFSS grism
+            ("f356w-grismr", False),  # NIRCam WFSS grism
+            ("g102", False),  # HST grism
+            ("g141", False),  # HST grism
+        ],
+    )
+    def test_is_imaging_filter(self, name: str, expected: bool) -> None:
+        assert grizli._is_imaging_filter(name) is expected
+
+    def test_sed_default_drops_dual_filter_and_grism_names(self) -> None:
+        # The live service names JWST bands ``FILTER-PUPIL``; only CLEAR-pupil
+        # (and bare HST/MIRI) names are clean single bandpasses.
+        overlap = {
+            "filters": [
+                "f090w-clear",
+                "f150w2-f162m",
+                "f150w-gr150c",
+                "f356w-grismr",
+                "g141",
+                "f1000w",
+            ],
+            "f090w-clear": [100.0, 5],
+            "f150w2-f162m": [100.0, 3],
+            "f150w-gr150c": [100.0, 6],
+            "f356w-grismr": [100.0, 8],
+            "g141": [100.0, 4],
+            "f1000w": [100.0, 5],
+        }
+
+        selected = grizli.select_overlap_filters(overlap, filter_set="sed-default")
+
+        assert selected == ("f090w-clear", "f1000w")
+
 
 class TestReadCutoutBands:
     """Parsing grizli ``fits_weight`` payloads into band specs."""
@@ -217,3 +257,92 @@ class TestPerFilterCache:
         # f150w is reused from the first request; only f200w is fetched.
         assert len(thumb_calls) == 1
         assert "f200w" in thumb_calls[0]
+
+
+class TestNoCutoutSentinel:
+    """A 200 non-FITS 'No cutout found' body is an unavailable band, not a crash.
+
+    The grizli service returns each band at its own URL and answers a filter with
+    no covering subtile with a plain-text ``No cutout found ...`` body (HTTP 200),
+    not FITS. That must be treated as a missing band rather than fed to
+    ``fits.open`` (which raises ``OSError: No SIMPLE card found``).
+    """
+
+    _SENTINEL = b"No cutout found for ra=10.0, dec=20.0, filters=['f162m-clear']"
+
+    def _session_with_sentinel(self, bad: set[str]) -> type:
+        """Fake session returning the sentinel for ``bad`` filters, FITS otherwise."""
+        sentinel = self._SENTINEL
+
+        class FakeHTTPSession:
+            def __init__(self, *, timeout: float | None = None) -> None:
+                self.timeout = timeout
+
+            @asynccontextmanager
+            async def acquire(self):
+                yield self
+
+            async def fetch_content(self, url: str, **_kwargs: object):
+                requested = parse_qs(urlparse(url).query)["filters"][0]
+                return sentinel if requested in bad else _grizli_payload(requested)
+
+        return FakeHTTPSession
+
+    def test_read_rejects_non_fits_payload(self) -> None:
+        with pytest.raises(ValueError, match="not a FITS file"):
+            grizli.read_grizli_cutout_bands(self._SENTINEL)
+
+    def test_load_drops_no_cutout_band(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            grizli, "HTTPSession", self._session_with_sentinel({"f150w2-f162m"})
+        )
+
+        cutout = asyncio.run(
+            grizli.load_grizli_cutout(
+                10.0, 20.0, size_arcsec=1.0, filters=("f090w", "f150w2-f162m")
+            )
+        )
+
+        assert set(cutout.bands) == {"f090w"}
+        assert cutout.metadata["missing_filters"] == ("f150w2-f162m",)
+
+    def test_load_strict_raises_on_no_cutout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            grizli, "HTTPSession", self._session_with_sentinel({"f150w2-f162m"})
+        )
+
+        with pytest.raises(ValueError, match="no FITS cutout"):
+            asyncio.run(
+                grizli.load_grizli_cutout(
+                    10.0,
+                    20.0,
+                    size_arcsec=1.0,
+                    filters=("f090w", "f150w2-f162m"),
+                    allow_missing=False,
+                )
+            )
+
+    def test_no_cutout_band_is_not_cached(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            grizli, "HTTPSession", self._session_with_sentinel({"f150w2-f162m"})
+        )
+
+        asyncio.run(
+            grizli.load_grizli_cutout(
+                10.0,
+                20.0,
+                size_arcsec=1.0,
+                filters=("f090w", "f150w2-f162m"),
+                cache=True,
+                cache_dir=tmp_path,
+            )
+        )
+
+        files = sorted(p.name for p in tmp_path.iterdir())
+        # Only the valid band is cached; the sentinel is never written to disk.
+        assert len(files) == 1
+        assert any("_f090w_" in name for name in files)

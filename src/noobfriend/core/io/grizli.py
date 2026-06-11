@@ -98,14 +98,9 @@ ACS_IMAGING_BASES = {
     "f814w",
 }
 
-STATIC_FILTER_PRESETS: dict[str, tuple[str, ...]] = {
-    "hst-blue": HST_BLUE_BASES,
-    "jwst-nircam-broad": tuple(sorted(NIRCAM_BROAD_BASES)),
-    "jwst-nircam": tuple(sorted(NIRCAM_IMAGING_BASES)),
-    "jwst-miri": tuple(sorted(MIRI_IMAGING_BASES)),
-}
-DYNAMIC_FILTER_PRESETS = {"sed-default", "jwst", "jwst-imaging", "all"}
-FILTER_PRESETS = set(STATIC_FILTER_PRESETS) | DYNAMIC_FILTER_PRESETS
+#: Filter presets resolved dynamically from the ``/overlap`` endpoint for a
+#: given position; each selects from the bands actually covering it.
+FILTER_PRESETS = {"sed-default", "jwst", "jwst-imaging", "all"}
 
 FILTER_WAVELENGTH_MICRON: dict[str, float] = {
     "f435w": 0.435,
@@ -208,23 +203,20 @@ def normalize_grizli_filters(
     Parameters
     ----------
     filters : str or sequence of str
-        Comma-separated string or sequence of filter names. Preset names are
-        expanded only for static presets; dynamic presets are resolved from the
-        overlap endpoint by :func:`load_grizli_cutout`.
+        Comma-separated string or sequence of filter names. Presets are not
+        expanded here; they are resolved from the overlap endpoint by
+        :func:`load_grizli_cutout`.
 
     Returns
     -------
     tuple[str, ...]
         Lower-case filter names, preserving first occurrence order.
     """
-    if isinstance(filters, str):
-        key = filters.strip().lower()
-        if key in STATIC_FILTER_PRESETS:
-            items = list(STATIC_FILTER_PRESETS[key])
-        else:
-            items = [item.strip() for item in filters.split(",")]
-    else:
-        items = [str(item).strip() for item in filters]
+    items = (
+        [item.strip() for item in filters.split(",")]
+        if isinstance(filters, str)
+        else [str(item).strip() for item in filters]
+    )
 
     seen: set[str] = set()
     normalized: list[str] = []
@@ -243,37 +235,26 @@ def build_grizli_thumb_url(
     dec: float,
     size_arcsec: float,
     filters: tuple[str, ...] | list[str],
-    *,
-    output: str = "fits_weight",
 ) -> str:
-    """Build a grizli-cutout ``/thumb`` URL."""
+    """Build a grizli-cutout ``/thumb`` URL for a science / weight cutout."""
     params = {
         "ra": float(ra),
         "dec": float(dec),
         "size": float(size_arcsec),
-        "output": output,
+        "output": "fits_weight",
         "filters": ",".join(normalize_grizli_filters(list(filters))),
     }
     return f"{GRIZLI_BASE_URL}/thumb?{urlencode(params)}"
 
 
-def build_grizli_overlap_url(
-    ra: float,
-    dec: float,
-    size_arcsec: float,
-    *,
-    mode: str = "count",
-    filters: tuple[str, ...] | list[str] | None = None,
-) -> str:
-    """Build a grizli-cutout ``/overlap`` URL."""
-    params: dict[str, Any] = {
+def build_grizli_overlap_url(ra: float, dec: float, size_arcsec: float) -> str:
+    """Build a grizli-cutout ``/overlap`` exposure-count URL."""
+    params = {
         "ra": float(ra),
         "dec": float(dec),
         "size": float(size_arcsec),
-        "mode": mode,
+        "mode": "count",
     }
-    if filters is not None:
-        params["filters"] = ",".join(normalize_grizli_filters(list(filters)))
     return f"{GRIZLI_BASE_URL}/overlap?{urlencode(params)}"
 
 
@@ -282,8 +263,6 @@ def cutout_cache_filename(
     dec: float,
     size_arcsec: float,
     filter_name: str,
-    *,
-    output: str = "fits_weight",
 ) -> str:
     """Return a stable cache filename for a single-band grizli FITS cutout.
 
@@ -294,7 +273,7 @@ def cutout_cache_filename(
     return (
         f"grizli_ra{_float_token(float(ra))}_dec{_float_token(float(dec))}"
         f"_size{_float_token(float(size_arcsec), digits=2)}"
-        f"_{base}_{output}.fits"
+        f"_{base}_fits_weight.fits"
     )
 
 
@@ -303,11 +282,10 @@ async def query_grizli_overlap(
     dec: float,
     *,
     size_arcsec: float,
-    filters: tuple[str, ...] | None = None,
     timeout: float = 120.0,
 ) -> dict[str, Any]:
     """Query grizli-cutout overlap metadata."""
-    url = build_grizli_overlap_url(ra, dec, size_arcsec, filters=filters)
+    url = build_grizli_overlap_url(ra, dec, size_arcsec)
     payload = await HTTPSession(timeout=timeout).fetch_content(
         url, retries=_FETCH_RETRIES
     )
@@ -356,24 +334,13 @@ def select_overlap_filters(
             f"Unsupported grizli filter preset {filter_set!r}; "
             f"expected one of {sorted(FILTER_PRESETS)}."
         )
-    if filter_set in STATIC_FILTER_PRESETS:
-        allowed = set(STATIC_FILTER_PRESETS[filter_set])
-        return tuple(
-            f
-            for f in overlap_filters(overlap)
-            if _filter_base(f) in allowed
-            and (
-                overlap_count(overlap, f) is None
-                or overlap_count(overlap, f) >= min_count
-            )
-        )
 
     selected: list[str] = []
     for filter_name in overlap_filters(overlap):
         count = overlap_count(overlap, filter_name)
         if count is not None and count < min_count:
             continue
-        if _is_grism_filter(filter_name):
+        if not _is_imaging_filter(filter_name):
             continue
 
         base = _filter_base(filter_name)
@@ -416,11 +383,10 @@ async def load_grizli_cutout(
         Cutout size in arcseconds (the service ``size`` parameter).
     filters : str or sequence of str, default ``"sed-default"``
         Filters to fetch. Either an explicit comma-separated string / sequence
-        of filter names, a static preset, or a dynamic preset resolved from the
-        ``/overlap`` endpoint for this position. Recognised presets are listed
-        in :data:`FILTER_PRESETS`; dynamic ones (e.g. ``"sed-default"``,
-        ``"jwst"``, ``"all"``) select from the bands actually covering ``ra`` /
-        ``dec``.
+        of filter names (exact grizli names, e.g. ``"f090w-clear"``), or a preset
+        from :data:`FILTER_PRESETS` (``"sed-default"``, ``"jwst"``,
+        ``"jwst-imaging"``, ``"all"``) resolved from the ``/overlap`` endpoint to
+        the bands actually covering ``ra`` / ``dec``.
     cache : bool, default ``False``
         When ``True``, cache each band's FITS to disk (one file per filter).
         Passing ``cache_dir`` implies caching as well.
@@ -504,15 +470,20 @@ async def load_grizli_cutout(
             cache_paths[base] = str(cache_path)
         try:
             bands.update(read_grizli_cutout_bands(payload))
-        except ValueError:
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "grizli-cutout payload for %r could not be parsed; dropping: %s",
+                filter_name,
+                exc,
+            )
             continue
 
     if fetch_errors and not allow_missing:
         raise fetch_errors[0][1]
     for filter_name, exc in fetch_errors:
         logger.warning(
-            "grizli-cutout /thumb fetch failed for %r after retries; "
-            "dropping band (allow_missing=True): %s",
+            "grizli-cutout band %r unavailable (fetch error or no cutout); "
+            "dropping (allow_missing=True): %s",
             filter_name,
             exc,
         )
@@ -579,7 +550,18 @@ def read_grizli_cutout_bands(payload: bytes | str | Path) -> dict[str, dict[str,
     ValueError
         No image HDUs could be parsed from the payload.
     """
-    source = BytesIO(payload) if isinstance(payload, bytes) else Path(payload)
+    if isinstance(payload, bytes):
+        head = payload[:6]
+        source: BytesIO | Path = BytesIO(payload)
+    else:
+        source = Path(payload)
+        with source.open("rb") as handle:
+            head = handle.read(6)
+    if head != b"SIMPLE":
+        raise ValueError(
+            "grizli payload is not a FITS file (missing SIMPLE card); the service "
+            "likely returned a 'No cutout found' message for this filter."
+        )
     bands: dict[str, dict[str, Any]] = {}
     with fits.open(source, memmap=False) as hdul:
         index = 0
@@ -634,7 +616,7 @@ async def _resolve_filters(
     timeout: float,
 ) -> tuple[tuple[str, ...], tuple[str, ...], dict[str, Any] | None, str | None]:
     """Resolve explicit or dynamic grizli filters."""
-    if isinstance(filters, str) and filters.strip().lower() in DYNAMIC_FILTER_PRESETS:
+    if isinstance(filters, str) and filters.strip().lower() in FILTER_PRESETS:
         preset = filters.strip().lower()
         overlap_url = build_grizli_overlap_url(ra, dec, size_arcsec)
         overlap = await query_grizli_overlap(
@@ -684,6 +666,14 @@ async def _fetch_band_payload(
     url = build_grizli_thumb_url(ra, dec, size_arcsec, [filter_name])
     async with semaphore:
         payload = await http.fetch_content(url, retries=_FETCH_RETRIES)
+    if not _looks_like_fits(payload):
+        # A 200 response that is not FITS is the service's "No cutout found"
+        # sentinel for a filter with no covering subtile at this position --
+        # treat it as an unavailable band, and never write it to the cache.
+        raise ValueError(
+            f"grizli-cutout returned no FITS cutout for {filter_name!r}: "
+            f"{payload[:120].decode('utf-8', 'replace').strip()!r}"
+        )
     if cache_path is None:
         return payload
     temporary = cache_path.with_suffix(cache_path.suffix + ".part")
@@ -703,10 +693,41 @@ def _filter_base(filter_name: str) -> str:
     return str(filter_name).lower().split("-", maxsplit=1)[0]
 
 
-def _is_grism_filter(filter_name: str) -> bool:
-    """Return whether ``filter_name`` is a grism-like filter."""
-    lowered = str(filter_name).lower()
-    return "grism" in lowered or "gr150" in lowered or lowered.startswith("g")
+def _looks_like_fits(payload: bytes) -> bool:
+    """Return whether ``payload`` begins with the FITS ``SIMPLE`` card."""
+    return payload[:6] == b"SIMPLE"
+
+
+def _filter_pupil(filter_name: str) -> str | None:
+    """Return the PUPIL-wheel qualifier of a JWST ``FILTER-PUPIL`` name, or ``None``.
+
+    Bare HST / MIRI names (no hyphen) have no pupil and return ``None``.
+    """
+    parts = str(filter_name).lower().split("-", maxsplit=1)
+    return parts[1] if len(parts) == 2 else None
+
+
+def _is_imaging_filter(filter_name: str) -> bool:
+    """Return whether a covered filter is a single, clean imaging bandpass.
+
+    A clean imaging band is either a bare filter name (HST / MIRI, e.g.
+    ``f435w`` / ``f1000w``) or a JWST band taken through the ``CLEAR`` pupil
+    (e.g. ``f090w-clear``). Rejected are the names whose PUPIL qualifier is not
+    ``clear``:
+
+    - WFSS **grism** modes -- a grism in the pupil (``f150w-gr150c``,
+      ``f356w-grismr``) or the HST grisms ``g102`` / ``g141``;
+    - NIRCam **dual-filter** combinations -- a FILTER-wheel band crossed with
+      another filter in the PUPIL wheel (e.g. ``f150w2-f162m``). Their effective
+      bandpass is the *pupil* band (here F162M ≈ 1.62 µm), not the leading
+      ``f150w2`` token that :func:`_filter_base` reads, so they would carry the
+      wrong wavelength -- and the service has no clean cutout for them anyway.
+    """
+    name = str(filter_name).lower()
+    if name.startswith("g") and any(char.isdigit() for char in name):
+        return False  # HST grisms g102 / g141 (bare, no pupil qualifier)
+    pupil = _filter_pupil(name)
+    return pupil is None or pupil == "clear"
 
 
 def _hdu_filter_name(hdu: fits.hdu.base.ExtensionHDU) -> str | None:
