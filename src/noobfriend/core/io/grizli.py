@@ -4,19 +4,24 @@ This module is the data-acquisition adapter for ``grizli-cutout``: it builds the
 ``/overlap`` and ``/thumb`` URLs, fetches the FITS payload through the shared
 :class:`~noobfriend.core.io.network.HTTPSession`, and parses the multi-extension
 response into per-band specs (``data`` / ``wcs`` / ``error`` plus wavelength and
-mJy-calibration metadata) ready for downstream analysis such as aperture SEDs.
+mJy-calibration metadata).
 
 It also carries the small amount of JWST/HST imaging *reference data* needed to
 do that — the imaging-filter taxonomy and effective wavelengths — because that
 knowledge is a property of the instruments and the service, not of any one
-analysis. The acquisition is in-memory by default: the FITS response is fetched
-as bytes and opened through :class:`io.BytesIO`; nothing is written to disk
-unless the caller explicitly asks for caching.
+consumer. Each selected filter is fetched as its own ``/thumb`` request (run
+concurrently), so caching writes one short-named FITS file per filter and
+overlapping requests reuse already-cached bands. The acquisition is in-memory
+by default: the FITS response is fetched as bytes and opened through
+:class:`io.BytesIO`; nothing is written to disk unless the caller explicitly
+asks for caching.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -30,8 +35,12 @@ from astropy.wcs import WCS as AstropyWCS
 
 from noobfriend.core.io.network import HTTPSession
 
+logger = logging.getLogger(__name__)
+
 GRIZLI_BASE_URL = "https://grizli-cutout.herokuapp.com"
 _C_AA_PER_S = 2.99792458e18
+_MAX_CONCURRENT_THUMB_REQUESTS = 4
+_FETCH_RETRIES = 3
 
 HST_BLUE_BASES = ("f435w", "f606w")
 NIRCAM_BROAD_BASES = {
@@ -154,7 +163,7 @@ FILTER_WAVELENGTH_MICRON: dict[str, float] = {
 
 @dataclass(frozen=True)
 class GrizliCutout:
-    """Parsed grizli cutout data ready for :class:`ApertureSED`."""
+    """Parsed grizli cutout: per-band specs keyed by filter, plus metadata."""
 
     bands: dict[str, dict[str, Any]]
     metadata: dict[str, Any]
@@ -257,16 +266,20 @@ def cutout_cache_filename(
     ra: float,
     dec: float,
     size_arcsec: float,
-    filters: tuple[str, ...] | list[str],
+    filter_name: str,
     *,
     output: str = "fits_weight",
 ) -> str:
-    """Return a stable cache filename for a grizli FITS cutout."""
-    filter_token = "-".join(sorted(normalize_grizli_filters(list(filters))))
+    """Return a stable cache filename for a single-band grizli FITS cutout.
+
+    One file per filter keeps the name length bounded regardless of how many
+    bands a request covers, and lets overlapping requests reuse cached bands.
+    """
+    base = _filter_base(str(filter_name))
     return (
         f"grizli_ra{_float_token(float(ra))}_dec{_float_token(float(dec))}"
         f"_size{_float_token(float(size_arcsec), digits=2)}"
-        f"_{filter_token}_{output}.fits"
+        f"_{base}_{output}.fits"
     )
 
 
@@ -280,7 +293,9 @@ async def query_grizli_overlap(
 ) -> dict[str, Any]:
     """Query grizli-cutout overlap metadata."""
     url = build_grizli_overlap_url(ra, dec, size_arcsec, filters=filters)
-    payload = await HTTPSession(timeout=timeout).fetch_content(url)
+    payload = await HTTPSession(timeout=timeout).fetch_content(
+        url, retries=_FETCH_RETRIES
+    )
     return json.loads(payload.decode("utf-8"))
 
 
@@ -371,7 +386,13 @@ async def load_grizli_cutout(
     allow_missing: bool = True,
     timeout: float = 120.0,
 ) -> GrizliCutout:
-    """Fetch and parse a grizli-cutout FITS response for aperture SED use."""
+    """Fetch and parse grizli-cutout imaging into per-band specs.
+
+    Each selected filter is fetched from the ``/thumb`` endpoint as its own
+    request, run concurrently with a small concurrency cap. When caching is
+    enabled, every band is cached to its own short-named FITS file, so cache
+    filenames stay bounded and overlapping requests reuse already-cached bands.
+    """
     requested_filters, selected_filters, overlap, overlap_url = await _resolve_filters(
         ra,
         dec,
@@ -382,19 +403,63 @@ async def load_grizli_cutout(
     if not selected_filters:
         raise ValueError("No grizli filters selected for this position.")
 
-    thumb_url = build_grizli_thumb_url(ra, dec, size_arcsec, selected_filters)
-    payload, cache_path = await _load_thumb_payload(
-        thumb_url,
-        ra=ra,
-        dec=dec,
-        size_arcsec=size_arcsec,
-        filters=selected_filters,
-        cache=cache,
-        cache_dir=cache_dir,
-        overwrite=overwrite,
-        timeout=timeout,
-    )
-    bands = read_grizli_cutout_bands(payload)
+    directory = _resolve_cache_dir(cache, cache_dir)
+    cache_path_by_filter: dict[str, Path | None] = {
+        f: (
+            None
+            if directory is None
+            else directory / cutout_cache_filename(ra, dec, size_arcsec, f)
+        )
+        for f in selected_filters
+    }
+    http = HTTPSession(timeout=timeout)
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_THUMB_REQUESTS)
+    async with http.acquire():
+        payloads = await asyncio.gather(
+            *(
+                _fetch_band_payload(
+                    http,
+                    semaphore,
+                    f,
+                    ra=ra,
+                    dec=dec,
+                    size_arcsec=size_arcsec,
+                    cache_path=cache_path_by_filter[f],
+                    overwrite=overwrite,
+                )
+                for f in selected_filters
+            ),
+            return_exceptions=True,
+        )
+
+    bands: dict[str, dict[str, Any]] = {}
+    cache_paths: dict[str, str] = {}
+    thumb_urls: dict[str, str] = {}
+    fetch_errors: list[tuple[str, BaseException]] = []
+    for filter_name, payload in zip(selected_filters, payloads, strict=True):
+        base = _filter_base(filter_name)
+        thumb_urls[base] = build_grizli_thumb_url(ra, dec, size_arcsec, [filter_name])
+        if isinstance(payload, BaseException):
+            fetch_errors.append((filter_name, payload))
+            continue
+        cache_path = cache_path_by_filter[filter_name]
+        if cache_path is not None:
+            cache_paths[base] = str(cache_path)
+        try:
+            bands.update(read_grizli_cutout_bands(payload))
+        except ValueError:
+            continue
+
+    if fetch_errors and not allow_missing:
+        raise fetch_errors[0][1]
+    for filter_name, exc in fetch_errors:
+        logger.warning(
+            "grizli-cutout /thumb fetch failed for %r after retries; "
+            "dropping band (allow_missing=True): %s",
+            filter_name,
+            exc,
+        )
+
     available = tuple(bands)
     missing = tuple(f for f in selected_filters if _filter_base(f) not in bands)
     if missing and not allow_missing:
@@ -414,14 +479,14 @@ async def load_grizli_cutout(
         "missing_filters": missing,
         "overlap": overlap,
         "overlap_url": overlap_url,
-        "thumb_url": thumb_url,
-        "cache_path": None if cache_path is None else str(cache_path),
+        "thumb_urls": thumb_urls,
+        "cache_paths": cache_paths or None,
     }
     return GrizliCutout(bands=bands, metadata=metadata)
 
 
 def read_grizli_cutout_bands(payload: bytes | str | Path) -> dict[str, dict[str, Any]]:
-    """Read grizli ``fits_weight`` HDUs into ApertureSED band specs."""
+    """Read grizli ``fits_weight`` HDUs into per-band specs keyed by filter."""
     source = BytesIO(payload) if isinstance(payload, bytes) else Path(payload)
     bands: dict[str, dict[str, Any]] = {}
     with fits.open(source, memmap=False) as hdul:
@@ -493,37 +558,46 @@ async def _resolve_filters(
     return (selected, selected, None, None)
 
 
-async def _load_thumb_payload(
-    url: str,
-    *,
-    ra: float,
-    dec: float,
-    size_arcsec: float,
-    filters: tuple[str, ...],
-    cache: bool,
-    cache_dir: str | Path | None,
-    overwrite: bool,
-    timeout: float,
-) -> tuple[bytes | Path, Path | None]:
-    """Fetch a grizli FITS payload, optionally through an explicit cache."""
+def _resolve_cache_dir(cache: bool, cache_dir: str | Path | None) -> Path | None:
+    """Return the cache directory to use, creating it, or ``None`` for memory-only."""
     if cache_dir is None and not cache:
-        return await HTTPSession(timeout=timeout).fetch_content(url), None
-
+        return None
     directory = (
         Path(cache_dir)
         if cache_dir is not None
         else Path.cwd() / ".noobfriend" / "grizli-cutout"
     )
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / cutout_cache_filename(ra, dec, size_arcsec, filters)
-    if path.exists() and not overwrite:
-        return path, path
+    return directory
 
-    payload = await HTTPSession(timeout=timeout).fetch_content(url)
-    temporary = path.with_suffix(path.suffix + ".part")
+
+async def _fetch_band_payload(
+    http: HTTPSession,
+    semaphore: asyncio.Semaphore,
+    filter_name: str,
+    *,
+    ra: float,
+    dec: float,
+    size_arcsec: float,
+    cache_path: Path | None,
+    overwrite: bool,
+) -> bytes | Path:
+    """Fetch one band's ``/thumb`` FITS, reusing or populating its cache file.
+
+    Returns the cached :class:`~pathlib.Path` when caching is enabled (after
+    writing it on a miss) or the raw payload ``bytes`` for memory-only use.
+    """
+    if cache_path is not None and cache_path.exists() and not overwrite:
+        return cache_path
+    url = build_grizli_thumb_url(ra, dec, size_arcsec, [filter_name])
+    async with semaphore:
+        payload = await http.fetch_content(url, retries=_FETCH_RETRIES)
+    if cache_path is None:
+        return payload
+    temporary = cache_path.with_suffix(cache_path.suffix + ".part")
     temporary.write_bytes(payload)
-    temporary.replace(path)
-    return path, path
+    temporary.replace(cache_path)
+    return cache_path
 
 
 def _float_token(value: float, digits: int = 6) -> str:

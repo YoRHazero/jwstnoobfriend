@@ -1,6 +1,9 @@
 """Tests for the grizli-cutout data-source client in :mod:`noobfriend.core.io`."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from io import BytesIO
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 import pytest
@@ -8,15 +11,6 @@ from astropy.io import fits
 from astropy.wcs import WCS
 
 from noobfriend.core.io import grizli
-from noobfriend.extraction.photometry import ApertureSED
-
-
-def _grow_all_label_kwargs() -> dict[str, object]:
-    """Disable stop criteria so noobase fills the allowed label region."""
-    return {
-        "snr_threshold": None,
-        "gradient_ratio_threshold": 1e99,
-    }
 
 
 def _grizli_hdu(
@@ -129,57 +123,97 @@ class TestReadCutoutBands:
         assert bands["f606w"]["flux_unit"] == "PHOTFLAM/PHOTPLAM"
 
 
-class TestFromGrizliCutout:
-    """The ApertureSED convenience shim over the core grizli client."""
+class TestPerFilterCache:
+    """Per-filter ``/thumb`` fetching and one-file-per-filter caching."""
 
-    def test_from_grizli_cutout_defaults_to_memory_and_source_seed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        payload = _grizli_payload("f090w")
-        calls: list[str] = []
-
-        overlap_payload = (
-            '{"f090w": ["x", 1], "f435w": ["x", 1], '
-            '"f814w": ["x", 1], "g141": ["x", 1]}'
-        ).encode()
+    def _fake_session(self, thumb_calls: list[str]) -> type:
+        """Build a fake session that returns a payload matching the queried filter."""
 
         class FakeHTTPSession:
-            """Fake noobfriend HTTP session for grizli tests."""
-
             def __init__(self, *, timeout: float | None = None) -> None:
                 self.timeout = timeout
 
-            async def fetch_json(self, url: str):
-                calls.append(f"json:{url}")
-                return {
-                    "f090w": ["x", 1],
-                    "f435w": ["x", 1],
-                    "f814w": ["x", 1],
-                    "g141": ["x", 1],
-                }
+            @asynccontextmanager
+            async def acquire(self):
+                yield self
 
-            async def fetch_content(self, url: str):
-                calls.append(f"content:{url}")
-                if "/overlap?" in url:
-                    return overlap_payload
-                return payload
+            async def fetch_content(self, url: str, **_kwargs: object):
+                thumb_calls.append(url)
+                requested = parse_qs(urlparse(url).query)["filters"][0]
+                return _grizli_payload(requested)
 
-        monkeypatch.setattr(grizli, "HTTPSession", FakeHTTPSession)
+        return FakeHTTPSession
 
-        sed = ApertureSED.from_grizli_cutout(
-            10.0,
-            20.0,
-            size=1.0,
-            filters="sed-default",
+    def test_caches_one_file_per_filter_and_reuses_them(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        thumb_calls: list[str] = []
+        monkeypatch.setattr(grizli, "HTTPSession", self._fake_session(thumb_calls))
+
+        cutout = asyncio.run(
+            grizli.load_grizli_cutout(
+                10.0,
+                20.0,
+                size_arcsec=1.0,
+                filters=("f090w", "f150w"),
+                cache=True,
+                cache_dir=tmp_path,
+            )
         )
-        result = sed.measure(grow_kwargs=_grow_all_label_kwargs())
 
-        assert sed.source_metadata["cache_path"] is None
-        assert sed.source_metadata["selected_filters"] == ("f090w", "f435w")
-        assert sed.source_metadata["missing_filters"] == ("f435w",)
-        assert result.source_metadata["source"] == "grizli-cutout"
-        assert result.reference_band == "f090w"
-        assert result.measurements[0].band == "f090w"
-        assert result.measurements[0].flux == pytest.approx(5.0)
-        thumb_calls = [call for call in calls if "/thumb?" in call]
+        assert set(cutout.bands) == {"f090w", "f150w"}
+        files = sorted(p.name for p in tmp_path.iterdir())
+        assert len(files) == 2
+        assert any("_f090w_" in name for name in files)
+        assert any("_f150w_" in name for name in files)
+        assert set(cutout.metadata["cache_paths"]) == {"f090w", "f150w"}
+        assert len(thumb_calls) == 2
+
+        # A second identical request must reuse the cached files, fetching nothing.
+        reused = asyncio.run(
+            grizli.load_grizli_cutout(
+                10.0,
+                20.0,
+                size_arcsec=1.0,
+                filters=("f090w", "f150w"),
+                cache=True,
+                cache_dir=tmp_path,
+            )
+        )
+
+        assert set(reused.bands) == {"f090w", "f150w"}
+        assert len(thumb_calls) == 2
+
+    def test_partial_overlap_only_fetches_missing_filter(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        thumb_calls: list[str] = []
+        monkeypatch.setattr(grizli, "HTTPSession", self._fake_session(thumb_calls))
+
+        asyncio.run(
+            grizli.load_grizli_cutout(
+                10.0,
+                20.0,
+                size_arcsec=1.0,
+                filters=("f090w", "f150w"),
+                cache=True,
+                cache_dir=tmp_path,
+            )
+        )
+        thumb_calls.clear()
+
+        cutout = asyncio.run(
+            grizli.load_grizli_cutout(
+                10.0,
+                20.0,
+                size_arcsec=1.0,
+                filters=("f150w", "f200w"),
+                cache=True,
+                cache_dir=tmp_path,
+            )
+        )
+
+        assert set(cutout.bands) == {"f150w", "f200w"}
+        # f150w is reused from the first request; only f200w is fetched.
         assert len(thumb_calls) == 1
+        assert "f200w" in thumb_calls[0]
