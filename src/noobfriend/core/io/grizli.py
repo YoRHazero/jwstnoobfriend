@@ -163,7 +163,22 @@ FILTER_WAVELENGTH_MICRON: dict[str, float] = {
 
 @dataclass(frozen=True)
 class GrizliCutout:
-    """Parsed grizli cutout: per-band specs keyed by filter, plus metadata."""
+    """Parsed grizli cutout: per-band specs keyed by filter, plus metadata.
+
+    Attributes
+    ----------
+    bands : dict[str, dict[str, Any]]
+        Mapping from canonical filter base name (e.g. ``"f150w"``) to a band
+        spec, as returned by :func:`read_grizli_cutout_bands`. Each spec holds
+        ``data``, ``error``, ``wcs``, ``wavelength``, ``flux_scale_mjy`` and
+        ``flux_unit``.
+    metadata : dict[str, Any]
+        Acquisition provenance for the request. Keys: ``source``, ``ra``,
+        ``dec``, ``size_arcsec``, ``requested_filters``, ``selected_filters``,
+        ``available_filters``, ``missing_filters``, ``overlap``, ``overlap_url``,
+        ``thumb_urls`` (per-band ``/thumb`` URLs) and ``cache_paths`` (per-band
+        cache file paths, or ``None`` when caching is disabled).
+    """
 
     bands: dict[str, dict[str, Any]]
     metadata: dict[str, Any]
@@ -392,6 +407,48 @@ async def load_grizli_cutout(
     request, run concurrently with a small concurrency cap. When caching is
     enabled, every band is cached to its own short-named FITS file, so cache
     filenames stay bounded and overlapping requests reuse already-cached bands.
+
+    Parameters
+    ----------
+    ra, dec : float
+        Sky position of the cutout centre, in degrees (ICRS).
+    size_arcsec : float, default ``5.0``
+        Cutout size in arcseconds (the service ``size`` parameter).
+    filters : str or sequence of str, default ``"sed-default"``
+        Filters to fetch. Either an explicit comma-separated string / sequence
+        of filter names, a static preset, or a dynamic preset resolved from the
+        ``/overlap`` endpoint for this position. Recognised presets are listed
+        in :data:`FILTER_PRESETS`; dynamic ones (e.g. ``"sed-default"``,
+        ``"jwst"``, ``"all"``) select from the bands actually covering ``ra`` /
+        ``dec``.
+    cache : bool, default ``False``
+        When ``True``, cache each band's FITS to disk (one file per filter).
+        Passing ``cache_dir`` implies caching as well.
+    cache_dir : str or Path or None
+        Directory for the per-filter cache files. When caching is enabled and
+        this is ``None``, ``./.noobfriend/grizli-cutout`` is used.
+    overwrite : bool, default ``False``
+        Re-fetch and overwrite cache files even when they already exist.
+    allow_missing : bool, default ``True``
+        When ``True``, filters the service does not return — or that keep
+        failing after retries — are dropped (and logged) rather than raising.
+        When ``False``, any missing or failed filter raises.
+    timeout : float, default ``120.0``
+        Per-request timeout in seconds.
+
+    Returns
+    -------
+    GrizliCutout
+        Parsed per-band specs together with acquisition metadata.
+
+    Raises
+    ------
+    ValueError
+        No filters were selected for this position, or — when ``allow_missing``
+        is ``False`` — the service did not return every requested filter.
+    aiohttp.ClientError
+        A transient fetch failure that survived retries, re-raised when
+        ``allow_missing`` is ``False``.
     """
     requested_filters, selected_filters, overlap, overlap_url = await _resolve_filters(
         ra,
@@ -486,7 +543,42 @@ async def load_grizli_cutout(
 
 
 def read_grizli_cutout_bands(payload: bytes | str | Path) -> dict[str, dict[str, Any]]:
-    """Read grizli ``fits_weight`` HDUs into per-band specs keyed by filter."""
+    """Read grizli ``fits_weight`` HDUs into per-band specs keyed by filter.
+
+    Adjacent science / weight HDU pairs sharing a filter are matched; the
+    weight is turned into a ``1 / sqrt(weight)`` error map and pixels with
+    non-positive weight are masked to ``NaN`` in both ``data`` and ``error``.
+
+    Parameters
+    ----------
+    payload : bytes or str or Path
+        A grizli ``fits_weight`` response, either as the raw FITS bytes (opened
+        in memory) or a path to a FITS file on disk.
+
+    Returns
+    -------
+    dict[str, dict[str, Any]]
+        Mapping from canonical filter base name to a band spec with keys:
+
+        ``data``
+            2-D float array; pixels with invalid weight are ``NaN``.
+        ``error``
+            ``1 / sqrt(weight)`` map (``NaN`` where weight is invalid), or
+            ``None`` when the science HDU has no paired weight.
+        ``wcs``
+            WCS adapter exposing the detector/world transforms.
+        ``wavelength``
+            Effective wavelength in microns, or ``None`` if unknown.
+        ``flux_scale_mjy``
+            Multiplicative factor from raw pixel units to mJy, or ``None``.
+        ``flux_unit``
+            String describing the source of ``flux_scale_mjy``.
+
+    Raises
+    ------
+    ValueError
+        No image HDUs could be parsed from the payload.
+    """
     source = BytesIO(payload) if isinstance(payload, bytes) else Path(payload)
     bands: dict[str, dict[str, Any]] = {}
     with fits.open(source, memmap=False) as hdul:
