@@ -8,15 +8,27 @@ acquisition releases it.
 """
 
 import asyncio
-from collections.abc import AsyncGenerator, Callable, Mapping
+import random
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
 import aiofiles
-from aiohttp import ClientSession, ClientTimeout, TCPConnector
+from aiohttp import (
+    ClientConnectionError,
+    ClientError,
+    ClientResponse,
+    ClientResponseError,
+    ClientSession,
+    ClientTimeout,
+    TCPConnector,
+)
 
 HTTPMethod = Literal["GET", "POST", "PUT", "DELETE", "PATCH"]
+
+#: HTTP status codes worth retrying: request timeout, rate limit, and 5xx.
+_RETRYABLE_STATUS: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class HTTPSession:
@@ -116,6 +128,9 @@ class HTTPSession:
         params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        retries: int = 0,
+        backoff_factor: float = 0.5,
+        backoff_max: float = 30.0,
     ) -> Any:
         """Fetch ``url`` and return the parsed JSON body.
 
@@ -131,6 +146,14 @@ class HTTPSession:
             JSON body to send.
         headers : mapping or None
             Extra request headers.
+        retries : int, default ``0``
+            Maximum number of *additional* attempts after the first on a
+            transient failure. ``0`` (the default) disables retrying and keeps
+            the original single-attempt behaviour. See :meth:`_request_with_retry`.
+        backoff_factor : float, default ``0.5``
+            Base seconds for the exponential backoff between retries.
+        backoff_max : float, default ``30.0``
+            Upper bound, in seconds, on any single backoff wait.
 
         Returns
         -------
@@ -140,16 +163,21 @@ class HTTPSession:
         Raises
         ------
         aiohttp.ClientResponseError
-            Response status is 4xx or 5xx.
+            Response status is 4xx or 5xx (after retries are exhausted).
         aiohttp.ClientError
             Any other client-side networking error.
         """
-        async with self.acquire() as session:
-            async with session.request(
-                method, url, params=params, json=json_body, headers=headers
-            ) as response:
-                response.raise_for_status()
-                return await response.json()
+        return await self._request_with_retry(
+            method,
+            url,
+            params=params,
+            json_body=json_body,
+            headers=headers,
+            retries=retries,
+            backoff_factor=backoff_factor,
+            backoff_max=backoff_max,
+            consume=lambda response: response.json(),
+        )
 
     async def fetch_content(
         self,
@@ -159,6 +187,9 @@ class HTTPSession:
         params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        retries: int = 0,
+        backoff_factor: float = 0.5,
+        backoff_max: float = 30.0,
     ) -> bytes:
         """Fetch ``url`` and return the raw response body.
 
@@ -172,16 +203,60 @@ class HTTPSession:
         Raises
         ------
         aiohttp.ClientResponseError
-            Response status is 4xx or 5xx.
+            Response status is 4xx or 5xx (after retries are exhausted).
         aiohttp.ClientError
             Any other client-side networking error.
         """
-        async with self.acquire() as session:
-            async with session.request(
-                method, url, params=params, json=json_body, headers=headers
-            ) as response:
-                response.raise_for_status()
-                return await response.read()
+        return await self._request_with_retry(
+            method,
+            url,
+            params=params,
+            json_body=json_body,
+            headers=headers,
+            retries=retries,
+            backoff_factor=backoff_factor,
+            backoff_max=backoff_max,
+            consume=lambda response: response.read(),
+        )
+
+    async def _request_with_retry(
+        self,
+        method: HTTPMethod,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None,
+        json_body: Mapping[str, Any] | None,
+        headers: Mapping[str, str] | None,
+        retries: int,
+        backoff_factor: float,
+        backoff_max: float,
+        consume: Callable[[ClientResponse], Awaitable[Any]],
+    ) -> Any:
+        """Send one request, retrying transient failures with exponential backoff.
+
+        An attempt is retried only when the error is transient — a connection
+        error, a timeout, or a ``408`` / ``429`` / ``5xx`` response — and at most
+        ``retries`` times. Each retry waits an exponentially growing, jittered
+        delay (never immediate); a parseable ``Retry-After`` header raises the
+        wait to honour the server's request. ``consume`` reads the body while the
+        response context is still open (e.g. ``response.read`` or ``response.json``).
+        """
+        attempt = 0
+        while True:
+            try:
+                async with self.acquire() as session:
+                    async with session.request(
+                        method, url, params=params, json=json_body, headers=headers
+                    ) as response:
+                        response.raise_for_status()
+                        return await consume(response)
+            except (ClientError, asyncio.TimeoutError) as exc:
+                if attempt >= retries or not _is_retryable(exc):
+                    raise
+                await asyncio.sleep(
+                    _retry_delay(attempt, exc, backoff_factor, backoff_max)
+                )
+                attempt += 1
 
     async def download_to_file(
         self,
@@ -241,3 +316,51 @@ class HTTPSession:
                         downloaded += len(chunk)
                         if progress_callback is not None:
                             progress_callback(downloaded, total)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return whether ``exc`` is a transient error worth retrying.
+
+    Retryable: a connection error, a timeout, or a response whose status is in
+    :data:`_RETRYABLE_STATUS`. A ``ClientResponseError`` with any other status
+    (e.g. ``404``) is permanent and is not retried.
+    """
+    if isinstance(exc, ClientResponseError):
+        return exc.status in _RETRYABLE_STATUS
+    return isinstance(exc, (ClientConnectionError, asyncio.TimeoutError))
+
+
+def _retry_delay(
+    attempt: int, exc: BaseException, backoff_factor: float, backoff_max: float
+) -> float:
+    """Return the jittered exponential backoff delay before the next attempt.
+
+    ``attempt`` is 0-based for the first retry, so the base delay grows as
+    ``backoff_factor * 2 ** attempt`` (capped at ``backoff_max``). Equal jitter
+    keeps the wait within ``[base / 2, base]`` — always strictly positive, so a
+    retry never fires immediately. A parseable ``Retry-After`` header raises the
+    delay to honour the server's request, still capped at ``backoff_max``.
+    """
+    base = min(backoff_max, backoff_factor * 2**attempt)
+    delay = base / 2 + random.random() * (base / 2)
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        return min(backoff_max, max(delay, retry_after))
+    return delay
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Return the ``Retry-After`` delay in seconds, if the server sent one.
+
+    Only the integer/float *delta-seconds* form is understood; the HTTP-date
+    form returns ``None`` so the caller falls back to computed backoff.
+    """
+    if not isinstance(exc, ClientResponseError) or exc.headers is None:
+        return None
+    value = exc.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
