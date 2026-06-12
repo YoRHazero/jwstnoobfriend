@@ -45,6 +45,32 @@ class ComponentMeta:
 
 
 @dataclass(frozen=True)
+class BoundedParam:
+    """A sampled parameter with explicit ``[lower, upper]`` bounds.
+
+    Recorded for every truncated free axis so the result can check for posterior
+    mass piling up at a bound (the data wanting to leave the allowed range).
+
+    Attributes
+    ----------
+    name : str
+        The posterior variable name of the sampled RV.
+    component_id : str
+        The component it belongs to.
+    quantity : {"dv", "fwhm", "flux", "flux_ratio"}
+        Which axis it bounds.
+    lower, upper : float
+        The truncation bounds actually used (the FWHM lower is post-LSF-floor).
+    """
+
+    name: str
+    component_id: str
+    quantity: str
+    lower: float
+    upper: float
+
+
+@dataclass(frozen=True)
 class ModelBundle:
     """A built PyMC model plus what the result needs after sampling.
 
@@ -54,6 +80,8 @@ class ModelBundle:
         The assembled model.
     components : tuple of ComponentMeta
         Component ids and signs in build order.
+    bounded : tuple of BoundedParam
+        Every truncated free parameter and its bounds.
     continuum_degree : int
         Continuum polynomial degree actually used.
     lambda0 : float
@@ -64,6 +92,7 @@ class ModelBundle:
 
     model: Any
     components: tuple[ComponentMeta, ...]
+    bounded: tuple[BoundedParam, ...]
     continuum_degree: int
     lambda0: float
     window_wl: np.ndarray
@@ -102,7 +131,12 @@ def _truncated(
 
 
 def _build_offset(
-    pm: Any, pt: Any, axis: ResolvedAxis, centre_sys: float, cid: str
+    pm: Any,
+    pt: Any,
+    axis: ResolvedAxis,
+    centre_sys: float,
+    cid: str,
+    bounded: list[BoundedParam],
 ) -> Any:
     """Build the velocity offset (km/s) for one centre axis (own part only)."""
     to_kms = (
@@ -113,7 +147,9 @@ def _build_offset(
     assert axis.bounds is not None  # noqa: S101  (free axis)
     lo, hi = to_kms(axis.bounds[0]), to_kms(axis.bounds[1])
     lo, hi = (lo, hi) if lo < hi else (hi, lo)
-    return _truncated(pm, f"{cid}__dv_off", lo, hi, mu=0.0)
+    name = f"{cid}__dv_off"
+    bounded.append(BoundedParam(name, cid, "dv", lo, hi))
+    return _truncated(pm, name, lo, hi, mu=0.0)
 
 
 def _build_fwhm(
@@ -124,6 +160,7 @@ def _build_fwhm(
     fwhm_inst: float | None,
     init: float,
     cid: str,
+    bounded: list[BoundedParam],
 ) -> Any:
     """Build the velocity-FWHM (km/s) for one width axis."""
     if axis.kind == "tied":
@@ -137,7 +174,9 @@ def _build_fwhm(
         lo = max(lo, fwhm_inst)
     if not lo < hi:
         lo = 0.9 * hi
-    return _truncated(pm, f"{cid}__fwhm_free", lo, hi, mu=init)
+    name = f"{cid}__fwhm_free"
+    bounded.append(BoundedParam(name, cid, "fwhm", lo, hi))
+    return _truncated(pm, name, lo, hi, mu=init)
 
 
 def _build_flux(
@@ -147,6 +186,7 @@ def _build_flux(
     exprs: dict[str, dict[str, Any]],
     flux_scale: float,
     cid: str,
+    bounded: list[BoundedParam],
 ) -> Any:
     """Build the integrated flux for one flux axis."""
     if axis.base_id is not None:  # ratio to parent
@@ -154,12 +194,16 @@ def _build_flux(
         if axis.kind == "fixed":
             return float(axis.value) * parent_flux
         assert axis.bounds is not None  # noqa: S101
-        ratio = _truncated(pm, f"{cid}__flux_ratio", axis.bounds[0], axis.bounds[1])
+        name = f"{cid}__flux_ratio"
+        bounded.append(BoundedParam(name, cid, "flux_ratio", *axis.bounds))
+        ratio = _truncated(pm, name, axis.bounds[0], axis.bounds[1])
         return ratio * parent_flux
     if axis.kind == "fixed":
         return pt.as_tensor_variable(float(axis.value))
     if axis.bounds is not None:
-        return _truncated(pm, f"{cid}__flux_free", axis.bounds[0], axis.bounds[1])
+        name = f"{cid}__flux_free"
+        bounded.append(BoundedParam(name, cid, "flux", *axis.bounds))
+        return _truncated(pm, name, axis.bounds[0], axis.bounds[1])
     return pm.HalfNormal(f"{cid}__flux_raw", sigma=flux_scale)
 
 
@@ -206,6 +250,7 @@ def build_model(
 
     exprs: dict[str, dict[str, Any]] = {}
     metas: list[ComponentMeta] = []
+    bounded: list[BoundedParam] = []
     model = pm.Model()
     with model:
         lam = pt.as_tensor_variable(wl)
@@ -226,7 +271,7 @@ def build_model(
             )
             dv = pm.Deterministic(
                 f"{cid}__dv",
-                base_dv + _build_offset(pm, pt, comp.centre, centre_sys, cid),
+                base_dv + _build_offset(pm, pt, comp.centre, centre_sys, cid, bounded),
             )
             mu = pm.Deterministic(
                 f"{cid}__mu", (1.0 + z) * comp.line.rest_wavelength * (1.0 + dv / C_KMS)
@@ -241,6 +286,7 @@ def build_model(
                     fwhm_inst,
                     comp.template.fwhm_kms_init,
                     cid,
+                    bounded,
                 ),
             )
             sigma_w = pm.Deterministic(
@@ -248,7 +294,7 @@ def build_model(
             )
             flux = pm.Deterministic(
                 f"{cid}__flux",
-                _build_flux(pm, pt, comp.flux, exprs, init.flux_scale, cid),
+                _build_flux(pm, pt, comp.flux, exprs, init.flux_scale, cid, bounded),
             )
             amp = pm.Deterministic(f"{cid}__amp", flux / (sigma_w * _SQRT_2PI))
             model_flux = model_flux + comp.template.sign * amp * pt.exp(
@@ -266,6 +312,7 @@ def build_model(
     return ModelBundle(
         model=model,
         components=tuple(metas),
+        bounded=tuple(bounded),
         continuum_degree=degree,
         lambda0=init.lambda0,
         window_wl=wl,

@@ -304,6 +304,7 @@ class LineFitSetup:
         return LineFitResult(
             idata=idata,
             components=bundle.components,
+            bounded=bundle.bounded,
             continuum_degree=bundle.continuum_degree,
             lambda0=bundle.lambda0,
             window_wl=bundle.window_wl,

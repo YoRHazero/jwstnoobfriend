@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from matplotlib.figure import Figure
 
-    from noobfriend.inference.spectrum._pymc_model import ComponentMeta
+    from noobfriend.inference.spectrum._pymc_model import BoundedParam, ComponentMeta
     from noobfriend.inference.spectrum._spectrum import NoobSpectrum
 
 
@@ -39,6 +39,8 @@ class LineFitResult:
         The sampler output (posterior, sample_stats, log_likelihood).
     components : tuple of ComponentMeta
         Component ids and signs, in build order.
+    bounded : tuple of BoundedParam
+        Every truncated free parameter and its bounds (for :meth:`boundary_report`).
     continuum_degree : int
         Continuum polynomial degree used.
     lambda0 : float
@@ -51,6 +53,7 @@ class LineFitResult:
 
     idata: Any
     components: tuple[ComponentMeta, ...]
+    bounded: tuple[BoundedParam, ...]
     continuum_degree: int
     lambda0: float
     window_wl: np.ndarray
@@ -204,6 +207,95 @@ class LineFitResult:
             else float("nan")
         )
         return {"divergences": diverging, "max_rhat": max_rhat, "min_ess_bulk": min_ess}
+
+    def boundary_report(
+        self, *, rtol: float = 0.02, frac_threshold: float = 0.1
+    ) -> Any:
+        """Flag free parameters whose posterior piles up at a prior bound.
+
+        Mass stacked against a truncation bound means the data wants to leave the
+        allowed range -- e.g. a broad component pinned at the FWHM floor (it is
+        not really broad) or a flux pressed to its lower limit. This is evidence a
+        component is unwarranted, not a sampling artifact; weigh it with
+        :meth:`significance_report` and
+        :func:`~noobfriend.inference.spectrum._result.compare_models`.
+
+        Parameters
+        ----------
+        rtol : float, default 0.02
+            Edge band width as a fraction of each parameter's ``upper - lower``.
+        frac_threshold : float, default 0.1
+            Posterior fraction within an edge band above which the parameter is
+            flagged.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per bounded free parameter: its component, quantity, bounds,
+            the posterior fraction at each edge, and a ``flagged`` boolean.
+            Empty when the model has no truncated free parameters.
+        """
+        import pandas as pd
+
+        rows = []
+        for bp in self.bounded:
+            samples = self._flat(bp.name)
+            tol = rtol * (bp.upper - bp.lower)
+            at_lower = float(np.mean(samples <= bp.lower + tol))
+            at_upper = float(np.mean(samples >= bp.upper - tol))
+            rows.append(
+                {
+                    "parameter": bp.name,
+                    "component": bp.component_id,
+                    "quantity": bp.quantity,
+                    "lower": bp.lower,
+                    "upper": bp.upper,
+                    "frac_at_lower": at_lower,
+                    "frac_at_upper": at_upper,
+                    "flagged": (at_lower + at_upper) > frac_threshold,
+                }
+            )
+        return pd.DataFrame(rows).set_index("parameter") if rows else pd.DataFrame()
+
+    def significance_report(self, *, snr_warranted: float = 3.0) -> Any:
+        """Rank each component by how far its flux sits above zero.
+
+        A component whose integrated flux is consistent with zero (low
+        signal-to-noise) is not supported by the data -- the canonical test for
+        whether a broad or outflow component is real.
+
+        Parameters
+        ----------
+        snr_warranted : float, default 3.0
+            Flux ``median / sd`` at or above which a component is marked
+            ``warranted``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Indexed by component id: flux median, sd, lower 16th percentile, the
+            ``snr`` (median / sd), and a ``warranted`` boolean. A fixed-flux
+            component has zero spread and infinite ``snr``.
+        """
+        import pandas as pd
+
+        rows = []
+        for comp in self.components:
+            flux = self._flat(f"{comp.id}__flux")
+            median = float(np.median(flux))
+            sd = float(np.std(flux))
+            snr = median / sd if sd > 0 else float("inf")
+            rows.append(
+                {
+                    "component": comp.id,
+                    "flux_median": median,
+                    "flux_sd": sd,
+                    "flux_p16": float(np.percentile(flux, 16.0)),
+                    "snr": snr,
+                    "warranted": snr >= snr_warranted,
+                }
+            )
+        return pd.DataFrame(rows).set_index("component")
 
     def continuum_curve(self, grid: np.ndarray) -> np.ndarray:
         """Return the posterior-median continuum on ``grid``."""

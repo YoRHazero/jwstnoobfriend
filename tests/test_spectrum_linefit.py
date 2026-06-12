@@ -267,6 +267,13 @@ def test_run_recovers_synthetic_halpha_nii():
     assert low.shape == mid.shape == high.shape == wl.shape
     assert np.all(low <= high)
 
+    # pathology reports: the strong lines are warranted; bounds carry the columns.
+    sig = res.significance_report()
+    assert bool(sig.loc["Halpha", "warranted"])
+    assert sig.loc["Halpha", "snr"] > 5.0
+    bnd = res.boundary_report()
+    assert {"flagged", "frac_at_lower", "frac_at_upper"} <= set(bnd.columns)
+
     import matplotlib.pyplot as plt
 
     assert len(res.plot().axes) == 2  # data + residual panels
