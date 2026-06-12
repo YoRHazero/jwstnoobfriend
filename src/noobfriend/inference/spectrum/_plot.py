@@ -21,15 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from noobfriend.inference.spectrum._window import C_KMS
-
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
     from noobfriend.inference.spectrum._result import LineFitResult
-    from noobfriend.inference.spectrum._setup import LineFitSetup, ResolvedAxis
+    from noobfriend.inference.spectrum._setup import LineFitSetup
 
-_FWHM_TO_SIGMA: float = 1.0 / 2.3548200450309493
 _SQRT_2PI: float = math.sqrt(2.0 * math.pi)
 
 #: Decomposition line colours (skip ``C3``, reserved for the total model).
@@ -46,73 +43,24 @@ _COMPONENT_COLORS: tuple[str, ...] = (
 )
 
 
-def _offset_init(axis: ResolvedAxis, centre_sys: float) -> float:
-    """Return the initial velocity offset (km/s) for a centre axis (own part)."""
-    to_kms = (
-        (lambda v: v) if axis.unit == "km/s" else (lambda v: C_KMS * v / centre_sys)
-    )
-    if axis.kind == "fixed":
-        return float(to_kms(axis.value))
-    if axis.bounds is None:
-        return 0.0
-    return float(to_kms(0.5 * (axis.bounds[0] + axis.bounds[1])))
+def _initial_params(setup: LineFitSetup, init: Any) -> dict[str, dict[str, float]]:
+    """Return per-component initial ``(sign, mu, sigma_w, amp, flux)`` for preview.
 
+    Reuses the shared
+    :func:`~noobfriend.inference.spectrum._init.component_geometry` and the
+    lstsq per-component fluxes carried on ``init``.
+    """
+    from noobfriend.inference.spectrum._init import component_geometry
 
-def _initial_params(
-    setup: LineFitSetup, init: Any, wl: np.ndarray, flux: np.ndarray, degree: int
-) -> dict[str, dict[str, float]]:
-    """Return per-component initial ``(sign, mu, sigma_w, amp, ...)`` at prior centres."""
-    from noobfriend.inference.spectrum._pymc_model import _topo_order
-
-    z = setup.spectrum.z
-    cont = init.c0 + (init.c1 * (wl - init.lambda0) if degree >= 1 else 0.0)
-    excess = flux - cont
-    out: dict[str, dict[str, float]] = {}
-    for comp in _topo_order(setup.components):
-        rest = comp.rest_wavelength
-        centre_sys = (1.0 + z) * rest
-        cax = comp.centre
-        base_dv = out[cax.base_id]["dv"] if cax.base_id is not None else 0.0
-        dv = base_dv + _offset_init(cax, centre_sys)
-        mu = (1.0 + z) * rest * (1.0 + dv / C_KMS)
-
-        wax = comp.width
-        if wax.kind == "tied":
-            fwhm = out[wax.base_id]["fwhm"]
-        elif wax.kind == "fixed":
-            fwhm = float(wax.value)
-        else:
-            lo, hi = wax.bounds
-            fwhm = float(np.clip(comp.template.fwhm_kms_init, lo, hi))
-        sigma_w = mu * (fwhm / C_KMS) * _FWHM_TO_SIGMA
-
-        fax = comp.flux
-        if fax.base_id is not None:
-            ratio = (
-                float(fax.value)
-                if fax.kind == "fixed"
-                else 0.5 * (fax.bounds[0] + fax.bounds[1])
-            )
-            flux_i = ratio * out[fax.base_id]["flux"]
-        elif fax.kind == "fixed":
-            flux_i = float(fax.value)
-        elif fax.bounds is not None:
-            flux_i = 0.5 * (fax.bounds[0] + fax.bounds[1])
-        else:
-            j = int(np.argmin(np.abs(wl - mu)))
-            amp_est = abs(float(excess[j]))
-            flux_i = max(amp_est * sigma_w * _SQRT_2PI, init.flux_scale * 1e-3)
-
-        out[comp.id] = {
-            "sign": float(comp.template.sign),
-            "dv": dv,
-            "fwhm": fwhm,
-            "mu": mu,
-            "sigma_w": sigma_w,
-            "amp": flux_i / (sigma_w * _SQRT_2PI),
-            "flux": flux_i,
+    geometry = component_geometry(setup.components, setup.spectrum.z)
+    return {
+        cid: {
+            **g,
+            "amp": init.component_flux[cid] / (g["sigma_w"] * _SQRT_2PI),
+            "flux": init.component_flux[cid],
         }
-    return out
+        for cid, g in geometry.items()
+    }
 
 
 def preview_setup(
@@ -155,10 +103,9 @@ def preview_setup(
     mask, (lo, hi) = select_window(spectrum, comps, window=window, pad_kms=pad_kms)
     wl_w = spectrum.wavelength[mask].astype(float)
     fl_w = spectrum.flux[mask].astype(float)
-    er_w = spectrum.error[mask].astype(float)
     degree = continuum_degree if wl_w.size >= 4 else 0
-    init = initial_estimates(spectrum, comps, wl_w, fl_w, er_w, degree=degree)
-    params = _initial_params(setup, init, wl_w, fl_w, degree)
+    init = initial_estimates(spectrum, comps, wl_w, fl_w, degree=degree)
+    params = _initial_params(setup, init)
 
     def init_model(grid: np.ndarray) -> np.ndarray:
         grid = np.asarray(grid, dtype=float)

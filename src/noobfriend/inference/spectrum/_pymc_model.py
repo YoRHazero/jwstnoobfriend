@@ -244,7 +244,7 @@ def build_model(
     fl = spectrum.flux[mask].astype(float)
     er = spectrum.error[mask].astype(float)
     degree = int(continuum_degree) if wl.size >= 4 else 0
-    init = initial_estimates(spectrum, comps, wl, fl, er, degree=degree)
+    init = initial_estimates(spectrum, comps, wl, fl, degree=degree)
     z = spectrum.z
     fwhm_inst = None if spectrum.R is None else C_KMS / spectrum.R
 
@@ -294,7 +294,15 @@ def build_model(
             )
             flux = pm.Deterministic(
                 f"{cid}__flux",
-                _build_flux(pm, pt, comp.flux, exprs, init.flux_scale, cid, bounded),
+                _build_flux(
+                    pm,
+                    pt,
+                    comp.flux,
+                    exprs,
+                    init.component_flux.get(cid, init.flux_scale),
+                    cid,
+                    bounded,
+                ),
             )
             amp = pm.Deterministic(f"{cid}__amp", flux / (sigma_w * _SQRT_2PI))
             model_flux = model_flux + comp.template.sign * amp * pt.exp(
