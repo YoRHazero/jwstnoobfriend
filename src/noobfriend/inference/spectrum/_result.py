@@ -13,13 +13,15 @@ requires the optional ``mcmc`` extra at import time.
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from matplotlib.figure import Figure
 
@@ -37,6 +39,9 @@ class LineFitResult:
     ----------
     idata : xarray.DataTree
         The sampler output (posterior, sample_stats, log_likelihood).
+    model_name : str
+        The model's label (from :meth:`NoobSpectrum.setup`), used by
+        :meth:`compare`.
     components : tuple of ComponentMeta
         Component ids and signs, in build order.
     bounded : tuple of BoundedParam
@@ -52,6 +57,7 @@ class LineFitResult:
     """
 
     idata: Any
+    model_name: str
     components: tuple[ComponentMeta, ...]
     bounded: tuple[BoundedParam, ...]
     continuum_degree: int
@@ -369,20 +375,21 @@ class LineFitResult:
 
     def compare(
         self,
-        others: LineFitResult | Mapping[str, LineFitResult],
+        others: LineFitResult | Sequence[LineFitResult] | Mapping[str, LineFitResult],
         *,
-        label: str = "this",
+        label: str | None = None,
     ) -> Any:
         """Compare this fit to one or more others by PSIS-LOO.
 
         Parameters
         ----------
-        others : LineFitResult or mapping of str to LineFitResult
-            The fit(s) to compare against. A bare result is named ``"other"``; a
-            mapping names each. This fit and all of ``others`` must carry a
-            ``log_likelihood`` group (the default from :meth:`LineFitSetup.run`).
-        label : str, default "this"
-            The name for *this* fit in the comparison table.
+        others : LineFitResult, sequence of LineFitResult, or mapping
+            The fit(s) to compare against. Each is named by its ``model_name``
+            unless given as a ``name -> result`` mapping. This fit and all of
+            ``others`` must carry a ``log_likelihood`` group (the default from
+            :meth:`LineFitSetup.run`).
+        label : str, optional
+            Override the name for *this* fit (defaults to its ``model_name``).
 
         Returns
         -------
@@ -390,21 +397,40 @@ class LineFitResult:
             ArviZ's ranked comparison table; the highest expected log predictive
             density (rank 0) is favoured.
 
-        Raises
-        ------
-        ValueError
-            If ``label`` collides with a name in ``others``.
+        Notes
+        -----
+        Duplicate names (rare, since the default ``model_name`` encodes the
+        component count) get a ``.2`` / ``.3`` suffix with a warning.
         """
         import arviz as az
 
-        named = {"other": others} if isinstance(others, LineFitResult) else dict(others)
-        if label in named:
-            raise ValueError(f"label {label!r} collides with a name in `others`.")
-        return az.compare(
-            {label: self.idata, **{name: res.idata for name, res in named.items()}}
-        )
+        pairs: list[tuple[str, Any]] = [
+            (label if label is not None else self.model_name, self.idata)
+        ]
+        if isinstance(others, LineFitResult):
+            pairs.append((others.model_name, others.idata))
+        elif isinstance(others, Mapping):
+            pairs.extend((name, res.idata) for name, res in others.items())
+        else:
+            pairs.extend((res.model_name, res.idata) for res in others)
+
+        counts: dict[str, int] = {}
+        named: dict[str, Any] = {}
+        for name, idata in pairs:
+            counts[name] = counts.get(name, 0) + 1
+            if counts[name] > 1:
+                unique = f"{name}.{counts[name]}"
+                warnings.warn(
+                    f"duplicate model name {name!r}; using {unique!r}.", stacklevel=2
+                )
+                name = unique
+            named[name] = idata
+        return az.compare(named)
 
     def __repr__(self) -> str:
-        """Concise representation: component ids and draw count."""
+        """Concise representation: model name, component count, draws."""
         n = int(np.asarray(self.idata.posterior["continuum__c0"].values).size)
-        return f"LineFitResult({len(self.components)} components, {n} draws)"
+        return (
+            f"LineFitResult({self.model_name!r}, "
+            f"{len(self.components)} components, {n} draws)"
+        )

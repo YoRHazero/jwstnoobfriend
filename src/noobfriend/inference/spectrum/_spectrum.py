@@ -253,13 +253,19 @@ class NoobSpectrum:
         boost = continuum_boost(self.wavelength, self.flux, self.error, mask=mask)
         return replace(self, error=self.error * boost)
 
-    def setup(self, lines: Sequence[NoobLine]) -> LineFitSetup:
+    def setup(
+        self, lines: Sequence[NoobLine], *, model_name: str | None = None
+    ) -> LineFitSetup:
         """Compile a list of line declarations against this spectrum.
 
         Parameters
         ----------
         lines : sequence of NoobLine
             The model: root lines and their derived companions.
+        model_name : str, optional
+            A label for the model, carried onto the result for
+            :meth:`~noobfriend.inference.spectrum.LineFitResult.compare`. Defaults
+            to ``"<first line> N-component model"``.
 
         Returns
         -------
@@ -269,7 +275,7 @@ class NoobSpectrum:
         """
         from noobfriend.inference.spectrum._setup import build_setup
 
-        return build_setup(self, lines)
+        return build_setup(self, lines, model_name=model_name)
 
     def __repr__(self) -> str:
         """Concise summary of size, redshift, unit, and wavelength span."""

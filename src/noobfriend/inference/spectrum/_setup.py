@@ -141,10 +141,14 @@ class LineFitSetup:
         The spectrum the components were compiled against.
     components : tuple of ResolvedComponent
         The compiled components, in input order.
+    model_name : str
+        A label for this model, carried onto the result for
+        :meth:`~noobfriend.inference.spectrum.LineFitResult.compare`.
     """
 
     spectrum: NoobSpectrum
     components: tuple[ResolvedComponent, ...]
+    model_name: str
 
     def summary(self) -> str:
         """Return a table of every component's id and resolved axes."""
@@ -308,6 +312,7 @@ class LineFitSetup:
                 pm.compute_log_likelihood(idata, progressbar=False)
         return LineFitResult(
             idata=idata,
+            model_name=self.model_name,
             components=bundle.components,
             bounded=bundle.bounded,
             continuum_degree=bundle.continuum_degree,
@@ -324,7 +329,19 @@ class LineFitSetup:
         return f"LineFitSetup({len(self.components)} components: {ids})"
 
 
-def build_setup(spectrum: NoobSpectrum, lines: Sequence[NoobLine]) -> LineFitSetup:
+def _default_model_name(lines: list[NoobLine]) -> str:
+    """Auto-name a model by its first line and that line's component count."""
+    first = lines[0].linename
+    n = sum(1 for line in lines if line.linename == first)
+    return f"{first} {n}-component model"
+
+
+def build_setup(
+    spectrum: NoobSpectrum,
+    lines: Sequence[NoobLine],
+    *,
+    model_name: str | None = None,
+) -> LineFitSetup:
     """Compile ``lines`` against ``spectrum`` into a :class:`LineFitSetup`.
 
     Parameters
@@ -333,6 +350,10 @@ def build_setup(spectrum: NoobSpectrum, lines: Sequence[NoobLine]) -> LineFitSet
         The target spectrum.
     lines : sequence of NoobLine
         The model declarations (root lines and derived companions).
+    model_name : str, optional
+        A label for the model; defaults to ``"<first line> N-component model"``
+        (N = that line's component count), which makes the common single-vs-double
+        comparison self-naming.
 
     Returns
     -------
@@ -369,7 +390,11 @@ def build_setup(spectrum: NoobSpectrum, lines: Sequence[NoobLine]) -> LineFitSet
                 flux=_resolve_flux(line, parent_id),
             )
         )
-    return LineFitSetup(spectrum=spectrum, components=tuple(resolved))
+    return LineFitSetup(
+        spectrum=spectrum,
+        components=tuple(resolved),
+        model_name=model_name if model_name is not None else _default_model_name(items),
+    )
 
 
 def _validate_graph(lines: list[NoobLine]) -> None:
