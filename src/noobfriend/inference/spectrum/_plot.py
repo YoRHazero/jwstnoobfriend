@@ -69,7 +69,7 @@ def _initial_params(
     excess = flux - cont
     out: dict[str, dict[str, float]] = {}
     for comp in _topo_order(setup.components):
-        rest = comp.line.rest_wavelength
+        rest = comp.rest_wavelength
         centre_sys = (1.0 + z) * rest
         cax = comp.centre
         base_dv = out[cax.base_id]["dv"] if cax.base_id is not None else 0.0

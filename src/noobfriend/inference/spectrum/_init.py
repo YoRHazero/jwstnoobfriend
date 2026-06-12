@@ -90,7 +90,7 @@ def initial_estimates(
     # Mask the line cores (a couple of nominal widths) before fitting continuum.
     core = np.zeros_like(wl, dtype=bool)
     for c in components:
-        centre = (1.0 + z) * c.line.rest_wavelength
+        centre = (1.0 + z) * c.rest_wavelength
         fwhm_kms = c.template.fwhm_kms_init
         half = centre * (2.0 * fwhm_kms) / C_KMS
         core |= np.abs(wl - centre) <= half

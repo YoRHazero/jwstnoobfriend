@@ -20,6 +20,7 @@ from noobfriend.inference.spectrum._template import (
     ComponentTemplate,
     register_template,
 )
+from noobfriend.inference.spectrum._units import WaveUnit
 
 __all__ = [
     "ComponentTemplate",
@@ -27,6 +28,7 @@ __all__ = [
     "LineFitSetup",
     "NoobLine",
     "NoobSpectrum",
+    "WaveUnit",
     "compare_models",
     "register_template",
 ]

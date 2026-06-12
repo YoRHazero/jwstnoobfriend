@@ -19,7 +19,7 @@ def _spec() -> NoobSpectrum:
         np.ones_like(wl),
         np.full_like(wl, 0.1),
         z=0.0,
-        wave_unit="Angstrom",
+        wave_unit="A",
         R=2700.0,
     )
 
@@ -29,7 +29,7 @@ def _by_id(setup) -> dict[str, object]:
 
 
 def test_root_floats_and_derived_locks_co_moving():
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     nii = ha.derive("NII_6583", rest_wavelength=6583.0)
     comps = _by_id(_spec().setup([ha, nii]))
 
@@ -48,9 +48,7 @@ def test_root_floats_and_derived_locks_co_moving():
 
 
 def test_id_generation_minimal_numbered_and_custom():
-    ha_n = NoobLine(
-        "Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow"
-    )
+    ha_n = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     ha_b = ha_n.derive(component="broad")
     abs1 = ha_n.derive(component="absorption")
     abs2 = ha_n.derive(component="absorption")  # second auto absorption -> numbered
@@ -71,7 +69,7 @@ def test_duplicate_custom_id_raises():
     ha = NoobLine(
         "Halpha",
         rest_wavelength=6562.8,
-        unit="Angstrom",
+        unit="A",
         component="narrow",
         custom_id="dup",
     )
@@ -81,17 +79,17 @@ def test_duplicate_custom_id_raises():
 
 
 def test_derive_inherits_identity():
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     child = ha.derive()  # everything inherited
     assert child.linename == "Halpha"
     assert child.rest_wavelength == 6562.8
-    assert child.unit == "Angstrom"
+    assert child.unit == "A"
     assert child.component == "narrow"
     assert child.parent is ha and not child.is_root
 
 
 def test_centre_fixed_and_bounded_offsets():
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     fixed = ha.derive(component="broad", delta_v_kms=120.0)
     bounded = ha.derive(component="broad", delta_v_kms=(-800.0, 0.0))
     comps = _by_id(_spec().setup([ha, fixed, bounded]))
@@ -105,7 +103,7 @@ def test_centre_fixed_and_bounded_offsets():
 
 
 def test_width_auto_free_lock_override_and_abs():
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     # different component -> width free from the broad template.
     broad = ha.derive(component="broad")
     # same component but lock_fwhm=False -> forced free.
@@ -124,9 +122,7 @@ def test_width_auto_free_lock_override_and_abs():
 
 
 def test_flux_ratio_tie_and_abs_override():
-    nii_b = NoobLine(
-        "NII_6583", rest_wavelength=6583.0, unit="Angstrom", component="narrow"
-    )
+    nii_b = NoobLine("NII_6583", rest_wavelength=6583.0, unit="A", component="narrow")
     nii_a = nii_b.derive("NII_6548", rest_wavelength=6548.0, flux_ratio=1 / 3)
     pinned = nii_b.derive("OIII", rest_wavelength=5007.0, abs_flux=2.5)
     comps = _by_id(_spec().setup([nii_b, nii_a, pinned]))
@@ -146,9 +142,7 @@ def test_flux_ratio_tie_and_abs_override():
     ],
 )
 def test_per_axis_conflicts_raise(kwargs, match):
-    parent = NoobLine(
-        "Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow"
-    )
+    parent = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     with pytest.raises(ValueError, match=match):
         parent.derive(component="broad", **kwargs)
 
@@ -158,7 +152,7 @@ def test_root_only_options_raise():
         NoobLine(
             "X",
             rest_wavelength=5000.0,
-            unit="Angstrom",
+            unit="A",
             component="narrow",
             lock_fwhm=True,
         )
@@ -166,23 +160,50 @@ def test_root_only_options_raise():
         NoobLine(
             "X",
             rest_wavelength=5000.0,
-            unit="Angstrom",
+            unit="A",
             component="narrow",
             flux_ratio=0.5,
         )
 
 
-def test_setup_rejects_absent_parent_and_unit_mismatch():
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+def test_setup_rejects_absent_parent():
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     orphan = ha.derive("NII_6583", rest_wavelength=6583.0)
     with pytest.raises(ValueError, match="not in the lines list"):
         _spec().setup([orphan])  # parent ha omitted
 
-    mismatched = NoobLine(
-        "Halpha", rest_wavelength=0.656, unit="micron", component="narrow"
+
+def test_cross_unit_conversion_to_spectrum_frame():
+    # micron spectrum, Angstrom line -> rest converts into the spectrum's frame.
+    wl_um = np.linspace(0.64, 0.67, 50)
+    spec = NoobSpectrum.from_1d(
+        wl_um, np.ones_like(wl_um), np.full_like(wl_um, 0.1), z=0.0, wave_unit="um"
     )
-    with pytest.raises(ValueError, match="differs from spectrum"):
-        _spec().setup([mismatched])
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    comp = spec.setup([ha]).components[0]
+    assert comp.rest_wavelength == pytest.approx(0.65628)  # 6562.8 A -> 0.65628 um
+
+
+def test_delta_wavelength_converts_to_spectrum_frame():
+    # a +-10 A centre wander on a micron spectrum resolves to +-0.001 um bounds.
+    wl_um = np.linspace(0.64, 0.67, 50)
+    spec = NoobSpectrum.from_1d(
+        wl_um, np.ones_like(wl_um), np.full_like(wl_um, 0.1), z=0.0, wave_unit="um"
+    )
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    broad = ha.derive(component="broad", delta_wavelength=(-10.0, 10.0))
+    axis = {c.id: c for c in spec.setup([ha, broad]).components}["Halpha.broad"].centre
+    assert axis.unit == "um"
+    assert axis.bounds == pytest.approx((-0.001, 0.001))
+
+
+def test_invalid_wave_unit_rejected():
+    with pytest.raises(ValueError, match="must be one of"):
+        NoobLine("X", rest_wavelength=5000.0, unit="Angstrom", component="narrow")
+    with pytest.raises(ValueError, match="must be one of"):
+        NoobSpectrum.from_1d(
+            np.arange(5.0), np.ones(5), np.ones(5), z=0.0, wave_unit="nanometer"
+        )
 
 
 def test_from_2d_collapse_sums_flux_and_propagates_error():
@@ -196,7 +217,7 @@ def test_from_2d_collapse_sums_flux_and_propagates_error():
         collapse_window=(1, 4),
         dispersion="row",
         z=0.0,
-        wave_unit="Angstrom",
+        wave_unit="A",
         boost=2.0,
     )
     assert np.allclose(spec.flux, 3.0)  # 3 rows summed
@@ -206,7 +227,7 @@ def test_from_2d_collapse_sums_flux_and_propagates_error():
 def test_from_1d_shape_mismatch_raises():
     with pytest.raises(ValueError, match="equal length"):
         NoobSpectrum.from_1d(
-            np.arange(5.0), np.arange(4.0), np.arange(5.0), z=0.0, wave_unit="Angstrom"
+            np.arange(5.0), np.arange(4.0), np.arange(5.0), z=0.0, wave_unit="A"
         )
 
 
@@ -241,11 +262,11 @@ def test_run_recovers_synthetic_halpha_nii():
         truth + rng.normal(0, 0.08, wl.size),
         err,
         z=0.0,
-        wave_unit="Angstrom",
+        wave_unit="A",
         R=3000.0,
     )
 
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     nii_b = ha.derive("NII_6583", rest_wavelength=6583.4)
     nii_a = nii_b.derive("NII_6548", rest_wavelength=6548.0, flux_ratio=1 / 3)
 
@@ -285,7 +306,7 @@ def test_setup_plot_preview_returns_figure():
     """setup.plot() previews window + initial guess without needing PyMC."""
     import matplotlib.pyplot as plt
 
-    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
     nii = ha.derive("NII_6583", rest_wavelength=6583.0)
     fig = _spec().setup([ha, nii]).plot()
     assert len(fig.axes) == 1

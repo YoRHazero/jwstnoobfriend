@@ -263,7 +263,7 @@ def build_model(
 
         for comp in _topo_order(comps):
             cid = comp.id
-            centre_sys = (1.0 + z) * comp.line.rest_wavelength
+            centre_sys = (1.0 + z) * comp.rest_wavelength
             base_dv = (
                 exprs[comp.centre.base_id]["dv"]
                 if comp.centre.base_id is not None
@@ -274,7 +274,7 @@ def build_model(
                 base_dv + _build_offset(pm, pt, comp.centre, centre_sys, cid, bounded),
             )
             mu = pm.Deterministic(
-                f"{cid}__mu", (1.0 + z) * comp.line.rest_wavelength * (1.0 + dv / C_KMS)
+                f"{cid}__mu", (1.0 + z) * comp.rest_wavelength * (1.0 + dv / C_KMS)
             )
             fwhm = pm.Deterministic(
                 f"{cid}__fwhm_kms",

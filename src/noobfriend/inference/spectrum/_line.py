@@ -32,6 +32,7 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Literal
 
 from noobfriend.inference.spectrum._template import get_template
+from noobfriend.inference.spectrum._units import WAVE_UNITS, WaveUnit, check_unit
 
 __all__ = ["NoobLine", "Spec", "classify_spec"]
 
@@ -98,9 +99,10 @@ class NoobLine:
     rest_wavelength : float
         Rest-frame wavelength in ``unit``. Required for a root line; inherited by
         :meth:`derive` when omitted.
-    unit : str
-        Wavelength unit of ``rest_wavelength`` (e.g. ``"Angstrom"``). Must match
-        the spectrum's ``wave_unit`` at setup. Required for a root line.
+    unit : WaveUnit
+        Wavelength unit of ``rest_wavelength`` (``"A"``, ``"nm"``, or ``"um"``);
+        converted into the spectrum's ``wave_unit`` at setup. Required for a root
+        line.
     component : str
         Line-shape type; one of the registered templates (``narrow`` / ``broad``
         / ``absorption`` by default). Sets the sign and default width prior, and
@@ -131,7 +133,7 @@ class NoobLine:
     linename: str
     _: KW_ONLY
     rest_wavelength: float | None = None
-    unit: str | None = None
+    unit: WaveUnit | None = None
     component: str | None = None
     custom_id: str | None = None
     delta_v_kms: Spec = None
@@ -159,8 +161,11 @@ class NoobLine:
             raise ValueError(
                 f"{self.linename}: rest_wavelength must be a positive number."
             )
-        if not self.unit:
-            raise ValueError(f"{self.linename}: unit is required (e.g. 'Angstrom').")
+        if self.unit is None:
+            raise ValueError(
+                f"{self.linename}: unit is required (one of {WAVE_UNITS})."
+            )
+        check_unit(self.unit, self.linename)
         if self.component is None:
             raise ValueError(f"{self.linename}: component is required.")
         get_template(self.component)  # validates the component name
@@ -210,7 +215,7 @@ class NoobLine:
         linename: str | None = None,
         *,
         rest_wavelength: float | None = None,
-        unit: str | None = None,
+        unit: WaveUnit | None = None,
         component: str | None = None,
         custom_id: str | None = None,
         delta_v_kms: Spec = None,

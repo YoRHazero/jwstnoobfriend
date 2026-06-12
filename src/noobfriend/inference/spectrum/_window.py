@@ -25,7 +25,7 @@ def component_centres(
     spectrum: NoobSpectrum, components: tuple[ResolvedComponent, ...]
 ) -> list[float]:
     """Return each component's systemic observed centre ``(1 + z) * rest``."""
-    return [(1.0 + spectrum.z) * c.line.rest_wavelength for c in components]
+    return [(1.0 + spectrum.z) * c.rest_wavelength for c in components]
 
 
 def select_window(

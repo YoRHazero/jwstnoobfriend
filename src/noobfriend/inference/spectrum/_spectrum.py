@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from numpy.typing import ArrayLike
 
+from noobfriend.inference.spectrum._units import WaveUnit, check_unit
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -45,9 +47,10 @@ class NoobSpectrum:
         the 1-sigma uncertainty on ``flux``.
     z : float
         Systemic redshift; line centres default to ``(1 + z) * rest_wavelength``.
-    wave_unit : str
-        Wavelength unit (e.g. ``"Angstrom"``, ``"micron"``); line rest
-        wavelengths must be expressed in, or convertible to, this unit.
+    wave_unit : WaveUnit
+        Wavelength unit (``"A"``, ``"nm"``, or ``"um"``); a line's rest wavelength
+        is converted into this frame at setup, and all fitted quantities come out
+        in it.
     R : float or None
         Spectral resolving power ``lambda / dlambda``, used to floor line widths.
         ``None`` leaves widths floored only by the template bounds.
@@ -57,7 +60,7 @@ class NoobSpectrum:
     flux: np.ndarray
     error: np.ndarray
     z: float
-    wave_unit: str
+    wave_unit: WaveUnit
     R: float | None = None
 
     @classmethod
@@ -68,7 +71,7 @@ class NoobSpectrum:
         error: ArrayLike,
         *,
         z: float,
-        wave_unit: str,
+        wave_unit: WaveUnit,
         R: float | None = None,
     ) -> NoobSpectrum:
         """Build from an already-extracted 1-D spectrum.
@@ -79,8 +82,8 @@ class NoobSpectrum:
             Equal-length 1-D arrays.
         z : float
             Systemic redshift (``> -1``).
-        wave_unit : str
-            Wavelength unit of ``wavelength``.
+        wave_unit : WaveUnit
+            Wavelength unit of ``wavelength`` (``"A"``, ``"nm"``, or ``"um"``).
         R : float or None, optional
             Spectral resolving power.
 
@@ -116,7 +119,7 @@ class NoobSpectrum:
         collapse_window: tuple[int, int],
         dispersion: Literal["row", "column"] = "row",
         z: float,
-        wave_unit: str,
+        wave_unit: WaveUnit,
         R: float | None = None,
         boost: float = 1.0,
     ) -> NoobSpectrum:
@@ -223,20 +226,20 @@ def _validated(
     fl: np.ndarray,
     er: np.ndarray,
     z: float,
-    wave_unit: str,
+    wave_unit: WaveUnit,
     R: float | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, str, float | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, WaveUnit, float | None]:
     """Validate the shared scalar metadata and return the constructor tuple.
 
     Raises
     ------
     ValueError
-        If ``z <= -1``, ``wave_unit`` is empty, or ``R`` is non-positive.
+        If ``z <= -1``, ``wave_unit`` is not a valid unit, or ``R`` is
+        non-positive.
     """
     if z <= -1:
         raise ValueError(f"z must be > -1, got {z}.")
-    if not wave_unit:
-        raise ValueError("wave_unit is required (e.g. 'Angstrom').")
+    check_unit(wave_unit, "wave_unit")
     if R is not None and R <= 0:
         raise ValueError(f"R must be positive, got {R}.")
     return wl, fl, er, float(z), wave_unit, (None if R is None else float(R))

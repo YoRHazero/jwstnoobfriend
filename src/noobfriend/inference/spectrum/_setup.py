@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Literal
 
 from noobfriend.inference.spectrum._line import classify_spec
 from noobfriend.inference.spectrum._template import ComponentTemplate, get_template
+from noobfriend.inference.spectrum._units import convert
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -109,6 +110,9 @@ class ResolvedComponent:
         The generated (or custom) component id.
     line : NoobLine
         The source declaration.
+    rest_wavelength : float
+        The line's rest wavelength converted into the spectrum's ``wave_unit``
+        (so all downstream code works in one frame).
     template : ComponentTemplate
         The component's shape template.
     centre, width, flux : ResolvedAxis
@@ -117,6 +121,7 @@ class ResolvedComponent:
 
     id: str
     line: NoobLine
+    rest_wavelength: float
     template: ComponentTemplate
     centre: ResolvedAxis
     width: ResolvedAxis
@@ -337,14 +342,13 @@ def build_setup(spectrum: NoobSpectrum, lines: Sequence[NoobLine]) -> LineFitSet
     ------
     ValueError
         If ``lines`` is empty, a derived line's parent is absent, the derive
-        graph has a cycle, a line's ``unit`` differs from the spectrum's
-        ``wave_unit``, or generated/custom ids collide.
+        graph has a cycle, or generated/custom ids collide.
     """
     items = list(lines)
     if not items:
         raise ValueError("setup needs at least one NoobLine.")
 
-    _validate_graph(spectrum, items)
+    _validate_graph(items)
     id_by_obj = _generate_ids(items)
 
     resolved = []
@@ -356,8 +360,11 @@ def build_setup(spectrum: NoobSpectrum, lines: Sequence[NoobLine]) -> LineFitSet
             ResolvedComponent(
                 id=id_by_obj[id(line)],
                 line=line,
+                rest_wavelength=convert(
+                    line.rest_wavelength, line.unit, spectrum.wave_unit
+                ),
                 template=template,
-                centre=_resolve_centre(line, parent_id),
+                centre=_resolve_centre(line, parent_id, spectrum.wave_unit),
                 width=_resolve_width(line, parent, parent_id, template),
                 flux=_resolve_flux(line, parent_id),
             )
@@ -365,16 +372,10 @@ def build_setup(spectrum: NoobSpectrum, lines: Sequence[NoobLine]) -> LineFitSet
     return LineFitSetup(spectrum=spectrum, components=tuple(resolved))
 
 
-def _validate_graph(spectrum: NoobSpectrum, lines: list[NoobLine]) -> None:
-    """Check parents are present, the graph is acyclic, and units are consistent."""
+def _validate_graph(lines: list[NoobLine]) -> None:
+    """Check derived parents are present and the graph is acyclic."""
     present = {id(line) for line in lines}
     for line in lines:
-        if line.unit != spectrum.wave_unit:
-            raise ValueError(
-                f"line {line.linename!r} unit {line.unit!r} differs from spectrum "
-                f"wave_unit {spectrum.wave_unit!r}; cross-unit conversion is not "
-                "wired yet, so make them match."
-            )
         if line.parent is not None and id(line.parent) not in present:
             raise ValueError(
                 f"line {line.linename!r}'s parent "
@@ -433,14 +434,28 @@ def _generate_ids(lines: list[NoobLine]) -> dict[int, str]:
     return final
 
 
-def _resolve_centre(line: NoobLine, parent_id: str | None) -> ResolvedAxis:
-    """Resolve the centre-velocity axis (offset from parent or systemic)."""
+def _resolve_centre(
+    line: NoobLine, parent_id: str | None, wave_unit: str
+) -> ResolvedAxis:
+    """Resolve the centre-velocity axis (offset from parent or systemic).
+
+    A ``delta_wavelength`` is converted into the spectrum's ``wave_unit`` so the
+    later km/s conversion divides it by a same-frame line centre.
+    """
     if line.delta_v_kms is not None:
         kind, payload = classify_spec(line.delta_v_kms, "delta_v_kms")
         unit = "km/s"
     elif line.delta_wavelength is not None:
         kind, payload = classify_spec(line.delta_wavelength, "delta_wavelength")
-        unit = line.unit or ""
+        assert line.unit is not None  # noqa: S101  (validated)
+        if kind == "fixed":
+            payload = convert(payload, line.unit, wave_unit)
+        elif kind == "bounded":
+            payload = (
+                convert(payload[0], line.unit, wave_unit),
+                convert(payload[1], line.unit, wave_unit),
+            )
+        unit = wave_unit
     else:
         kind, payload, unit = "none", None, "km/s"
 
