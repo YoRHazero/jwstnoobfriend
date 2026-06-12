@@ -5,7 +5,7 @@ to interpret it: per-component summaries (:meth:`summary`, :meth:`interval`), a
 posterior model curve for overlaying on a spectrum (:meth:`model_curve` /
 :attr:`flux_func`, consumed by ``plot_spectrum1d``), convergence
 :meth:`diagnostics`, and a one-line :meth:`plot`. Cross-model selection (single
-vs double) is :func:`compare_models`.
+vs double) is :meth:`LineFitResult.compare`.
 
 ArviZ / xarray are imported lazily inside the methods, so holding a result never
 requires the optional ``mcmc`` extra at import time.
@@ -218,7 +218,7 @@ class LineFitResult:
         not really broad) or a flux pressed to its lower limit. This is evidence a
         component is unwarranted, not a sampling artifact; weigh it with
         :meth:`significance_report` and
-        :func:`~noobfriend.inference.spectrum._result.compare_models`.
+        :meth:`compare`.
 
         Parameters
         ----------
@@ -367,27 +367,44 @@ class LineFitResult:
             self, full=full, residual=residual, decompose=decompose, **kwargs
         )
 
+    def compare(
+        self,
+        others: LineFitResult | Mapping[str, LineFitResult],
+        *,
+        label: str = "this",
+    ) -> Any:
+        """Compare this fit to one or more others by PSIS-LOO.
+
+        Parameters
+        ----------
+        others : LineFitResult or mapping of str to LineFitResult
+            The fit(s) to compare against. A bare result is named ``"other"``; a
+            mapping names each. This fit and all of ``others`` must carry a
+            ``log_likelihood`` group (the default from :meth:`LineFitSetup.run`).
+        label : str, default "this"
+            The name for *this* fit in the comparison table.
+
+        Returns
+        -------
+        pandas.DataFrame
+            ArviZ's ranked comparison table; the highest expected log predictive
+            density (rank 0) is favoured.
+
+        Raises
+        ------
+        ValueError
+            If ``label`` collides with a name in ``others``.
+        """
+        import arviz as az
+
+        named = {"other": others} if isinstance(others, LineFitResult) else dict(others)
+        if label in named:
+            raise ValueError(f"label {label!r} collides with a name in `others`.")
+        return az.compare(
+            {label: self.idata, **{name: res.idata for name, res in named.items()}}
+        )
+
     def __repr__(self) -> str:
         """Concise representation: component ids and draw count."""
         n = int(np.asarray(self.idata.posterior["continuum__c0"].values).size)
         return f"LineFitResult({len(self.components)} components, {n} draws)"
-
-
-def compare_models(results: Mapping[str, LineFitResult]) -> Any:
-    """Compare fits by expected log predictive density (PSIS-LOO).
-
-    Parameters
-    ----------
-    results : mapping of str to LineFitResult
-        Named fits (e.g. ``{"single": ..., "double": ...}``); each must carry a
-        ``log_likelihood`` group (the default when sampled via
-        :meth:`LineFitSetup.run`).
-
-    Returns
-    -------
-    pandas.DataFrame
-        ArviZ's ranked comparison table.
-    """
-    import arviz as az
-
-    return az.compare({name: res.idata for name, res in results.items()})

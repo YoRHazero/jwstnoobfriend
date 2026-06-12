@@ -255,7 +255,7 @@ class LineFitSetup:
             Show the sampler progress bar.
         compute_log_likelihood : bool, default True
             Compute the pointwise log likelihood (needed for
-            :func:`~noobfriend.inference.spectrum._result.compare_models`).
+            :meth:`~noobfriend.inference.spectrum.LineFitResult.compare`).
         **sample_kwargs
             Extra keyword arguments forwarded to ``pymc.sample`` (e.g.
             ``nuts_sampler_kwargs``).

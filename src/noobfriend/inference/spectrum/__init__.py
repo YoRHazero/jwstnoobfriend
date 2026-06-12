@@ -13,7 +13,7 @@ step; today's surface compiles, validates, and previews the model graph.
 """
 
 from noobfriend.inference.spectrum._line import NoobLine
-from noobfriend.inference.spectrum._result import LineFitResult, compare_models
+from noobfriend.inference.spectrum._result import LineFitResult
 from noobfriend.inference.spectrum._setup import LineFitSetup
 from noobfriend.inference.spectrum._spectrum import NoobSpectrum
 from noobfriend.inference.spectrum._template import (
@@ -29,6 +29,5 @@ __all__ = [
     "NoobLine",
     "NoobSpectrum",
     "WaveUnit",
-    "compare_models",
     "register_template",
 ]
