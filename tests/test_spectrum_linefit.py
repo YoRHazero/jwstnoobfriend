@@ -206,6 +206,47 @@ def test_invalid_wave_unit_rejected():
         )
 
 
+def test_continuum_boost_recovers_underquoted_error():
+    from noobfriend.inference.spectrum._noise import continuum_boost
+
+    rng = np.random.default_rng(0)
+    wl = np.linspace(6500.0, 6620.0, 300)
+    flux = 1.0 + rng.normal(0.0, 0.2, wl.size)  # real scatter 0.2 ...
+    error = np.full(wl.size, 0.1)  # ... but error quoted as 0.1
+    assert continuum_boost(wl, flux, error) == pytest.approx(2.0, rel=0.15)
+
+
+def test_from_2d_background_inflates_error_and_guard():
+    from scipy.ndimage import gaussian_filter
+
+    rng = np.random.default_rng(1)
+    corr = gaussian_filter(rng.normal(0.0, 1.0, (40, 60)), sigma=1.0)  # correlated
+    err2d = np.full((40, 60), float(corr.std()))
+    wl = np.linspace(6500.0, 6620.0, 60)
+    common = {
+        "collapse_window": (18, 23),
+        "dispersion": "row",
+        "z": 0.0,
+        "wave_unit": "A",
+    }
+
+    naive = NoobSpectrum.from_2d(wl, corr, err2d, **common)
+    bg = NoobSpectrum.from_2d(
+        wl, corr, err2d, correlation_source="background", **common
+    )
+    assert np.median(bg.error) > np.median(naive.error)  # correlation inflates it
+
+    with pytest.raises(ValueError, match="only used with"):
+        NoobSpectrum.from_2d(
+            wl,
+            corr,
+            err2d,
+            correlation_source="continuum",
+            correlation_correction=1.3,
+            **common,
+        )
+
+
 def test_from_2d_collapse_sums_flux_and_propagates_error():
     wl = np.linspace(6400.0, 6700.0, 20)
     flux2d = np.ones((5, 20))  # 5 cross-dispersion rows, dispersion along axis 1
@@ -218,7 +259,8 @@ def test_from_2d_collapse_sums_flux_and_propagates_error():
         dispersion="row",
         z=0.0,
         wave_unit="A",
-        boost=2.0,
+        correlation_source="manual",
+        correlation_correction=2.0,
     )
     assert np.allclose(spec.flux, 3.0)  # 3 rows summed
     assert np.allclose(spec.error, np.sqrt(3 * 0.2**2) * 2.0)  # quadrature * boost
