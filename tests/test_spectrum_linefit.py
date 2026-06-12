@@ -266,3 +266,20 @@ def test_run_recovers_synthetic_halpha_nii():
     low, mid, high = res.model_curve(wl)
     assert low.shape == mid.shape == high.shape == wl.shape
     assert np.all(low <= high)
+
+    import matplotlib.pyplot as plt
+
+    assert len(res.plot().axes) == 2  # data + residual panels
+    assert len(res.plot(residual=False, decompose=False).axes) == 1
+    plt.close("all")
+
+
+def test_setup_plot_preview_returns_figure():
+    """setup.plot() previews window + initial guess without needing PyMC."""
+    import matplotlib.pyplot as plt
+
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="Angstrom", component="narrow")
+    nii = ha.derive("NII_6583", rest_wavelength=6583.0)
+    fig = _spec().setup([ha, nii]).plot()
+    assert len(fig.axes) == 1
+    plt.close(fig)

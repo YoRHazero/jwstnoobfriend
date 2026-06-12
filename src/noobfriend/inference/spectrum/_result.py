@@ -205,34 +205,75 @@ class LineFitResult:
         )
         return {"divergences": diverging, "max_rhat": max_rhat, "min_ess_bulk": min_ess}
 
-    def plot(self, *, full: bool = False, **kwargs: Any) -> Figure:
-        """Overlay the posterior model band on the data.
+    def continuum_curve(self, grid: np.ndarray) -> np.ndarray:
+        """Return the posterior-median continuum on ``grid``."""
+        grid = np.asarray(grid, dtype=float)
+        c0 = float(np.median(self._flat("continuum__c0")))
+        if self.continuum_degree >= 1:
+            c1 = float(np.median(self._flat("continuum__c1")))
+            return c0 + c1 * (grid - self.lambda0)
+        return np.full_like(grid, c0)
+
+    def component_curve(
+        self, component_id: str, grid: np.ndarray, *, with_continuum: bool = True
+    ) -> np.ndarray:
+        """Return the posterior-median curve of one component on ``grid``.
+
+        Parameters
+        ----------
+        component_id : str
+            The component id.
+        grid : numpy.ndarray
+            Wavelengths to evaluate at.
+        with_continuum : bool, default True
+            Add the median continuum, so the component sits on it (the natural
+            decomposition overlay); ``False`` returns the bare line profile.
+
+        Returns
+        -------
+        numpy.ndarray
+        """
+        grid = np.asarray(grid, dtype=float)
+        sign = {c.id: c.sign for c in self.components}[component_id]
+        mu = float(np.median(self._flat(f"{component_id}__mu")))
+        sw = float(np.median(self._flat(f"{component_id}__sigma_w")))
+        amp = float(np.median(self._flat(f"{component_id}__amp")))
+        line = sign * amp * np.exp(-0.5 * ((grid - mu) / sw) ** 2)
+        return line + self.continuum_curve(grid) if with_continuum else line
+
+    def plot(
+        self,
+        *,
+        full: bool = False,
+        residual: bool = True,
+        decompose: bool = True,
+        **kwargs: Any,
+    ) -> Figure:
+        """Plot the data with the posterior model, decomposition, and residuals.
 
         Parameters
         ----------
         full : bool, default False
             Plot the whole spectrum; otherwise just the fitted window.
+        residual : bool, default True
+            Add a shared-x panel of standardized residuals ``(data - model) / sigma``.
+        decompose : bool, default True
+            Overlay each component's median curve (on the continuum) alongside the
+            total posterior band.
         **kwargs
             Forwarded to
-            :func:`~noobfriend.core.display.plot._spectrum1d.plot_spectrum1d`.
+            :func:`~noobfriend.inference.spectrum._plot.plot_result` (e.g.
+            ``size``, ``title``, ``save``).
 
         Returns
         -------
         matplotlib.figure.Figure
         """
-        from noobfriend.core.display.plot._spectrum1d import plot_spectrum1d
+        from noobfriend.inference.spectrum._plot import plot_result
 
-        if full:
-            wl, fl, er = (
-                self.spectrum.wavelength,
-                self.spectrum.flux,
-                self.spectrum.error,
-            )
-        else:
-            wl, fl, er = self.window_wl, self.window_flux, self.window_error
-        kwargs.setdefault("x_label", f"Wavelength [{self.spectrum.wave_unit}]")
-        model = {"flux_func": self.flux_func, "label": "model", "color": "C3"}
-        return plot_spectrum1d(wl, fl, error=er, models=[model], **kwargs)
+        return plot_result(
+            self, full=full, residual=residual, decompose=decompose, **kwargs
+        )
 
     def __repr__(self) -> str:
         """Concise representation: component ids and draw count."""

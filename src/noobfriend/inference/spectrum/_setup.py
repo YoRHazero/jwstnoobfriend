@@ -31,6 +31,8 @@ from noobfriend.inference.spectrum._template import ComponentTemplate, get_templ
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from matplotlib.figure import Figure
+
     from noobfriend.inference.spectrum._line import NoobLine
     from noobfriend.inference.spectrum._result import LineFitResult
     from noobfriend.inference.spectrum._spectrum import NoobSpectrum
@@ -157,6 +159,47 @@ class LineFitSetup:
         lines = [fmt.format(*header), fmt.format(*("-" * w for w in widths))]
         lines += [fmt.format(*r) for r in rows]
         return "\n".join(lines)
+
+    def plot(
+        self,
+        *,
+        window: tuple[float, float] | None = None,
+        pad_kms: float = 5000.0,
+        continuum_degree: int = 1,
+        **kwargs: object,
+    ) -> Figure:
+        """Preview the fitting window and initial-guess model over the data.
+
+        Drawn before sampling (and without needing the ``mcmc`` extra), so a bad
+        window or starting point is caught early. ``window`` / ``pad_kms`` /
+        ``continuum_degree`` mirror :meth:`run` so the preview matches the fit.
+
+        Parameters
+        ----------
+        window : tuple of float, optional
+            Explicit ``(lo, hi)`` window; else auto from the line span.
+        pad_kms : float, default 5000.0
+            Velocity padding for the automatic window.
+        continuum_degree : int, default 1
+            Local continuum polynomial degree.
+        **kwargs
+            Forwarded to
+            :func:`~noobfriend.inference.spectrum._plot.preview_setup` (``size``,
+            ``title``, ``save``).
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from noobfriend.inference.spectrum._plot import preview_setup
+
+        return preview_setup(
+            self,
+            window=window,
+            pad_kms=pad_kms,
+            continuum_degree=continuum_degree,
+            **kwargs,
+        )
 
     def run(
         self,

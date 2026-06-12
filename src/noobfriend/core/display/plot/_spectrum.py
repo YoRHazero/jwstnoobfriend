@@ -4,7 +4,7 @@ This module holds the dimension-agnostic spectrum machinery reused by both
 :func:`~noobfriend.core.display.plot._spectrum1d.plot_spectrum1d` and (in
 future) ``plot_spectrum2d``: the :class:`ModelSpec` mapping and its validated
 :class:`_ModelCurve` normal form, the data-line / error / colour normalisation
-helpers, and :func:`_draw_spectrum`, which draws one or several *data* spectra
+helpers, and :func:`draw_spectrum`, which draws one or several *data* spectra
 (histogram-style steps with an optional uncertainty band) plus *model* overlays
 (smooth lines, optionally banded) onto a caller-supplied
 :class:`~matplotlib.axes.Axes`. Drawing onto a passed Axes is exactly what lets
@@ -453,7 +453,7 @@ def _data_range(waves: list[np.ndarray]) -> tuple[float, float]:
     return float(finite.min()), float(finite.max())
 
 
-def _draw_spectrum(
+def draw_spectrum(
     ax: Axes,
     wavelength: ArrayLike | Sequence[ArrayLike],
     flux: ArrayLike | Sequence[ArrayLike],
@@ -471,12 +471,13 @@ def _draw_spectrum(
     y_label: str = "Flux",
     title: str | None = None,
 ) -> None:
-    """Draw data spectra and model overlays onto ``ax``.
+    """Draw data spectra and model overlays onto a caller-supplied ``ax``.
 
-    Factored out of :func:`plot_spectrum1d` so a future stacked 2-D-over-1-D panel
-    can reuse it on a shared-x subplot. See :func:`plot_spectrum1d` for the
-    parameter semantics; this function only draws (it does not create or save a
-    figure).
+    The shared drawing engine behind :func:`plot_spectrum1d` and the stacked
+    :func:`plot_spectrum2d` panel, exposed so callers can compose their own
+    multi-panel figures (e.g. a spectrum over a shared-x residual axis). It only
+    draws onto ``ax`` -- it creates and saves no figure. See
+    :func:`plot_spectrum1d` for the parameter semantics.
     """
     if drawstyle not in ("steps", "line"):
         raise ValueError(f"drawstyle must be 'steps' or 'line', got {drawstyle!r}")

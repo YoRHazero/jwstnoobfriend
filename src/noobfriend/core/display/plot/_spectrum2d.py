@@ -6,7 +6,7 @@ spectrum-viewer layout. The two panels are linked by matplotlib ``sharex``, so
 the wavelength axis aligns and pans/zooms together; no Bokeh ``x_range``
 machinery and no wavelength-data-coordinate gymnastics are needed.
 
-The 1-D panel reuses :func:`~noobfriend.core.display.plot._spectrum._draw_spectrum`
+The 1-D panel reuses :func:`~noobfriend.core.display.plot.draw_spectrum`
 (the shared engine, identical to :func:`~noobfriend.core.display.plot._spectrum1d.plot_spectrum1d`),
 so model overlays, the uncertainty band, and the step rendering all behave the
 same. This module only adds the top image panel (:func:`_draw_image`). The image
@@ -29,7 +29,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from noobfriend.core.display.plot._norm import resolve_limits
-from noobfriend.core.display.plot._spectrum import ModelSpec, _draw_spectrum
+from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -396,7 +396,7 @@ def plot_spectrum2d(
     if title:
         ax2d.set_title(title)
 
-    _draw_spectrum(
+    draw_spectrum(
         ax1d,
         wave,
         line,

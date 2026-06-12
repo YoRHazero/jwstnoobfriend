@@ -2,7 +2,7 @@
 
 :func:`plot_spectrum1d` is a thin wrapper that builds a static matplotlib figure
 and delegates the drawing to
-:func:`~noobfriend.core.display.plot._spectrum._draw_spectrum` (the shared
+:func:`~noobfriend.core.display.plot._spectrum.draw_spectrum` (the shared
 engine, also reused by the future 2-D panel). See that module for the
 spectrum / model data model and :class:`~noobfriend.core.display.plot._spectrum.ModelSpec`.
 """
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal
 
 from numpy.typing import ArrayLike
 
-from noobfriend.core.display.plot._spectrum import ModelSpec, _draw_spectrum
+from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -113,7 +113,7 @@ def plot_spectrum1d(
     fig, ax = plt.subplots(
         figsize=(width_in, width_in * _DEFAULT_ASPECT), layout="constrained"
     )
-    _draw_spectrum(
+    draw_spectrum(
         ax,
         wavelength,
         flux,
