@@ -151,7 +151,7 @@ class NoobSpectrum:
             ``correlation_correction`` verbatim; ``"continuum"`` measures the
             line-free scatter of the collapsed 1-D spectrum; ``"background"``
             estimates the noise autocovariance from the 2-D source-free
-            background (see :mod:`noobfriend.inference.spectrum._noise`).
+            background (see :mod:`noobfriend.core.specutils`).
         correlation_correction : float, default 1.0
             The manual boost; used (and only used) when
             ``correlation_source="manual"``.
@@ -209,11 +209,11 @@ class NoobSpectrum:
                 f"correlation_correction must be positive, got {correlation_correction}."
             )
 
-        sl: list[slice] = [slice(None), slice(None)]
-        sl[cross_axis] = slice(lo, hi)
-        flux1d = np.nansum(fl[tuple(sl)], axis=cross_axis)
-        error1d = np.sqrt(np.nansum(er[tuple(sl)] ** 2, axis=cross_axis))
+        from noobfriend.core.specutils import collapse
 
+        flux1d, error1d = collapse(
+            fl, er, window=(lo, hi), dispersion_axis=dispersion_axis
+        )
         boost = _collapse_boost(
             correlation_source,
             correlation_correction,
@@ -232,7 +232,7 @@ class NoobSpectrum:
         """Rescale the error to match the line-free continuum scatter.
 
         Returns a copy whose ``error`` is multiplied by the
-        :func:`~noobfriend.inference.spectrum._noise.continuum_boost` -- the ratio
+        :func:`~noobfriend.core.specutils.continuum_boost` -- the ratio
         of the spectrum's own line-free scatter to its quoted error. Useful when
         the supplied error array is mis-calibrated (e.g. correlated noise), and
         applicable to any spectrum, not just a 2-D collapse.
@@ -248,7 +248,7 @@ class NoobSpectrum:
         NoobSpectrum
             A copy with the rescaled error.
         """
-        from noobfriend.inference.spectrum._noise import continuum_boost
+        from noobfriend.core.specutils import continuum_boost
 
         boost = continuum_boost(self.wavelength, self.flux, self.error, mask=mask)
         return replace(self, error=self.error * boost)
@@ -323,14 +323,14 @@ def _collapse_boost(
     """Resolve the correlated-noise boost for a 2-D collapse by source."""
     if source == "manual":
         return float(manual)
-    from noobfriend.inference.spectrum._noise import background_boost, continuum_boost
+    from noobfriend.core.specutils import continuum_boost, cross_dispersion_boost
 
     if source == "continuum":
         return continuum_boost(wavelength, flux1d, error1d)
-    return background_boost(
+    return cross_dispersion_boost(
         flux2d,
         error2d,
-        collapse_window=collapse_window,
+        window=collapse_window,
         dispersion_axis=dispersion_axis,
         max_lag=max_lag,
     )

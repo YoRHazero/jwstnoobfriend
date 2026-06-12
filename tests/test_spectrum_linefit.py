@@ -207,7 +207,7 @@ def test_invalid_wave_unit_rejected():
 
 
 def test_continuum_boost_recovers_underquoted_error():
-    from noobfriend.inference.spectrum._noise import continuum_boost
+    from noobfriend.core.specutils import continuum_boost
 
     rng = np.random.default_rng(0)
     wl = np.linspace(6500.0, 6620.0, 300)
