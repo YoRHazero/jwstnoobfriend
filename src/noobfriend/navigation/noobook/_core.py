@@ -1,5 +1,6 @@
 """The user-facing :class:`NooBook`: one JWST product file as a rich object."""
 
+from collections.abc import Iterable
 from io import BytesIO
 from typing import Any, Self
 
@@ -85,6 +86,13 @@ def _read_header_fields(raw: bytes) -> dict[str, Any]:
         "shape": shape,
         "footprint": footprint,
     }
+
+
+def _parent_ids_of(parents: "Iterable[NooBook | str] | None") -> tuple[str, ...]:
+    """Return the parent-id tuple from an iterable of NooBooks and/or ids."""
+    if parents is None:
+        return ()
+    return tuple(p.id if isinstance(p, NooBook) else str(p) for p in parents)
 
 
 class NooBook(BaseModel):
@@ -207,7 +215,12 @@ class NooBook(BaseModel):
 
     @classmethod
     def from_file(
-        cls, location: str, stage: str, *, store: ByteStore | None = None
+        cls,
+        location: str,
+        stage: str,
+        *,
+        parents: "Iterable[NooBook | str] | None" = None,
+        store: ByteStore | None = None,
     ) -> Self:
         """Build a fully-populated NooBook, reading the file's header once.
 
@@ -217,6 +230,11 @@ class NooBook(BaseModel):
             The file's local-path or ``host:path`` spec.
         stage : str
             Pipeline stage label.
+        parents : iterable of NooBook or str, optional
+            The upstream products this one was produced from; their ids become
+            :attr:`parent_ids`. This is how a reduction step stamps lineage at
+            production time -- notably the many-to-one edges that key matching
+            cannot recover. When ``None`` (default), :attr:`parent_ids` is empty.
         store : ByteStore, optional
             Shared byte store to read through (and bind for later data access).
             When ``None``, the file is read directly and the book is left
@@ -239,6 +257,7 @@ class NooBook(BaseModel):
             id=book_id,
             location=location,
             stage=stage,
+            parent_ids=_parent_ids_of(parents),
             **_read_header_fields(raw),
             **cls._name_identifiers(filename),
         )
@@ -305,6 +324,11 @@ class NooBook(BaseModel):
     def _bind_store(self, store: ByteStore) -> Self:
         """Attach a shared byte store (called by NooBox); returns ``self``."""
         self._store = store
+        return self
+
+    def _stamp_parents(self, parent_ids: tuple[str, ...]) -> Self:
+        """Set :attr:`parent_ids` in place (NooBox merge resolution); returns self."""
+        self.parent_ids = parent_ids
         return self
 
     # -- derived views --------------------------------------------------------

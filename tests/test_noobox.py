@@ -1,7 +1,8 @@
-"""Tests for NooBox container, discovery, subsetting, merge and persistence.
+"""Tests for NooBox discovery, subsetting, merge lineage and persistence.
 
-All cases stay in *thin* mode (``NooBook.from_name``), so no FITS file is ever
-opened: discovery only needs file names to exist for globbing.
+No FITS file is ever opened: books are built thin (``NooBook.from_name``, which
+only needs file names to exist for globbing) or constructed directly with the
+identifier fields, so the logic under test never touches real data.
 """
 
 import json
@@ -16,12 +17,47 @@ def _touch(directory: Path, name: str) -> None:
     (directory / name).write_text("")
 
 
+def _exposure_book(
+    stage: str,
+    suffix: str,
+    *,
+    exposure: str = "00001",
+    detector: str = "nrca1",
+    program: str = "01345",
+    parent_ids: tuple[str, ...] = (),
+) -> NooBook:
+    """Build a single-exposure NooBook with explicit identifier fields."""
+    stem = f"jw{program}001001_02201_{exposure}_{detector}_{suffix}"
+    return NooBook(
+        id=f"{stem}@{stage}",
+        location=f"/{stem}.fits",
+        stage=stage,
+        program_id=program,
+        observation=("001",),
+        visit=("001",),
+        ggsaa=("02201",),
+        exposure=(exposure,),
+        detector=detector,
+        parent_ids=parent_ids,
+    )
+
+
+def _box(*books: NooBook) -> NooBox:
+    box = NooBox()
+    for book in books:
+        box.add(book)
+    return box
+
+
+# -- discovery ----------------------------------------------------------------
+
+
 def test_from_directory_thin_indexes_matching_files(tmp_path):
     _touch(tmp_path, "jw01345001001_02201_00001_nrca1_cal.fits")
     _touch(tmp_path, "jw01345001001_02201_00002_nrca1_cal.fits")
     _touch(tmp_path, "notes.txt")
 
-    box = NooBox.from_directory("2a", roots={"2a": str(tmp_path)})
+    box = NooBox.from_directory("2a", root=str(tmp_path))
 
     assert len(box) == 2
     assert all(book.stage == "2a" for book in box)
@@ -33,17 +69,16 @@ def test_from_directory_custom_wildcard_filters(tmp_path):
     _touch(tmp_path, "jw01345001001_02201_00001_nrca1_cal.fits")
     _touch(tmp_path, "jw01345001001_02201_00001_nrca1_rate.fits")
 
-    box = NooBox.from_directory(
-        "2a", roots={"2a": str(tmp_path)}, wildcard="*_cal.fits"
-    )
+    box = NooBox.from_directory("2a", root=str(tmp_path), wildcard="*_cal.fits")
 
     assert [book.exposure for book in box] == [("00001",)]
     assert next(iter(box)).id.endswith("_cal@2a")
 
 
-def test_from_directory_unresolved_stage_raises(tmp_path):
+def test_from_directory_unresolved_stage_raises(monkeypatch):
+    monkeypatch.delenv("STAGE_ZZ_PATH", raising=False)
     with pytest.raises(ValueError, match="no root for stage"):
-        NooBox.from_directory("zz", roots={"2a": str(tmp_path)})
+        NooBox.from_directory("zz")
 
 
 def test_from_directory_remote_root_thin(monkeypatch):
@@ -55,7 +90,7 @@ def test_from_directory_remote_root_thin(monkeypatch):
         "noobfriend.navigation.noobox._core.list_remote_dir", fake_list_remote_dir
     )
 
-    box = NooBox.from_directory("2a", roots={"2a": "host:/data/stage2"})
+    box = NooBox.from_directory("2a", root="host:/data/stage2")
 
     assert len(box) == 1  # notes.txt excluded by the default *.fits wildcard
     book = next(iter(box))
@@ -64,10 +99,13 @@ def test_from_directory_remote_root_thin(monkeypatch):
     assert not book.is_probed
 
 
+# -- subsetting, grouping, selection ------------------------------------------
+
+
 def test_filter_returns_sharing_subset(tmp_path):
     _touch(tmp_path, "jw01345001001_02201_00001_nrca1_cal.fits")
     _touch(tmp_path, "jw01345001001_02201_00001_nrcb1_cal.fits")
-    box = NooBox.from_directory("2a", roots={"2a": str(tmp_path)})
+    box = NooBox.from_directory("2a", root=str(tmp_path))
 
     subset = box.filter(lambda book: book.detector == "nrca1")
 
@@ -75,6 +113,109 @@ def test_filter_returns_sharing_subset(tmp_path):
     assert next(iter(subset)).detector == "nrca1"
     assert len(box) == 2  # original untouched
     assert subset._store is box._store  # shares the byte cache
+
+
+def test_select_glob_membership_and_tuple_fields():
+    box = _box(
+        _exposure_book("2a", "cal", detector="nrca1"),
+        _exposure_book("2a", "cal", detector="nrcb1"),
+        _exposure_book("2a", "cal", detector="nrca3"),
+    )
+
+    assert {b.detector for b in box.select(detector="nrca*")} == {"nrca1", "nrca3"}
+    assert {b.detector for b in box.select(detector=["nrcb1", "nrca3"])} == {
+        "nrcb1",
+        "nrca3",
+    }
+    assert len(box.select(exposure="00001")) == 3  # any element of the tuple field
+    assert box.select(detector="nrca1")._store is box._store
+
+
+def test_group_by_and_distinct():
+    box = _box(
+        _exposure_book("2a", "cal", detector="nrca1"),
+        _exposure_book("2a", "cal", detector="nrcb1"),
+    )
+
+    groups = box.group_by("detector")
+    assert set(groups) == {"nrca1", "nrcb1"}
+    assert all(isinstance(g, NooBox) for g in groups.values())
+    assert box.distinct("detector") == {"nrca1", "nrcb1"}
+    assert box.distinct("stage") == {"2a"}
+
+
+# -- merge: lineage resolution ------------------------------------------------
+
+
+def test_merge_is_in_place_and_links_by_identity_key():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    box = _box(rate)
+
+    result = box.merge(_box(cal))
+
+    assert result is box  # in-place, returns self
+    assert box[cal.id].parent_ids == (rate.id,)
+    assert box[rate.id].parent_ids == ()  # genuine root stays empty
+
+
+def test_merge_no_key_match_leaves_parents_empty():
+    rate = _exposure_book("1b", "rate", exposure="00001")
+    cal = _exposure_book("2a", "cal", exposure="00002")  # different exposure
+    box = _box(rate)
+
+    box.merge(_box(cal))
+
+    assert box[cal.id].parent_ids == ()
+
+
+def test_merge_never_links_same_stage():
+    cal = _exposure_book("2a", "cal")
+    crf = _exposure_book("2a", "crf")  # same identity key, same stage
+    box = _box(cal)
+
+    box.merge(_box(crf))
+
+    assert box[crf.id].parent_ids == ()
+
+
+def test_merge_keeps_already_stamped_parents():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal", parent_ids=("stamped@99",))  # e.g. by reduction
+    box = _box(rate)
+
+    box.merge(_box(cal))
+
+    assert box[cal.id].parent_ids == ("stamped@99",)  # not re-pointed
+
+
+def test_merge_branch_with_explicit_parent():
+    two_b = _exposure_book("2b", "cal")
+    two_bi = _exposure_book("2bi", "cali")
+    two_bii = _exposure_book("2bii", "calii")
+    box = _box(two_b)
+
+    box.merge(_box(two_bi))  # links to the leaf 2b
+    box.merge(_box(two_bii), parent="2b")  # branch off 2b, not the current leaf
+
+    assert box[two_bi.id].parent_ids == (two_b.id,)
+    assert box[two_bii.id].parent_ids == (two_b.id,)
+
+
+def test_merge_prepend_with_child():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    box = _box(cal)
+
+    box.merge(_box(rate), child="2a")  # incoming 1b becomes parent of 2a
+
+    assert box[cal.id].parent_ids == (rate.id,)
+    assert box[rate.id].parent_ids == ()
+
+
+def test_merge_parent_and_child_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="at most one"):
+        NooBox().merge(NooBox(), parent="2a", child="1b")
 
 
 def test_merge_overwrite_false_raises_on_duplicate():
@@ -87,37 +228,49 @@ def test_merge_overwrite_false_raises_on_duplicate():
         left.merge(right)
 
 
-def test_merge_overwrite_true_right_wins():
+def test_merge_overwrite_true_incoming_wins():
     left, right = NooBox(), NooBox()
     left.add(NooBook(id="x@2a", location="/old.fits", stage="2a", program_id="01345"))
     right.add(NooBook(id="x@2a", location="/new.fits", stage="2a", program_id="01345"))
 
-    merged = left.merge(right, overwrite=True)
+    assert left.merge(right, overwrite=True) is left
+    assert len(left) == 1
+    assert left["x@2a"].location == "/new.fits"
 
-    assert len(merged) == 1
-    assert merged["x@2a"].location == "/new.fits"
+
+# -- lineage boundary ---------------------------------------------------------
 
 
-def test_children_and_parents_use_lineage():
-    box = NooBox()
-    box.add(NooBook(id="parent@2a", location="/p.fits", stage="2a", program_id="01345"))
-    box.add(
-        NooBook(
-            id="child@2b",
-            location="/c.fits",
-            stage="2b",
-            program_id="01345",
-            parent_ids=("parent@2a",),
-        )
+def test_leaves_and_roots():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    box = _box(rate).merge(_box(cal))
+
+    assert {b.id for b in box.leaves()} == {cal.id}
+    assert {b.id for b in box.roots()} == {rate.id}
+    assert isinstance(box.leaves(), NooBox)
+    assert box.leaves()._store is box._store
+
+
+# -- introspection & persistence ----------------------------------------------
+
+
+def test_to_table_summarises_members():
+    box = _box(
+        _exposure_book("1b", "rate"),
+        _exposure_book("2a", "cal"),
     )
 
-    assert [b.id for b in box.children("parent@2a")] == ["child@2b"]
-    assert [b.id for b in box.parents("child@2b")] == ["parent@2a"]
+    table = box.to_table()
+
+    assert len(table) == 2
+    assert {"id", "stage", "detector", "exposure", "n_parents"} <= set(table.colnames)
 
 
-def test_save_load_roundtrip(tmp_path):
-    _touch(tmp_path, "jw01345001001_02201_00001_nrca1_cal.fits")
-    box = NooBox.from_directory("2a", roots={"2a": str(tmp_path)})
+def test_save_load_roundtrip_preserves_lineage(tmp_path):
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    box = _box(rate).merge(_box(cal))  # cal now carries parent_ids == (rate.id,)
     manifest = tmp_path / "noobox.json"
 
     box.save(manifest)
@@ -125,8 +278,6 @@ def test_save_load_roundtrip(tmp_path):
 
     reloaded = NooBox.load(manifest)
     assert len(reloaded) == len(box)
-    original = next(iter(box))
-    restored = reloaded[original.id]
-    assert restored == original
-    assert restored.detector == original.detector
-    assert restored.exposure == original.exposure
+    assert reloaded[cal.id] == box[cal.id]
+    assert reloaded[cal.id].parent_ids == (rate.id,)
+    assert reloaded[cal.id].exposure == cal.exposure
