@@ -108,6 +108,52 @@ class LineFitResult:
         """Velocity offset (km/s) ``(low, median, high)`` for a component."""
         return self.interval(f"{component_id}__dv")
 
+    def _model_draws(
+        self, grid: np.ndarray, max_draws: int = 400
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Evaluate the per-draw total model flux on ``grid``.
+
+        The shared core behind :meth:`model_curve` and :meth:`predictive_curve`.
+
+        Parameters
+        ----------
+        grid : numpy.ndarray
+            Wavelengths to evaluate at.
+        max_draws : int, default 400
+            Cap on posterior draws used (subsampled) for speed.
+
+        Returns
+        -------
+        curves : numpy.ndarray
+            Shape ``(S, G)`` total model flux for each subsampled posterior draw
+            at each grid point.
+        idx : numpy.ndarray
+            The draw indices used, so callers can index other posterior
+            variables (e.g. ``log_jitter``) on the same draws.
+        """
+        grid = np.asarray(grid, dtype=float)
+        c0 = self._flat("continuum__c0")
+        n = c0.size
+        idx = (
+            np.linspace(0, n - 1, max_draws).astype(int)
+            if n > max_draws
+            else np.arange(n)
+        )
+        curves = np.broadcast_to(c0[idx][:, None], (idx.size, grid.size)).copy()
+        if self.continuum_degree >= 1:
+            c1 = self._flat("continuum__c1")[idx]
+            curves += c1[:, None] * (grid[None, :] - self.lambda0)
+        for comp in self.components:
+            mu = self._flat(f"{comp.id}__mu")[idx]
+            sw = self._flat(f"{comp.id}__sigma_w")[idx]
+            amp = self._flat(f"{comp.id}__amp")[idx]
+            curves += (
+                comp.sign
+                * amp[:, None]
+                * np.exp(-0.5 * ((grid[None, :] - mu[:, None]) / sw[:, None]) ** 2)
+            )
+        return curves, idx
+
     def model_curve(
         self,
         grid: np.ndarray,
@@ -116,6 +162,9 @@ class LineFitResult:
         max_draws: int = 400,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Evaluate the posterior model curve on ``grid``.
+
+        This is the posterior of the *mean* model (parameter uncertainty only);
+        :meth:`predictive_curve` adds the observation noise on top.
 
         Parameters
         ----------
@@ -131,29 +180,80 @@ class LineFitResult:
         low, mid, high : numpy.ndarray
             The percentile band of the total model flux at each grid point.
         """
-        grid = np.asarray(grid, dtype=float)
-        c0 = self._flat("continuum__c0")
-        n = c0.size
-        idx = (
-            np.linspace(0, n - 1, max_draws).astype(int)
-            if n > max_draws
-            else np.arange(n)
-        )
-        c0 = c0[idx]
-        curves = np.broadcast_to(c0[:, None], (idx.size, grid.size)).copy()
-        if self.continuum_degree >= 1:
-            c1 = self._flat("continuum__c1")[idx]
-            curves += c1[:, None] * (grid[None, :] - self.lambda0)
-        for comp in self.components:
-            mu = self._flat(f"{comp.id}__mu")[idx]
-            sw = self._flat(f"{comp.id}__sigma_w")[idx]
-            amp = self._flat(f"{comp.id}__amp")[idx]
-            curves += (
-                comp.sign
-                * amp[:, None]
-                * np.exp(-0.5 * ((grid[None, :] - mu[:, None]) / sw[:, None]) ** 2)
-            )
+        curves, _ = self._model_draws(grid, max_draws)
         low, mid, high = np.percentile(curves, q, axis=0)
+        return low, mid, high
+
+    def predictive_curve(
+        self,
+        grid: np.ndarray | None = None,
+        *,
+        q: tuple[float, float, float] = (2.5, 50.0, 97.5),
+        max_draws: int = 400,
+        seed: int | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Evaluate the posterior *predictive* band on ``grid``.
+
+        Where :meth:`model_curve` is the posterior of the mean model (parameter
+        uncertainty only), this adds the likelihood's observation noise: for each
+        subsampled posterior draw a replicate ``y_rep = model + Normal(0,
+        sigma_obs)`` is drawn and the percentile band returned. It is the band new
+        data should fall within -- the basis of a posterior predictive check.
+
+        Parameters
+        ----------
+        grid : numpy.ndarray, optional
+            Wavelengths to evaluate at. The observation ``sigma`` is only defined
+            at the fitted pixels, so ``None`` (the default) evaluates at the
+            fitted window points where ``sigma`` is exact; an explicit grid
+            interpolates ``sigma`` onto it (a smooth overlay band). Grid points
+            outside the fitted span have no ``sigma`` and the band is ``NaN``
+            there (so a plotted band simply stops at the fitted edges).
+        q : tuple of float, default (2.5, 50, 97.5)
+            Percentiles for the ``(low, mid, high)`` band. The 95% default nests
+            visibly outside the 68% :meth:`model_curve` band.
+        max_draws : int, default 400
+            Cap on posterior draws used (subsampled) for speed.
+        seed : int, optional
+            Seed for the predictive noise draws; ``None`` is fresh randomness.
+
+        Returns
+        -------
+        low, mid, high : numpy.ndarray
+            The percentile band of replicated observations at each grid point.
+
+        Notes
+        -----
+        When the fit used ``jitter=True`` the per-draw observation error is
+        reconstructed as ``sqrt(sigma**2 + (exp(log_jitter) * model)**2)``,
+        matching the likelihood.
+        """
+        if grid is None:
+            grid = self.window_wl.astype(float)
+            sigma = self.window_error.astype(float)
+        else:
+            grid = np.asarray(grid, dtype=float)
+            order = np.argsort(self.window_wl)
+            # sigma is undefined past the fitted edges -> NaN there (not an
+            # edge-clamped constant), so an overlay band stops at the window.
+            sigma = np.interp(
+                grid,
+                self.window_wl[order],
+                self.window_error[order],
+                left=np.nan,
+                right=np.nan,
+            )
+        curves, idx = self._model_draws(grid, max_draws)
+        if "log_jitter" in self.idata.posterior.data_vars:
+            log_f = self._flat("log_jitter")[idx]
+            sigma_obs = np.sqrt(
+                sigma[None, :] ** 2 + (np.exp(log_f)[:, None] * curves) ** 2
+            )
+        else:
+            sigma_obs = np.broadcast_to(sigma[None, :], curves.shape)
+        rng = np.random.default_rng(seed)
+        y_rep = curves + rng.standard_normal(curves.shape) * sigma_obs
+        low, mid, high = np.percentile(y_rep, q, axis=0)
         return low, mid, high
 
     @property
@@ -345,6 +445,7 @@ class LineFitResult:
         full: bool = False,
         residual: bool = True,
         decompose: bool = True,
+        predictive: bool = False,
         **kwargs: Any,
     ) -> Figure:
         """Plot the data with the posterior model, decomposition, and residuals.
@@ -358,6 +459,10 @@ class LineFitResult:
         decompose : bool, default True
             Overlay each component's median curve (on the continuum) alongside the
             total posterior band.
+        predictive : bool, default False
+            Shade the 95% posterior predictive band (model plus observation
+            noise) behind the data, nested outside the 68% model band -- the band
+            the data should fall within. See :meth:`predictive_curve`.
         **kwargs
             Forwarded to
             :func:`~noobfriend.inference.spectrum._plot.plot_result` (e.g.
@@ -370,7 +475,12 @@ class LineFitResult:
         from noobfriend.inference.spectrum._plot import plot_result
 
         return plot_result(
-            self, full=full, residual=residual, decompose=decompose, **kwargs
+            self,
+            full=full,
+            residual=residual,
+            decompose=decompose,
+            predictive=predictive,
+            **kwargs,
         )
 
     def compare(

@@ -57,7 +57,11 @@ def select_window(
     mask : numpy.ndarray
         Boolean mask over the spectrum arrays selecting finite in-window pixels.
     bounds : tuple of float
-        The ``(lo, hi)`` wavelength bounds used.
+        The ``(lo, hi)`` extent of the *selected* pixels, i.e. clamped to the
+        first and last valid wavelength inside the requested window -- never
+        beyond real data. The nominal velocity-padded request can reach past the
+        spectrum's coverage; returning the realised extent keeps callers (the
+        pre-fit preview, any band overlay) on pixels that actually exist.
 
     Raises
     ------
@@ -84,4 +88,5 @@ def select_window(
             f"window [{lo:g}, {hi:g}] holds only {int(mask.sum())} finite pixels "
             f"(need >= {min_points}); widen pad_kms or pass an explicit window."
         )
-    return mask, (lo, hi)
+    wl_in = wl[mask]
+    return mask, (float(wl_in.min()), float(wl_in.max()))

@@ -150,6 +150,7 @@ def plot_result(
     full: bool = False,
     residual: bool = True,
     decompose: bool = True,
+    predictive: bool = False,
     size: int = 680,
     title: str | None = None,
     save: str | None = None,
@@ -166,6 +167,11 @@ def plot_result(
         Add a shared-x standardized-residual panel.
     decompose : bool, default True
         Overlay each component's median curve on the continuum.
+    predictive : bool, default False
+        Shade the 95% posterior predictive band (model plus observation noise)
+        behind the data, nested outside the 68% model band. Drawn with a fixed
+        seed so the figure is reproducible; see
+        :meth:`~noobfriend.inference.spectrum.LineFitResult.predictive_curve`.
     size : int, default 680
         Figure width in pixels.
     title : str, optional
@@ -224,6 +230,21 @@ def plot_result(
     else:
         fig, ax = plt.subplots(
             figsize=(width_in, width_in * 0.45), layout="constrained"
+        )
+
+    # Drawn before draw_spectrum (which builds the legend) so it gets an entry,
+    # and behind everything via zorder; the data points sit on top.
+    if predictive:
+        lo_p, _, hi_p = result.predictive_curve(grid, q=(2.5, 50.0, 97.5), seed=0)
+        ax.fill_between(
+            grid,
+            lo_p,
+            hi_p,
+            color="C3",
+            alpha=0.12,
+            linewidth=0,
+            zorder=0.5,
+            label="95% predictive",
         )
 
     draw_spectrum(

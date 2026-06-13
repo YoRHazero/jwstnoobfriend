@@ -330,6 +330,28 @@ def test_run_recovers_synthetic_halpha_nii():
     assert low.shape == mid.shape == high.shape == wl.shape
     assert np.all(low <= high)
 
+    # the predictive band adds observation noise: wider than the model band at
+    # matching percentiles, reproducible under a fixed seed, and containing most
+    # of the data when evaluated at the fitted pixels (exact sigma, grid=None).
+    m_lo, _, m_hi = res.model_curve(wl, q=(2.5, 50.0, 97.5))
+    p_lo, p_mid, p_hi = res.predictive_curve(wl, q=(2.5, 50.0, 97.5), seed=0)
+    assert p_lo.shape == p_mid.shape == p_hi.shape == wl.shape
+    assert np.all(p_lo <= p_hi)
+    assert np.mean(p_hi - p_lo) > np.mean(m_hi - m_lo)
+    assert np.array_equal(
+        p_lo, res.predictive_curve(wl, q=(2.5, 50.0, 97.5), seed=0)[0]
+    )
+    cov_lo, _, cov_hi = res.predictive_curve(seed=0)
+    inside = (res.window_flux >= cov_lo) & (res.window_flux <= cov_hi)
+    assert inside.mean() >= 0.85
+    # past the fitted edges sigma is undefined -> band is NaN there, finite within.
+    w_lo, w_hi = float(res.window_wl.min()), float(res.window_wl.max())
+    ext = np.linspace(w_lo - 50.0, w_hi + 50.0, 64)
+    e_lo, _, e_hi = res.predictive_curve(ext, seed=0)
+    outside = (ext < w_lo) | (ext > w_hi)
+    assert np.all(np.isnan(e_lo[outside])) and np.all(np.isnan(e_hi[outside]))
+    assert np.all(np.isfinite(e_lo[~outside])) and np.all(np.isfinite(e_hi[~outside]))
+
     # pathology reports: the strong lines are warranted; bounds carry the columns.
     sig = res.significance_report()
     assert bool(sig.loc["Halpha", "warranted"])
@@ -341,6 +363,7 @@ def test_run_recovers_synthetic_halpha_nii():
 
     assert len(res.plot().axes) == 2  # data + residual panels
     assert len(res.plot(residual=False, decompose=False).axes) == 1
+    assert len(res.plot(predictive=True).axes) == 2  # predictive band overlay
     plt.close("all")
 
 
@@ -353,3 +376,41 @@ def test_setup_plot_preview_returns_figure():
     fig = _spec().setup([ha, nii]).plot()
     assert len(fig.axes) == 1
     plt.close(fig)
+
+
+def test_select_window_clamps_bounds_to_valid_pixels():
+    """Returned bounds clamp to real data, never past the spectrum's coverage.
+
+    The pre-fit preview draws its initial-guess curve over these bounds, so they
+    must track the first/last pixel that actually exists -- not the nominal
+    velocity-padded request, which can overrun the data or land on invalid edges.
+    """
+    from noobfriend.inference.spectrum._window import select_window
+
+    wl = np.linspace(6500.0, 6620.0, 240)
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    comps = (
+        NoobSpectrum.from_1d(
+            wl, np.ones_like(wl), np.full_like(wl, 0.1), z=0.0, wave_unit="A"
+        )
+        .setup([ha])
+        .components
+    )
+
+    # a huge pad makes the nominal window spill past both data edges.
+    spec = NoobSpectrum.from_1d(
+        wl, np.ones_like(wl), np.full_like(wl, 0.1), z=0.0, wave_unit="A"
+    )
+    mask, (lo, hi) = select_window(spec, comps, pad_kms=50000.0)
+    assert lo == pytest.approx(float(wl[mask].min()))
+    assert hi == pytest.approx(float(wl[mask].max()))
+    assert lo >= wl.min() and hi <= wl.max()
+
+    # invalid edge pixels (non-finite error) are excluded -> bounds move inward.
+    err = np.full_like(wl, 0.1)
+    err[:5] = np.nan
+    err[-3:] = np.nan
+    spec2 = NoobSpectrum.from_1d(wl, np.ones_like(wl), err, z=0.0, wave_unit="A")
+    _, (lo2, hi2) = select_window(spec2, comps, pad_kms=50000.0)
+    assert lo2 == pytest.approx(wl[5])
+    assert hi2 == pytest.approx(wl[-4])
