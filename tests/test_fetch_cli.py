@@ -13,8 +13,10 @@ from noobfriend.cli.fetch._manifest_service import (
     validate_columns,
 )
 from noobfriend.cli.fetch._options import (
+    DEFAULT_PRODUCT_LEVEL,
     product_level_callback,
     proposal_id_callback,
+    resolve_product_level,
 )
 
 
@@ -55,6 +57,35 @@ class TestProductLevelCallback:
     def test_rejects_unknown_levels(self, level: str) -> None:
         with pytest.raises(typer.BadParameter):
             product_level_callback(level)
+
+    def test_none_passes_through(self) -> None:
+        # An omitted option resolves later from START_STAGE.
+        assert product_level_callback(None) is None
+
+
+class TestResolveProductLevel:
+    """Precedence of --product-level > START_STAGE > default."""
+
+    def test_cli_value_wins(self) -> None:
+        # An explicit value is used even when START_STAGE is set (and ignored
+        # even if START_STAGE would be invalid).
+        assert resolve_product_level("2b", "2a") == "2b"
+        assert resolve_product_level("2b", "3a") == "2b"
+
+    def test_falls_back_to_env(self) -> None:
+        assert resolve_product_level(None, "2a") == "2a"
+
+    def test_env_is_normalized(self) -> None:
+        assert resolve_product_level(None, "  2A  ") == "2a"
+
+    def test_defaults_when_nothing_set(self) -> None:
+        assert resolve_product_level(None, None) == DEFAULT_PRODUCT_LEVEL
+        assert resolve_product_level(None, "") == DEFAULT_PRODUCT_LEVEL
+
+    @pytest.mark.parametrize("env_value", ["3a", "2bi", "two"])
+    def test_invalid_env_raises(self, env_value: str) -> None:
+        with pytest.raises(typer.BadParameter):
+            resolve_product_level(None, env_value)
 
 
 class TestParseFilterValue:

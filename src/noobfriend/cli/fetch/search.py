@@ -25,8 +25,10 @@ from noobfriend.cli.fetch._options import (
     DEFAULT_RETRY_LIMIT,
     product_level_callback,
     proposal_id_callback,
+    resolve_product_level,
 )
 from noobfriend.core.console import console
+from noobfriend.core.env import get_settings
 from noobfriend.core.display.progress import track_time
 from noobfriend.core.io import HTTPSession
 
@@ -41,14 +43,14 @@ def cli_search(
         ),
     ],
     product_level: Annotated[
-        str,
+        str | None,
         typer.Option(
             "-l",
             "--product-level",
             callback=product_level_callback,
-            help="Product stage to search. The naming convention is based on https://jwst-pipeline.readthedocs.io/en/latest/jwst/data_products/stages.html",
+            help="Product stage to search. Defaults to the START_STAGE setting, or '1b' if unset. The naming convention is based on https://jwst-pipeline.readthedocs.io/en/latest/jwst/data_products/stages.html",
         ),
-    ] = "1b",
+    ] = None,
     retry_limit: Annotated[
         int,
         typer.Option(
@@ -84,6 +86,7 @@ def cli_search(
     ] = Path.cwd() / "products.json",
 ) -> None:
     """Search MAST for the products of a JWST proposal and optionally save them."""
+    product_level = resolve_product_level(product_level, get_settings().start_stage)
     http = HTTPSession()
 
     # Phase 1: discover file sets (single request) -> indeterminate spinner.
