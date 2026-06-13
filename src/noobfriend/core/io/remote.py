@@ -203,3 +203,76 @@ def list_remote_dir(spec: str) -> list[str]:
             detail or f"ssh find {host}:{path} exited with status {proc.returncode}"
         )
     return [name for name in proc.stdout.decode(errors="replace").splitlines() if name]
+
+
+def remote_exists(host: str, path: str) -> bool:
+    """Whether ``path`` exists on ``host``, via ``ssh <host> test -e``.
+
+    Mirrors :meth:`pathlib.Path.exists` (any file type counts) for a path that
+    lives on a remote host. Reuses the shared ``ControlMaster`` connection and
+    delegates authentication and host resolution to the system ``ssh``.
+
+    Parameters
+    ----------
+    host : str
+        The ``[user@]host`` to test on (e.g. a ``~/.ssh/config`` alias).
+    path : str
+        The remote path to test.
+
+    Returns
+    -------
+    bool
+        ``True`` if the path exists, ``False`` if it does not.
+
+    Raises
+    ------
+    RemoteReadError
+        The ``ssh`` connection itself failed (unreachable host, authentication
+        declined under ``BatchMode``, ...) — distinct from the path simply not
+        existing, which returns ``False``.
+    """
+    remote_cmd = f"test -e {shlex.quote(path)}"
+    proc = subprocess.run(  # noqa: S603
+        ["ssh", *_ssh_opts(), host, remote_cmd],
+        capture_output=True,
+    )
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    detail = proc.stderr.decode(errors="replace").strip()
+    raise RemoteReadError(
+        detail or f"ssh test -e {host}:{path} exited with status {proc.returncode}"
+    )
+
+
+def remote_makedirs(host: str, path: str) -> None:
+    """Create ``path`` (and parents) on ``host``, via ``ssh <host> mkdir -p``.
+
+    The remote analogue of ``Path.mkdir(parents=True, exist_ok=True)``: existing
+    directories are not an error. Reuses the shared ``ControlMaster`` connection
+    and delegates authentication and host resolution to the system ``ssh``.
+
+    Parameters
+    ----------
+    host : str
+        The ``[user@]host`` to create the directory on.
+    path : str
+        The remote directory path to create.
+
+    Raises
+    ------
+    RemoteReadError
+        The remote ``ssh``/``mkdir`` failed (unreachable host, permission
+        denied, authentication declined under ``BatchMode``, ...).
+    """
+    remote_cmd = f"mkdir -p -- {shlex.quote(path)}"
+    proc = subprocess.run(  # noqa: S603
+        ["ssh", *_ssh_opts(), host, remote_cmd],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip()
+        raise RemoteReadError(
+            detail or f"ssh mkdir -p {host}:{path} exited with status {proc.returncode}"
+        )

@@ -12,13 +12,12 @@ from noobfriend.core.console import console
 
 
 def cli_init(
-    start_stage: Annotated[
+    crds_server_url: Annotated[
         str | None,
         typer.Option(
-            "-s",
-            "--start-stage",
-            help="Stage to start the reduction from, e.g. '1b'. The 1st character [red]MUST[/red] be a digit.",
-            callback=start_stage_callback,
+            "-u",
+            "--crds-server-url",
+            help="URL of the CRDS reference-file server.",
             rich_help_panel="Setup",
         ),
     ] = None,
@@ -29,6 +28,16 @@ def cli_init(
             "--crds-path",
             help="Path to the CRDS cache directory.",
             resolve_path=True,
+            rich_help_panel="Setup",
+        ),
+    ] = None,
+    start_stage: Annotated[
+        str | None,
+        typer.Option(
+            "-s",
+            "--start-stage",
+            help="Stage to start the reduction from, e.g. '1b'. The 1st character [red]MUST[/red] be a digit.",
+            callback=start_stage_callback,
             rich_help_panel="Setup",
         ),
     ] = None,
@@ -48,7 +57,7 @@ def cli_init(
             "-S",
             "--noob-server",
             help="Default download host (an ~/.ssh/config alias); 'localhost' means local.",
-            rich_help_panel="Remote",
+            rich_help_panel="Storage",
         ),
     ] = None,
     output_path: Annotated[
@@ -85,8 +94,9 @@ def cli_init(
         typer.confirm(f"{env_file} already exists. Overwrite?", abort=True)
 
     values: dict[str, str | None] = {
-        "START_STAGE": start_stage,
+        "CRDS_SERVER_URL": crds_server_url,
         "CRDS_PATH": str(crds_path) if crds_path else None,
+        "START_STAGE": start_stage,
         "DATA_ROOT_PATH": str(data_root_path) if data_root_path else None,
         "NOOB_SERVER": noob_server,
     }

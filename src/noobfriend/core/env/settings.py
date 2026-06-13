@@ -41,9 +41,9 @@ class NoobSettings(BaseSettings):
 
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
-    start_stage: str | None = Field(
-        default=None,
-        description="Stage to start the reduction from, e.g. '1b'.",
+    crds_server_url: str = Field(
+        default="https://jwst-crds.stsci.edu",
+        description="URL of the CRDS reference-file server (used by the JWST CRDS client).",
         json_schema_extra={"group": EnvGroup.setup},
     )
     crds_path: Path | None = Field(
@@ -51,15 +51,15 @@ class NoobSettings(BaseSettings):
         description="Path to the CRDS cache directory.",
         json_schema_extra={"group": EnvGroup.setup},
     )
-    data_root_path: Path | None = Field(
+    start_stage: str | None = Field(
         default=None,
-        description="Root directory of the data; base for auto-named stage dirs.",
-        json_schema_extra={"group": EnvGroup.storage},
+        description="Stage to start the reduction from, e.g. '1b'.",
+        json_schema_extra={"group": EnvGroup.setup},
     )
     noobox_path: Path | None = Field(
         default=None,
         description="Path to the NooBox manifest file used by NooBox.save / load.",
-        json_schema_extra={"group": EnvGroup.storage},
+        json_schema_extra={"group": EnvGroup.noob},
     )
     noob_server: str = Field(
         default="localhost",
@@ -67,7 +67,12 @@ class NoobSettings(BaseSettings):
             "Default download host (an ~/.ssh/config alias); "
             "unset / 'localhost' / 'local' mean the local machine."
         ),
-        json_schema_extra={"group": EnvGroup.remote},
+        json_schema_extra={"group": EnvGroup.storage},
+    )
+    data_root_path: Path | None = Field(
+        default=None,
+        description="Root directory of the data; base for auto-named stage dirs.",
+        json_schema_extra={"group": EnvGroup.storage},
     )
 
     def start_stage_path(self) -> str | None:

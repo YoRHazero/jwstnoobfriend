@@ -13,7 +13,13 @@ from noobfriend.core.io.grizli import (
     read_grizli_cutout_bands,
 )
 from noobfriend.core.io.network import HTTPSession
-from noobfriend.core.io.remote import RemoteReadError, fetch_bytes, list_remote_dir
+from noobfriend.core.io.remote import (
+    RemoteReadError,
+    fetch_bytes,
+    list_remote_dir,
+    remote_exists,
+    remote_makedirs,
+)
 
 __all__ = [
     "GrizliCutout",
@@ -28,4 +34,6 @@ __all__ = [
     "read_grizli_cutout_bands",
     "read_gwcs",
     "read_meta",
+    "remote_exists",
+    "remote_makedirs",
 ]

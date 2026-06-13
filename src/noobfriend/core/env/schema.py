@@ -18,8 +18,8 @@ class EnvGroup(str, Enum):
     """
 
     setup = "Setup"
+    noob = "Noob"
     storage = "Storage"
-    remote = "Remote"
 
 
 @dataclass(frozen=True)

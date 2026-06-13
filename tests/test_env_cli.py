@@ -9,6 +9,7 @@ from noobfriend.cli.env._io import find_overrides, split_existing
 from noobfriend.cli.env._options import start_stage_callback, stage_list_callback
 from noobfriend.cli.env._render import render_base
 from noobfriend.cli.env.add_stage import stage_dir
+from noobfriend.cli.env.check import _group_of, _is_remote_path, _resolve_server
 from noobfriend.core.env import EnvGroup, env_fields
 
 
@@ -18,11 +19,12 @@ class TestEnvFields:
     def test_view_matches_model(self) -> None:
         fields = {field.name: field for field in env_fields()}
         assert set(fields) == {
-            "START_STAGE",
+            "CRDS_SERVER_URL",
             "CRDS_PATH",
-            "DATA_ROOT_PATH",
+            "START_STAGE",
             "NOOBOX_PATH",
             "NOOB_SERVER",
+            "DATA_ROOT_PATH",
         }
 
     def test_path_fields_flagged(self) -> None:
@@ -31,13 +33,18 @@ class TestEnvFields:
         assert fields["DATA_ROOT_PATH"].is_path
         assert fields["NOOBOX_PATH"].is_path
         assert not fields["NOOB_SERVER"].is_path
+        assert not fields["CRDS_SERVER_URL"].is_path
 
     def test_defaults_and_groups(self) -> None:
         fields = {field.name: field for field in env_fields()}
         assert fields["NOOB_SERVER"].default == "localhost"
+        assert fields["CRDS_SERVER_URL"].default == "https://jwst-crds.stsci.edu"
         assert fields["START_STAGE"].default is None
-        assert fields["NOOB_SERVER"].group is EnvGroup.remote
+        assert fields["CRDS_SERVER_URL"].group is EnvGroup.setup
         assert fields["CRDS_PATH"].group is EnvGroup.setup
+        assert fields["NOOBOX_PATH"].group is EnvGroup.noob
+        assert fields["NOOB_SERVER"].group is EnvGroup.storage
+        assert fields["DATA_ROOT_PATH"].group is EnvGroup.storage
 
 
 class TestRenderBase:
@@ -58,6 +65,37 @@ class TestRenderBase:
         rendered = render_base({})
         for group in EnvGroup:
             assert f"# --- {group.value} ---" in rendered
+
+
+class TestCheckTargeting:
+    """Deciding whether a path variable is checked locally or on NOOB_SERVER."""
+
+    @pytest.mark.parametrize("raw", [None, "", "localhost", "local", "LOCALHOST"])
+    def test_local_server_aliases_resolve_to_none(self, raw: str | None) -> None:
+        assert _resolve_server(raw) is None
+
+    def test_remote_server_is_stripped(self) -> None:
+        assert _resolve_server("  icrhome08  ") == "icrhome08"
+
+    def test_schema_fields_use_declared_group(self) -> None:
+        assert _group_of("DATA_ROOT_PATH") is EnvGroup.storage
+        assert _group_of("CRDS_PATH") is EnvGroup.setup
+        assert _group_of("NOOBOX_PATH") is EnvGroup.noob
+
+    def test_unknown_path_var_defaults_to_storage(self) -> None:
+        # The dynamic STAGE_<STAGE>_PATH family is not in the schema.
+        assert _group_of("STAGE_2A_PATH") is EnvGroup.storage
+
+    def test_only_storage_paths_go_remote(self) -> None:
+        assert _is_remote_path("DATA_ROOT_PATH", "icrhome08")
+        assert _is_remote_path("STAGE_2A_PATH", "icrhome08")
+        # Non-storage groups stay local even with a remote server.
+        assert not _is_remote_path("CRDS_PATH", "icrhome08")
+        assert not _is_remote_path("NOOBOX_PATH", "icrhome08")
+
+    def test_nothing_is_remote_without_a_server(self) -> None:
+        assert not _is_remote_path("DATA_ROOT_PATH", None)
+        assert not _is_remote_path("STAGE_2A_PATH", None)
 
 
 class TestStageDir:
