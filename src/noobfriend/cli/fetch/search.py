@@ -33,6 +33,38 @@ from noobfriend.core.display.progress import track_time
 from noobfriend.core.io import HTTPSession
 
 
+def _resolve_output_target(output_file: Path | None) -> Path | None:
+    """Decide where (if anywhere) to save the search results.
+
+    An explicit ``--output-file`` is used as-is. When it is omitted, the user is
+    asked — before the minute-long query, so a forgotten ``-o`` does not discard
+    the results — whether to save to ``products.json`` in the current directory.
+    In a non-interactive context (no TTY) the question is skipped and nothing is
+    saved, preserving the opt-in default.
+
+    Parameters
+    ----------
+    output_file : Path or None
+        The ``--output-file`` value, or ``None`` when the option was omitted.
+
+    Returns
+    -------
+    Path or None
+        The file to save the products to, or ``None`` to skip saving.
+    """
+    if output_file is not None:
+        return output_file
+    if not sys.stdin.isatty():
+        return None
+    default_path = Path.cwd() / "products.json"
+    if typer.confirm(
+        f"No -o given. Save results to {default_path} after the search?",
+        default=True,
+    ):
+        return default_path
+    return None
+
+
 @time_footer
 def cli_search(
     proposal_id: Annotated[
@@ -69,24 +101,23 @@ def cli_search(
         ),
     ] = False,
     output_file: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "-o",
             "--output-file",
-            help="File to save the products, default is 'products.json' in the current directory. If this option is not provided, the products will not be saved.",
+            help="File to save the products to. If omitted, you are asked before the search whether to save to 'products.json' in the current directory.",
             rich_help_panel="Output",
             metavar="FILE",
-            prompt="Output file is not specified. Use the default path (press [Enter] to confirm or type a new path):\n ",
-            prompt_required=False,
             exists=False,
             file_okay=True,
             dir_okay=False,
             resolve_path=True,
         ),
-    ] = Path.cwd() / "products.json",
+    ] = None,
 ) -> None:
     """Search MAST for the products of a JWST proposal and optionally save them."""
     product_level = resolve_product_level(product_level, get_settings().start_stage)
+    save_target = _resolve_output_target(output_file)
     http = HTTPSession()
 
     # Phase 1: discover file sets (single request) -> indeterminate spinner.
@@ -131,8 +162,7 @@ def cli_search(
     if show_example:
         console.print(make_product_example_table(results))
 
-    output_option_used = "-o" in sys.argv or "--output-file" in sys.argv
-    if output_option_used and output_file is not None:
-        console.print(f"[teal]Opening {output_file} [/teal]...")
-        save_products(results, output_file)
+    if save_target is not None:
+        console.print(f"[teal]Opening {save_target} [/teal]...")
+        save_products(results, save_target)
         console.print("[green] Saved [/green]")
