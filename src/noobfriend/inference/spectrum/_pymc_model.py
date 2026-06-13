@@ -239,7 +239,9 @@ def build_model(
 
     spectrum = setup.spectrum
     comps = setup.components
-    mask, _ = select_window(spectrum, comps, window=window, pad_kms=pad_kms)
+    mask, _ = select_window(
+        spectrum, comps, window=window, pad_kms=pad_kms, exclude=setup.mask_excluded
+    )
     wl = spectrum.wavelength[mask].astype(float)
     fl = spectrum.flux[mask].astype(float)
     er = spectrum.error[mask].astype(float)

@@ -414,3 +414,88 @@ def test_select_window_clamps_bounds_to_valid_pixels():
     _, (lo2, hi2) = select_window(spec2, comps, pad_kms=50000.0)
     assert lo2 == pytest.approx(wl[5])
     assert hi2 == pytest.approx(wl[-4])
+
+
+def test_mask_excluded_threads_and_with_mask():
+    """Load-time mask_excluded and fit-time with_mask both drop window pixels.
+
+    with_mask is immutable (returns a copy), replace-semantic, and layers over
+    the spectrum's data-quality mask by OR.
+    """
+    from noobfriend.inference.spectrum._window import select_window
+
+    wl = np.linspace(6500.0, 6620.0, 240)
+    dq = np.zeros(wl.size, dtype=bool)
+    dq[10] = True  # a load-time bad pixel
+    spec = NoobSpectrum.from_1d(
+        wl,
+        np.ones_like(wl),
+        np.full_like(wl, 0.1),
+        z=0.0,
+        wave_unit="A",
+        mask_excluded=dq,
+    )
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    setup = spec.setup([ha])
+
+    # DQ is honored by default, and select_window drops it.
+    assert setup.mask_excluded is not None and setup.mask_excluded[10]
+    mask, _ = select_window(spec, setup.components, exclude=setup.mask_excluded)
+    assert not mask[10]
+
+    # intervals -> those pixels excluded on top of DQ; immutable (setup unchanged).
+    masked = setup.with_mask([[6550.0, 6555.0]])
+    assert masked is not setup
+    region = (wl >= 6550.0) & (wl <= 6555.0)
+    assert masked.mask_excluded[region].all() and masked.mask_excluded[10]
+    assert not setup.mask_excluded[region].any()  # original untouched
+
+    # bool-array form.
+    arr = np.zeros(wl.size, dtype=bool)
+    arr[100:105] = True
+    assert setup.with_mask(arr).mask_excluded[100:105].all()
+
+    # None resets the fit-time layer back to DQ only.
+    cleared = masked.with_mask(None)
+    assert cleared.mask_excluded[10] and not cleared.mask_excluded[region].any()
+
+    # wrong-length bool array errors; auto tuning without 'auto' errors.
+    with pytest.raises(ValueError, match="length"):
+        setup.with_mask(np.zeros(5, dtype=bool))
+    with pytest.raises(ValueError, match="auto"):
+        setup.with_mask([[6550.0, 6555.0]], tau=2.0)
+
+
+def test_compute_auto_mask_flags_outliers():
+    """auto-mask flags a cosmic ray and an unrelated line, sparing real signal."""
+    from noobfriend.inference.spectrum._mask import compute_auto_mask
+
+    c = 299792.458
+    fw2sig = 1.0 / 2.3548200450309493
+    rng = np.random.default_rng(0)
+    wl = np.linspace(6500.0, 6620.0, 240)
+
+    def gauss(center: float, fwhm_kms: float, flux: float) -> np.ndarray:
+        sw = center * (fwhm_kms / c) * fw2sig
+        return (
+            flux / (sw * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((wl - center) / sw) ** 2)
+        )
+
+    flux = 1.0 + gauss(6562.8, 300.0, 20.0)  # target Halpha (modelled)
+    flux += gauss(6600.0, 400.0, 6.0)  # unrelated resolved line (not modelled)
+    flux = flux + rng.normal(0, 0.05, wl.size)
+    cr = int(np.argmin(np.abs(wl - 6515.0)))  # an isolated cosmic ray
+    flux[cr] += 2.0
+
+    spec = NoobSpectrum.from_1d(
+        wl, flux, np.full_like(wl, 0.05), z=0.0, wave_unit="A", R=3000.0
+    )
+    setup = spec.setup(
+        [NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")]
+    )
+
+    mask = compute_auto_mask(setup)
+    assert mask[cr]  # cosmic ray
+    assert mask[(wl >= 6597.0) & (wl <= 6603.0)].sum() >= 3  # unrelated line
+    assert not mask[(wl >= 6560.0) & (wl <= 6566.0)].any()  # Halpha core spared
+    assert not mask[int(np.argmin(np.abs(wl - 6540.0)))]  # clean continuum spared

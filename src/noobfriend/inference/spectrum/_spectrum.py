@@ -54,6 +54,11 @@ class NoobSpectrum:
     R : float or None
         Spectral resolving power ``lambda / dlambda``, used to floor line widths.
         ``None`` leaves widths floored only by the template bounds.
+    mask_excluded : numpy.ndarray or None
+        Optional boolean array (``True`` = excluded), same length as
+        ``wavelength``, marking bad pixels (a data-quality flag) to drop from the
+        fit. ``None`` is no mask. Fit-time exclusions are layered on top with
+        :meth:`~noobfriend.inference.spectrum.LineFitSetup.with_mask`.
     """
 
     wavelength: np.ndarray
@@ -62,6 +67,7 @@ class NoobSpectrum:
     z: float
     wave_unit: WaveUnit
     R: float | None = None
+    mask_excluded: np.ndarray | None = None
 
     @classmethod
     def from_1d(
@@ -73,6 +79,7 @@ class NoobSpectrum:
         z: float,
         wave_unit: WaveUnit,
         R: float | None = None,
+        mask_excluded: ArrayLike | None = None,
     ) -> NoobSpectrum:
         """Build from an already-extracted 1-D spectrum.
 
@@ -86,6 +93,8 @@ class NoobSpectrum:
             Wavelength unit of ``wavelength`` (``"A"``, ``"nm"``, or ``"um"``).
         R : float or None, optional
             Spectral resolving power.
+        mask_excluded : array_like of bool, optional
+            Bad-pixel mask (``True`` = excluded), same length as ``wavelength``.
 
         Returns
         -------
@@ -95,7 +104,7 @@ class NoobSpectrum:
         ------
         ValueError
             If the arrays are not 1-D and equal length, ``z <= -1``, ``wave_unit``
-            is empty, or ``R`` is non-positive.
+            is empty, ``R`` is non-positive, or ``mask_excluded`` length differs.
         """
         wl = np.asarray(wavelength, dtype=float)
         fl = np.asarray(flux, dtype=float)
@@ -107,7 +116,9 @@ class NoobSpectrum:
                 f"wavelength {wl.shape}, flux {fl.shape}, error {er.shape} "
                 "must have equal length."
             )
-        return cls(*_validated(wl, fl, er, z, wave_unit, R))
+        return cls(
+            *_validated(wl, fl, er, z, wave_unit, R), _validated_mask(mask_excluded, wl)
+        )
 
     @classmethod
     def from_2d(
@@ -121,6 +132,7 @@ class NoobSpectrum:
         z: float,
         wave_unit: WaveUnit,
         R: float | None = None,
+        mask_excluded: ArrayLike | None = None,
         correlation_source: Literal["continuum", "background", "manual"] = "manual",
         correlation_correction: float = 1.0,
         max_lag: int = 8,
@@ -145,7 +157,8 @@ class NoobSpectrum:
         dispersion : {"row", "column"}, default "row"
             Dispersion direction: ``"row"`` disperses along axis 1, ``"column"``
             along axis 0 (matching the grism convention).
-        z, wave_unit, R : see :meth:`from_1d`.
+        z, wave_unit, R, mask_excluded : see :meth:`from_1d` (``mask_excluded``
+            has the length of the collapsed 1-D ``wavelength``).
         correlation_source : {"manual", "continuum", "background"}, default "manual"
             Where the error-inflation boost comes from: ``"manual"`` uses
             ``correlation_correction`` verbatim; ``"continuum"`` measures the
@@ -226,7 +239,10 @@ class NoobSpectrum:
             dispersion_axis=dispersion_axis,
             max_lag=max_lag,
         )
-        return cls(*_validated(wl, flux1d, error1d * boost, z, wave_unit, R))
+        return cls(
+            *_validated(wl, flux1d, error1d * boost, z, wave_unit, R),
+            _validated_mask(mask_excluded, wl),
+        )
 
     def calibrate_error(self, *, mask: ArrayLike | None = None) -> NoobSpectrum:
         """Rescale the error to match the line-free continuum scatter.
@@ -311,6 +327,24 @@ def _validated(
     if R is not None and R <= 0:
         raise ValueError(f"R must be positive, got {R}.")
     return wl, fl, er, float(z), wave_unit, (None if R is None else float(R))
+
+
+def _validated_mask(mask: ArrayLike | None, wl: np.ndarray) -> np.ndarray | None:
+    """Validate an optional bad-pixel mask against the wavelength length.
+
+    Raises
+    ------
+    ValueError
+        If ``mask`` is given but its length differs from ``wl``.
+    """
+    if mask is None:
+        return None
+    m = np.asarray(mask, dtype=bool)
+    if m.shape != wl.shape:
+        raise ValueError(
+            f"mask_excluded shape {m.shape} must match wavelength {wl.shape}."
+        )
+    return m
 
 
 def _collapse_boost(

@@ -63,6 +63,48 @@ def _initial_params(setup: LineFitSetup, init: Any) -> dict[str, dict[str, float
     }
 
 
+def _hatch_masked(
+    ax: Any,
+    wavelength: np.ndarray,
+    mask_excluded: np.ndarray | None,
+    xlo: float,
+    xhi: float,
+) -> None:
+    """Hatch the excluded-pixel runs of ``mask_excluded`` overlapping ``[xlo, xhi]``.
+
+    Drawn before the data so the shared legend picks up a single ``"masked"``
+    entry; each contiguous run becomes one slashed ``axvspan``.
+    """
+    if mask_excluded is None or not np.any(mask_excluded):
+        return
+    wl = np.asarray(wavelength, dtype=float)
+    m = np.asarray(mask_excluded, dtype=bool)
+    dwl = float(np.median(np.diff(wl))) if wl.size > 1 else 1.0
+    label: str | None = "masked"
+    i, n = 0, m.size
+    while i < n:
+        if not m[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and m[j]:
+            j += 1
+        lo, hi = wl[i] - 0.5 * dwl, wl[j - 1] + 0.5 * dwl
+        if hi >= xlo and lo <= xhi:
+            ax.axvspan(
+                lo,
+                hi,
+                facecolor="none",
+                edgecolor="0.6",
+                hatch="///",
+                linewidth=0.0,
+                zorder=0.5,
+                label=label,
+            )
+            label = None  # only the first span carries the legend entry
+        i = j
+
+
 def preview_setup(
     setup: LineFitSetup,
     *,
@@ -100,7 +142,9 @@ def preview_setup(
 
     spectrum = setup.spectrum
     comps = setup.components
-    mask, (lo, hi) = select_window(spectrum, comps, window=window, pad_kms=pad_kms)
+    mask, (lo, hi) = select_window(
+        spectrum, comps, window=window, pad_kms=pad_kms, exclude=setup.mask_excluded
+    )
     wl_w = spectrum.wavelength[mask].astype(float)
     fl_w = spectrum.flux[mask].astype(float)
     degree = continuum_degree if wl_w.size >= 4 else 0
@@ -119,6 +163,10 @@ def preview_setup(
 
     width_in = size / 100.0
     fig, ax = plt.subplots(figsize=(width_in, width_in * 0.45), layout="constrained")
+    span = hi - lo
+    _hatch_masked(
+        ax, spectrum.wavelength, setup.mask_excluded, lo - 0.3 * span, hi + 0.3 * span
+    )
     model = {
         "flux_func": init_model,
         "wavelength_range": (lo, hi),
@@ -137,7 +185,6 @@ def preview_setup(
         title=title or "setup preview (pre-fit)",
     )
     ax.axvspan(lo, hi, color="C0", alpha=0.08, zorder=0)
-    span = hi - lo
     ax.set_xlim(lo - 0.3 * span, hi + 0.3 * span)
     if save is not None:
         fig.savefig(save, dpi=200, bbox_inches="tight")
@@ -232,7 +279,7 @@ def plot_result(
             figsize=(width_in, width_in * 0.45), layout="constrained"
         )
 
-    # Drawn before draw_spectrum (which builds the legend) so it gets an entry,
+    # Drawn before draw_spectrum (which builds the legend) so they get entries,
     # and behind everything via zorder; the data points sit on top.
     if predictive:
         lo_p, _, hi_p = result.predictive_curve(grid, q=(2.5, 50.0, 97.5), seed=0)
@@ -246,6 +293,7 @@ def plot_result(
             zorder=0.5,
             label="95% predictive",
         )
+    _hatch_masked(ax, spectrum.wavelength, spectrum.mask_excluded, lo, hi)
 
     draw_spectrum(
         ax,

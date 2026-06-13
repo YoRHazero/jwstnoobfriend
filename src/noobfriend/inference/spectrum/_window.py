@@ -35,13 +35,14 @@ def select_window(
     window: tuple[float, float] | None = None,
     pad_kms: float = 5000.0,
     min_points: int = 8,
+    exclude: np.ndarray | None = None,
 ) -> tuple[np.ndarray, tuple[float, float]]:
     """Select the finite in-window pixels to fit.
 
     Parameters
     ----------
     spectrum : NoobSpectrum
-        The spectrum.
+        The spectrum. Its ``mask_excluded`` pixels are always dropped.
     components : tuple of ResolvedComponent
         The compiled components, whose systemic centres bracket the window.
     window : tuple of float, optional
@@ -51,6 +52,10 @@ def select_window(
         ``window`` is not given.
     min_points : int, default 8
         Minimum finite pixels required.
+    exclude : numpy.ndarray, optional
+        An extra boolean mask (``True`` = drop) layered on top of the spectrum's
+        ``mask_excluded`` -- the fit-time exclusions from
+        :meth:`~noobfriend.inference.spectrum.LineFitSetup.with_mask`.
 
     Returns
     -------
@@ -83,6 +88,12 @@ def select_window(
         & np.isfinite(spectrum.error)
         & (spectrum.error > 0)
     )
+    # ``mask`` is True = selected; the exclusion masks are True = drop, so AND
+    # in their negation.
+    if spectrum.mask_excluded is not None:
+        mask &= ~spectrum.mask_excluded
+    if exclude is not None:
+        mask &= ~exclude
     if int(mask.sum()) < min_points:
         raise ValueError(
             f"window [{lo:g}, {hi:g}] holds only {int(mask.sum())} finite pixels "

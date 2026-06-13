@@ -22,8 +22,10 @@ This module is internal; :class:`LineFitSetup` is re-exported from
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Literal
+
+import numpy as np
 
 from noobfriend.inference.spectrum._line import classify_spec
 from noobfriend.inference.spectrum._template import ComponentTemplate, get_template
@@ -144,11 +146,16 @@ class LineFitSetup:
     model_name : str
         A label for this model, carried onto the result for
         :meth:`~noobfriend.inference.spectrum.LineFitResult.compare`.
+    mask_excluded : numpy.ndarray or None
+        The effective fit-time bad-pixel mask (``True`` = excluded): the
+        spectrum's ``mask_excluded`` combined with whatever :meth:`with_mask`
+        last applied. ``None`` is no mask.
     """
 
     spectrum: NoobSpectrum
     components: tuple[ResolvedComponent, ...]
     model_name: str
+    mask_excluded: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     def summary(self) -> str:
         """Return a table of every component's id and resolved axes."""
@@ -168,6 +175,50 @@ class LineFitSetup:
         lines = [fmt.format(*header), fmt.format(*("-" * w for w in widths))]
         lines += [fmt.format(*r) for r in rows]
         return "\n".join(lines)
+
+    def with_mask(self, mask: Any = None, **auto_kw: Any) -> LineFitSetup:
+        """Return a copy of this setup with fit-time pixels masked.
+
+        Immutable (it does not mutate ``self``): bind the result and reuse it for
+        both preview and fit, so they see the identical mask::
+
+            masked = setup.with_mask("auto")
+            masked.plot()   # previews the mask (hatched)
+            masked.run()    # fits with it
+
+        The mask layers on top of the spectrum's own ``mask_excluded`` (a
+        data-quality flag, always honoured); each call *replaces* the fit-time
+        layer rather than accumulating.
+
+        Parameters
+        ----------
+        mask : None, "auto", list of [lo, hi], or array_like of bool
+            ``None`` clears the fit-time layer (back to the spectrum's mask).
+            ``"auto"`` detects artifacts / unrelated emission via
+            :func:`~noobfriend.inference.spectrum._mask.compute_auto_mask`. A
+            list of ``[lo, hi]`` wavelength intervals (in the spectrum's unit)
+            masks those ranges; a length-N boolean array is used directly.
+        **auto_kw
+            Tuning forwarded to ``compute_auto_mask`` (e.g. ``tau``,
+            ``sigma_isolated``, ``sigma_run``, ``window``); only valid with
+            ``mask="auto"``.
+
+        Returns
+        -------
+        LineFitSetup
+            A copy whose :attr:`mask_excluded` is the combined effective mask.
+        """
+        from noobfriend.inference.spectrum._mask import resolve_mask
+
+        layer = resolve_mask(self, mask, **auto_kw)
+        dq = self.spectrum.mask_excluded
+        if layer is None:
+            effective = dq
+        elif dq is None:
+            effective = layer
+        else:
+            effective = dq | layer
+        return replace(self, mask_excluded=effective)
 
     def plot(
         self,
@@ -320,13 +371,18 @@ class LineFitSetup:
             window_wl=bundle.window_wl,
             window_flux=bundle.window_flux,
             window_error=bundle.window_error,
-            spectrum=self.spectrum,
+            spectrum=replace(self.spectrum, mask_excluded=self.mask_excluded),
         )
 
     def __repr__(self) -> str:
-        """Concise representation: component count and ids."""
+        """Concise representation: component count and ids (and masked pixels)."""
         ids = ", ".join(c.id for c in self.components)
-        return f"LineFitSetup({len(self.components)} components: {ids})"
+        masked = (
+            ""
+            if self.mask_excluded is None
+            else f", {int(self.mask_excluded.sum())} masked"
+        )
+        return f"LineFitSetup({len(self.components)} components: {ids}{masked})"
 
 
 def _default_model_name(lines: list[NoobLine]) -> str:
@@ -394,6 +450,7 @@ def build_setup(
         spectrum=spectrum,
         components=tuple(resolved),
         model_name=model_name if model_name is not None else _default_model_name(items),
+        mask_excluded=spectrum.mask_excluded,
     )
 
 
