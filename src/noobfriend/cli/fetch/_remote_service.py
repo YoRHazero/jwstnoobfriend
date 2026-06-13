@@ -66,6 +66,11 @@ class DownloadTarget:
         """Whether this target lives on a remote host."""
         return self.ssh_dest is not None
 
+    @property
+    def display(self) -> str:
+        """Human-readable destination label: ``host:path`` (remote) or ``path``."""
+        return f"{self.ssh_dest}:{self.path}" if self.is_remote else self.path
+
 
 def parse_destination(spec: str) -> DownloadTarget:
     """Parse a ``[user@]host:path`` (remote) or plain path (local) specifier.

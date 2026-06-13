@@ -3,10 +3,23 @@
 import pytest
 
 from noobfriend.cli.fetch._remote_service import (
+    DownloadTarget,
     build_remote_script,
     parse_destination,
     parse_progress_line,
 )
+
+
+class TestDownloadTargetDisplay:
+    """The human-readable destination label."""
+
+    def test_remote_shows_host_and_path(self) -> None:
+        assert DownloadTarget(ssh_dest="icrhome08", path="/data/raw").display == (
+            "icrhome08:/data/raw"
+        )
+
+    def test_local_shows_bare_path(self) -> None:
+        assert DownloadTarget(ssh_dest=None, path="/data/raw").display == "/data/raw"
 
 
 class TestParseDestination:

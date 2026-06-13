@@ -1,6 +1,7 @@
 """The ``fetch download`` command: stream a product manifest to disk or a host."""
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -83,12 +84,46 @@ def cli_download(
         raise typer.Exit(code=1)
 
     target = resolve_target(output, current_folder)
+    _announce_destination(target, explicit=current_folder or output is not None)
     exist_mode = "skip" if skip_exist else "overwrite"
 
     if not target.is_remote:
         _download_local(products, Path(target.path), exist_mode)
     else:
         _download_remote(products, target, mode, skip_exist=skip_exist)
+
+
+def _announce_destination(target: DownloadTarget, *, explicit: bool) -> None:
+    """Show the download destination and, for an env-derived target, confirm.
+
+    The destination is always printed so the user knows where the files will
+    land before the time-consuming transfer starts. When it was not given
+    explicitly (no ``-o``/``-c``) it came from the ``.env`` defaults — the
+    surprising case, possibly a remote server path — so in an interactive session
+    the user is asked to confirm and a declined prompt aborts. A non-interactive
+    run (no TTY) skips the prompt and proceeds.
+
+    Parameters
+    ----------
+    target : DownloadTarget
+        The resolved destination.
+    explicit : bool
+        Whether the destination was given explicitly via ``-o`` or ``-c``.
+
+    Raises
+    ------
+    typer.Abort
+        If the user declines the confirmation prompt.
+    """
+    location = "remote" if target.is_remote else "local"
+    source = "" if explicit else " [dim](from .env defaults)[/dim]"
+    console.print(
+        f"[bold]Download destination:[/bold] {target.display} [dim]({location})[/dim]{source}"
+    )
+    if explicit or not sys.stdin.isatty():
+        return
+    if not typer.confirm("Proceed with this destination?", default=True):
+        raise typer.Abort
 
 
 def _download_local(products: list[dict], output_dir: Path, exist_mode: str) -> None:
