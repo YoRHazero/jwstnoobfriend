@@ -10,7 +10,7 @@ import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from noobfriend.core.io import grizli
+from noobfriend.core.io import grizli_cutout as grizli
 
 
 def _grizli_hdu(

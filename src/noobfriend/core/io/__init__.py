@@ -7,7 +7,7 @@ from noobfriend.core.io.fits import (
     read_gwcs,
     read_meta,
 )
-from noobfriend.core.io.grizli import (
+from noobfriend.core.io.grizli_cutout import (
     GrizliCutout,
     load_grizli_cutout,
     read_grizli_cutout_bands,
