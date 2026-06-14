@@ -7,6 +7,7 @@ identifier fields, so the logic under test never touches real data.
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -97,6 +98,43 @@ def test_from_directory_remote_root_thin(monkeypatch):
     assert book.location == "host:/data/stage2/jw01345001001_02201_00001_nrca1_cal.fits"
     assert book.detector == "nrca1"
     assert not book.is_probed
+
+
+def test_from_directory_composes_noob_server(monkeypatch):
+    """With no root, a remote NOOB_SERVER prefixes STAGE_<STAGE>_PATH."""
+    monkeypatch.setenv("STAGE_2A_PATH", "/disk/jwst/2a")
+    monkeypatch.setattr(
+        "noobfriend.navigation.noobox._core.get_settings",
+        lambda: SimpleNamespace(server_host=lambda: "myhost"),
+    )
+
+    def fake_list_remote_dir(spec):
+        assert spec == "myhost:/disk/jwst/2a"
+        return ["jw01345001001_02201_00001_nrca1_cal.fits"]
+
+    monkeypatch.setattr(
+        "noobfriend.navigation.noobox._core.list_remote_dir", fake_list_remote_dir
+    )
+
+    box = NooBox.from_directory("2a")
+
+    location = next(iter(box)).location
+    assert location == "myhost:/disk/jwst/2a/jw01345001001_02201_00001_nrca1_cal.fits"
+
+
+def test_from_directory_local_server_keeps_bare_path(tmp_path, monkeypatch):
+    """A local NOOB_SERVER leaves STAGE_<STAGE>_PATH as a bare local path."""
+    _touch(tmp_path, "jw01345001001_02201_00001_nrca1_cal.fits")
+    monkeypatch.setenv("STAGE_2A_PATH", str(tmp_path))
+    monkeypatch.setattr(
+        "noobfriend.navigation.noobox._core.get_settings",
+        lambda: SimpleNamespace(server_host=lambda: None),
+    )
+
+    box = NooBox.from_directory("2a")
+
+    location = next(iter(box)).location
+    assert location == str(tmp_path / "jw01345001001_02201_00001_nrca1_cal.fits")
 
 
 # -- subsetting, grouping, selection ------------------------------------------

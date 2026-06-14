@@ -101,6 +101,21 @@ class NoobSettings(BaseSettings):
             )
         return value
 
+    def server_host(self) -> str | None:
+        """Return :attr:`noob_server` as an ssh host, or ``None`` when local.
+
+        The empty string and the ``localhost`` / ``local`` aliases all mean the
+        local machine and yield ``None``; any other value is the ssh destination
+        the ``storage`` paths (including ``STAGE_<STAGE>_PATH``) live on.
+
+        Returns
+        -------
+        str or None
+            The remote host, or ``None`` when storage is on the local machine.
+        """
+        host = self.noob_server.strip()
+        return None if host.lower() in {"", "localhost", "local"} else host
+
 
 def get_settings() -> NoobSettings:
     """Load the layered ``.env`` files and return a validated settings object.

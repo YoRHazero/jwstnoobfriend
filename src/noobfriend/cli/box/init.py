@@ -26,7 +26,7 @@ def cli_init(
         typer.Option(
             "-r",
             "--root",
-            help="Directory to scan: a local path, or a remote 'host:path'. Defaults to [yellow]STAGE_<STAGE>_PATH[/yellow] from .env.",
+            help="Directory to scan: a local path, or a remote 'host:path'. Defaults to [yellow]NOOB_SERVER[/yellow] + [yellow]STAGE_<STAGE>_PATH[/yellow] from .env.",
             rich_help_panel="Source",
             metavar="[HOST:]PATH",
         ),

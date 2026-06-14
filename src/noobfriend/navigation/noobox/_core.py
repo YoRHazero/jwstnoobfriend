@@ -80,6 +80,12 @@ def _discover_locations(root: str, wildcard: str) -> list[str]:
 def _resolve_stage_root(stage: str, root: str | None) -> str:
     """Resolve a stage's directory root from ``root`` then the environment.
 
+    With an explicit ``root`` that value is used verbatim. Otherwise the stage's
+    ``STAGE_<STAGE>_PATH`` is read from the environment and, following the same
+    storage model as ``fetch`` and ``env check``, composed with ``NOOB_SERVER``:
+    a remote ``NOOB_SERVER`` makes it a ``host:path`` spec read over SSH, while a
+    local ``NOOB_SERVER`` leaves the bare path.
+
     Parameters
     ----------
     stage : str
@@ -90,7 +96,7 @@ def _resolve_stage_root(stage: str, root: str | None) -> str:
     Returns
     -------
     str
-        The directory root for ``stage``.
+        The directory root for ``stage`` -- a local path or a ``host:path`` spec.
 
     Raises
     ------
@@ -100,13 +106,14 @@ def _resolve_stage_root(stage: str, root: str | None) -> str:
     """
     if root is not None:
         return root
-    env_value = os.getenv(stage_path_var(stage))
-    if env_value is None:
+    stage_path = os.getenv(stage_path_var(stage))
+    if stage_path is None:
         raise ValueError(
             f"no root for stage {stage!r}: `root` is None and "
             f"{stage_path_var(stage)} is unset."
         )
-    return env_value
+    host = get_settings().server_host()
+    return stage_path if host is None else f"{host}:{stage_path}"
 
 
 def _resolve_noobox_path(path: Path | str | None) -> Path:
@@ -213,10 +220,11 @@ class NooBox:
         Every ``wildcard``-matching file directly under the directory becomes a
         book of ``stage``; the result is therefore a *single-stage* box, the unit
         you assemble a pipeline ladder from with :meth:`merge`. The directory is
-        ``root`` when given, else the ``STAGE_<STAGE>_PATH`` environment
-        variable. By default the books are *thin* (:meth:`NooBook.from_name`, no
-        file opened); pass ``probe=True`` to read each header now, or call
-        :meth:`probe` later.
+        ``root`` when given, else ``STAGE_<STAGE>_PATH`` composed with
+        ``NOOB_SERVER`` (a remote ``NOOB_SERVER`` makes it a ``host:path`` read
+        over SSH, the same place ``fetch`` downloads to). By default the books
+        are *thin* (:meth:`NooBook.from_name`, no file opened); pass
+        ``probe=True`` to read each header now, or call :meth:`probe` later.
 
         Parameters
         ----------
@@ -224,7 +232,7 @@ class NooBox:
             Stage label assigned to every discovered file.
         root : str, optional
             Directory to scan -- a local path or a ``host:path`` spec. Defaults
-            to ``STAGE_<STAGE>_PATH``.
+            to ``NOOB_SERVER`` + ``STAGE_<STAGE>_PATH``.
         wildcard : str, optional
             Glob pattern selecting product files, by default ``"*.fits"``.
         probe : bool, optional
