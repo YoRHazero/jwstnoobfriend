@@ -2,9 +2,9 @@
 
 Three coordinated entry points:
 
-- :func:`track` — re-export of :func:`rich.progress.track` for inline use
-  inside a ``for`` loop, with the shared noobfriend console injected as the
-  default.
+- :func:`track` — inline determinate progress bar (with an ``M/N`` counter)
+  for use inside a ``for`` loop, sharing :func:`track_iter`'s columns and the
+  shared noobfriend console.
 - :func:`track_iter` — decorator form: wraps an iterable function argument
   with a determinate progress bar.
 - :func:`track_time` — decorator form: shows a spinner and elapsed-time
@@ -24,9 +24,6 @@ from rich.progress import (
     SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
-)
-from rich.progress import (
-    track as _rich_track,
 )
 
 from noobfriend.core.console import console
@@ -136,36 +133,36 @@ def track(
     sequence: Iterable[Any],
     description: str = "Working...",
     **kwargs: Any,
-) -> Iterable[Any]:
-    """Wrap ``sequence`` with a progress bar; re-export of :func:`rich.progress.track`.
+) -> Iterator[Any]:
+    """Wrap ``sequence`` with a determinate progress bar showing an ``M/N`` count.
 
-    The shared :data:`noobfriend.core.console.console` is injected as the
-    default ``console`` keyword so the progress bar cooperates with the
-    package logging handler (no interleaved redraws).
+    Renders :func:`track_iter`'s columns -- spinner, bar, an ``M/N`` completed
+    counter and elapsed time -- on the shared
+    :data:`noobfriend.core.console.console`, so inline ``for`` loops match the
+    decorator form. ``len(sequence)`` provides the total when available;
+    otherwise the bar stays indeterminate.
 
     Parameters
     ----------
     sequence : iterable
-        The iterable to wrap. ``len(sequence)`` is used for the total when
-        available; otherwise the progress shows an indeterminate spinner.
+        The iterable to wrap.
     description : str, default ``"Working..."``
         Description text shown next to the bar.
     **kwargs
-        Forwarded to :func:`rich.progress.track`. Passing ``console=`` here
-        overrides the shared console.
+        Forwarded to :meth:`rich.progress.Progress.track` (e.g. ``total``).
 
-    Returns
-    -------
-    iterable
-        Iterable yielding the items of ``sequence`` while advancing the bar.
+    Yields
+    ------
+    Any
+        The items of ``sequence``, advancing the bar after each.
 
     Examples
     --------
     >>> for item in track([1, 2, 3], description="Counting"):  # doctest: +SKIP
     ...     ...
     """
-    kwargs.setdefault("console", console)
-    return _rich_track(sequence, description, **kwargs)
+    with Progress(*_ITER_COLUMNS, console=console) as progress:
+        yield from progress.track(sequence, description=description, **kwargs)
 
 
 def track_iter(
