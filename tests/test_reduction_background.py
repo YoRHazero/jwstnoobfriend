@@ -76,6 +76,29 @@ def test_external_mask_path() -> None:
     assert np.std(_interior(out)[_interior(~source)]) < 2.0
 
 
+def test_fully_masked_region_inpainted_from_neighbours() -> None:
+    # A block larger than a box, masked entirely over background-only pixels: its
+    # boxes fall below min_valid_fraction and must be inpainted from neighbours,
+    # recovering the smooth background rather than leaving a hole or trusting a
+    # few-pixel median.
+    # A smooth plane (no peak hidden under the block); biharmonic inpainting
+    # recovers a linear surface near-exactly from the surrounding boxes.
+    rng = np.random.default_rng(7)
+    yy, xx = np.mgrid[0:_SIZE, 0:_SIZE]
+    bg = 20.0 + 0.01 * xx + 0.006 * yy
+    dirty = bg + rng.normal(0.0, 1.0, size=(_SIZE, _SIZE))
+    err = np.ones_like(dirty)
+    dq = np.zeros(dirty.shape, dtype=np.int32)
+    block = np.zeros(dirty.shape, dtype=bool)
+    block[100:148, 100:148] = True  # 3x3 boxes, fully masked
+
+    out, _, _ = subtract_background(dirty, err, dq, box_size=_BOX, mask=block)
+
+    inner = out[112:136, 112:136]  # interior of the masked block
+    assert abs(np.mean(inner)) < 2.0
+    assert np.std(inner) < 2.5
+
+
 def test_rejects_non_2d_and_bad_box() -> None:
     err = np.ones((8, 8))
     dq = np.zeros((8, 8), dtype=np.int32)

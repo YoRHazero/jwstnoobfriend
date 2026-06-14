@@ -20,6 +20,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import ndimage as ndi
 from skimage.measure import block_reduce
+from skimage.restoration import inpaint_biharmonic
 from skimage.transform import resize
 
 from noobfriend.reduction._masking import source_exclusion
@@ -36,15 +37,19 @@ def subtract_background(
     mask: NDArray[np.bool_] | None = None,
     box_size: int = 128,
     filter_size: int = 3,
+    min_valid_fraction: float = 0.1,
     nsigma: float = 3.0,
     dilate: int = 5,
     dq_bad_bits: int = 1,
 ) -> tuple[_Floats, _Floats, _Ints]:
     """Subtract a source-masked 2-D background model from a frame.
 
-    The image is tiled into ``box_size`` boxes; each box's sigma-robust median of
-    the background (non-source, non-flagged, finite) pixels forms a low-resolution
-    grid, which is median-smoothed, then bilinearly resized back to full
+    The image is tiled into ``box_size`` boxes; each box's median of the
+    background (non-source, non-flagged, finite) pixels forms a low-resolution
+    grid. Boxes with too few background pixels (below ``min_valid_fraction``) are
+    not trusted -- they are filled by biharmonic inpainting
+    (:func:`skimage.restoration.inpaint_biharmonic`) from the surrounding good
+    boxes -- and the grid is median-smoothed, then bilinearly resized back to full
     resolution and subtracted. Source flux is preserved because source pixels are
     excluded from the grid but the smooth model is subtracted everywhere.
 
@@ -66,6 +71,11 @@ def subtract_background(
     filter_size : int, default 3
         Side length (in boxes) of the median filter smoothing the low-resolution
         grid; ``1`` disables smoothing.
+    min_valid_fraction : float, default 0.1
+        Minimum fraction of a box that must be background (unmasked) pixels for
+        its median to be trusted. Boxes below this -- those swallowed by a large
+        source or masked region -- are inpainted from neighbouring good boxes
+        instead of trusting a few-pixel median.
     nsigma : float, default 3.0
         Source-detection level for the automatic mask (used only when ``mask`` is
         ``None``).
@@ -96,21 +106,28 @@ def subtract_background(
     excluded = source_exclusion(
         image, dq, mask=mask, nsigma=nsigma, dilate=dilate, dq_bad_bits=dq_bad_bits
     )
-    background = _mesh_background(image, excluded, box_size, filter_size)
+    background = _mesh_background(
+        image, excluded, box_size, filter_size, min_valid_fraction
+    )
     return image - background, err, dq
 
 
 def _mesh_background(
-    image: _Floats, excluded: NDArray[np.bool_], box_size: int, filter_size: int
+    image: _Floats,
+    excluded: NDArray[np.bool_],
+    box_size: int,
+    filter_size: int,
+    min_valid_fraction: float,
 ) -> _Floats:
     """Return a smooth 2-D background from a grid of source-masked box medians."""
     masked = np.where(excluded, np.nan, image)
+    block = (box_size, box_size)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN boxes
-        grid = block_reduce(
-            masked, (box_size, box_size), func=np.nanmedian, cval=np.nan
-        )
-    grid = _fill_nan_nearest(grid)
+        grid = block_reduce(masked, block, func=np.nanmedian, cval=np.nan)
+    fraction = block_reduce((~excluded).astype(float), block, func=np.mean, cval=0.0)
+    bad = ~np.isfinite(grid) | (fraction < min_valid_fraction)
+    grid = _inpaint_bad(grid, bad)
     if filter_size > 1:
         grid = ndi.median_filter(grid, size=filter_size, mode="nearest")
     return resize(
@@ -123,14 +140,10 @@ def _mesh_background(
     )
 
 
-def _fill_nan_nearest(grid: _Floats) -> _Floats:
-    """Replace NaN grid cells (fully-masked boxes) with their nearest finite cell."""
-    nan = ~np.isfinite(grid)
-    if not nan.any():
+def _inpaint_bad(grid: _Floats, bad: NDArray[np.bool_]) -> _Floats:
+    """Fill ``bad`` grid cells by biharmonic inpainting from the good cells."""
+    if not bad.any():
         return grid
-    if nan.all():
+    if bad.all():
         return np.zeros_like(grid)
-    indices = ndi.distance_transform_edt(
-        nan, return_distances=False, return_indices=True
-    )
-    return grid[tuple(indices)]
+    return inpaint_biharmonic(np.nan_to_num(grid, nan=0.0), bad)
