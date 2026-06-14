@@ -182,6 +182,20 @@ def test_group_by_and_distinct():
     assert box.distinct("stage") == {"2a"}
 
 
+def test_copy_is_an_independent_sandbox():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    box = _box(cal)
+
+    clone = box.copy()
+    clone.merge(_box(rate), child="2a")  # prepend: stamps the clone's 2a parents
+
+    assert clone[cal.id].parent_ids == (rate.id,)  # the edge lands on the copy
+    assert box[cal.id].parent_ids == ()  # original book untouched
+    assert clone._store is not box._store  # own byte cache
+    assert len(clone) == 2
+
+
 # -- merge: lineage resolution ------------------------------------------------
 
 

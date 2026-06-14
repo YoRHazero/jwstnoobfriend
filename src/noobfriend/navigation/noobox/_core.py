@@ -12,7 +12,7 @@ import os
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from noobfriend.core.display import track
 from noobfriend.core.env import get_settings, stage_path_var
@@ -465,6 +465,26 @@ class NooBox:
             if not any(pid in self._books for pid in book.parent_ids)
         )
 
+    def copy(self) -> "NooBox":
+        """Return an independent deep copy: fresh books over a fresh byte cache.
+
+        Unlike the views from :meth:`filter` / :meth:`select` (which share this
+        box's :class:`NooBook` instances and cache), the copy owns
+        :meth:`~NooBook.model_copy` books bound to its own :class:`LruByteStore`,
+        so mutating it -- assembling new stages, resolving lineage with
+        :meth:`merge` -- never touches this box. Pair it with :meth:`select` to
+        carve out a standalone sandbox for a reduction experiment.
+
+        Returns
+        -------
+        NooBox
+            A standalone box holding copies of this box's books.
+        """
+        clone = NooBox()
+        for book in self._books.values():
+            clone.add(book.model_copy())
+        return clone
+
     # -- assembly -------------------------------------------------------------
 
     def merge(
@@ -651,9 +671,24 @@ class NooBox:
         breakdown = ", ".join(f"{stage}×{n}" for stage, n in sorted(counts.items()))
         return f"NooBox({len(self)} books; {breakdown})"
 
-    def __getitem__(self, book_id: str) -> NooBook:
-        """Return the book with ``book_id`` (raising ``KeyError`` if absent)."""
-        return self._books[book_id]
+    @overload
+    def __getitem__(self, key: str | int) -> NooBook: ...
+    @overload
+    def __getitem__(self, key: slice) -> "NooBox": ...
+    def __getitem__(self, key: str | int | slice) -> "NooBook | NooBox":
+        """Return a member by id, by position, or a sub-box by slice.
+
+        ``box["<id>@<stage>"]`` looks a book up by its id (``KeyError`` if
+        absent); ``box[0]`` / ``box[-1]`` index into the insertion order; and
+        ``box[:5]`` slices a positional view (a sub-box sharing this box's
+        cache). Ids always contain ``@`` and never look like integers, so the
+        key type disambiguates the three forms cleanly.
+        """
+        if isinstance(key, slice):
+            return self._view(list(self._books.values())[key])
+        if isinstance(key, int):
+            return list(self._books.values())[key]
+        return self._books[key]
 
     def __contains__(self, book_id: object) -> bool:
         """Whether a book with ``book_id`` is in the collection."""
