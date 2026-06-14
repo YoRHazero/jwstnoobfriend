@@ -18,6 +18,10 @@ from noobfriend.cli.fetch._options import (
     proposal_id_callback,
     resolve_product_level,
 )
+from noobfriend.cli.fetch._search_service import (
+    is_fits_product,
+    is_rateint_product,
+)
 
 
 class TestProposalIdCallback:
@@ -184,3 +188,71 @@ class TestFilterManifestTerms:
         products = [{"instrument": "NIRCAM"}, {"other": "x"}]
         selected = filter_manifest_terms(products, "instrument", ["NIRCAM"])
         assert selected == [{"instrument": "NIRCAM"}]
+
+
+class TestIsRateintProduct:
+    """Recognition of stage-2a per-integration (rateints) products."""
+
+    def test_matches_rateints_fits_by_file_suffix(self) -> None:
+        product = {
+            "filename": "jw01895001001_02101_00001_nrcb1_rateints.fits",
+            "file_suffix": "_rateints",
+        }
+        assert is_rateint_product(product) is True
+
+    def test_matches_rateints_preview_via_filename(self) -> None:
+        # The preview's file_suffix is the generic "_preview"; only the
+        # filename token identifies it as a rateints preview.
+        product = {
+            "filename": "jw01895001001_02101_00001_nrcb1_rateints.jpg",
+            "file_suffix": "_preview",
+        }
+        assert is_rateint_product(product) is True
+
+    def test_does_not_match_rate_image(self) -> None:
+        # "rate" is a prefix of "rateints" but must not be matched.
+        product = {
+            "filename": "jw01895001001_02101_00001_nrcb1_rate.fits",
+            "file_suffix": "_rate",
+        }
+        assert is_rateint_product(product) is False
+
+    def test_does_not_match_other_suffixes(self) -> None:
+        for suffix in ("_uncal", "_cal", "_thumb"):
+            product = {
+                "filename": f"jw01895001001_02101_00001_nrcb1{suffix}.fits",
+                "file_suffix": suffix,
+            }
+            assert is_rateint_product(product) is False
+
+    def test_tolerates_missing_fields(self) -> None:
+        assert is_rateint_product({}) is False
+        assert is_rateint_product({"file_suffix": "RATEINTS"}) is True
+
+
+class TestIsFitsProduct:
+    """Recognition of FITS data files versus preview/thumbnail images."""
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "jw01895001001_02101_00001_nrcb1_rate.fits",
+            "jw01895001001_02101_00001_nrcb1_rate.FITS",
+            "x_cal.fits.gz",
+        ],
+    )
+    def test_matches_fits_files(self, filename: str) -> None:
+        assert is_fits_product({"filename": filename}) is True
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "jw01895001001_02101_00001_nrcb1_rate.jpg",
+            "jw01895001001_02101_00001_nrcb1_thumb.jpg",
+        ],
+    )
+    def test_rejects_preview_and_thumbnail(self, filename: str) -> None:
+        assert is_fits_product({"filename": filename}) is False
+
+    def test_tolerates_missing_filename(self) -> None:
+        assert is_fits_product({}) is False

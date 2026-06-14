@@ -20,6 +20,8 @@ from noobfriend.cli.fetch._presenters import (
 from noobfriend.cli.fetch._search_service import (
     fetch_products_for_file_sets,
     fetch_proposal_file_sets,
+    is_fits_product,
+    is_rateint_product,
 )
 from noobfriend.cli.fetch._options import (
     DEFAULT_RETRY_LIMIT,
@@ -92,6 +94,22 @@ def cli_search(
             help="How many times to re-query a fileset that returns no products before giving up.",
         ),
     ] = DEFAULT_RETRY_LIMIT,
+    no_rateint: Annotated[
+        bool,
+        typer.Option(
+            "-R",
+            "--no-rateint",
+            help="Exclude stage-2a per-integration 'rateints' products (and their previews), keeping only the 2D 'rate' images. No effect on other stages.",
+        ),
+    ] = False,
+    all_formats: Annotated[
+        bool,
+        typer.Option(
+            "-a",
+            "--all-formats",
+            help="Include all file formats. By default only .fits data files are kept; this also adds the preview/thumbnail .jpg files.",
+        ),
+    ] = False,
     show_example: Annotated[
         bool,
         typer.Option(
@@ -150,6 +168,22 @@ def cli_search(
     if missing_filesets:
         console.print(make_missing_products_table(missing_filesets))
         console.print("This problem can be solved by rerunning the command.")
+
+    if not all_formats:
+        before = len(results)
+        results = [product for product in results if is_fits_product(product)]
+        console.print(
+            f"[dim]Excluded {before - len(results)} non-FITS product(s); "
+            f"{len(results)} remaining.[/dim]"
+        )
+
+    if no_rateint:
+        before = len(results)
+        results = [product for product in results if not is_rateint_product(product)]
+        console.print(
+            f"[dim]Excluded {before - len(results)} rateints product(s); "
+            f"{len(results)} remaining.[/dim]"
+        )
 
     console.print(
         make_instrument_table(

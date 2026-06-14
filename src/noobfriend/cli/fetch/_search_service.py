@@ -13,6 +13,60 @@ from noobfriend.core.io import HTTPSession
 
 logger = logging.getLogger(__name__)
 
+#: Filename / ``file_suffix`` tokens that mark a per-integration countrate product.
+RATEINT_SUFFIXES: frozenset[str] = frozenset({"rateint", "rateints"})
+
+
+def is_rateint_product(product: dict) -> bool:
+    """Return whether ``product`` is a stage-2a per-integration (rateints) product.
+
+    The 3D ``_rateints`` countrate cube is, for many single-integration
+    exposures, redundant with the 2D ``_rate`` image, so it is often worth
+    excluding from a download. A product is recognised by its ``file_suffix``
+    field, falling back to the trailing token of its ``filename`` — the latter
+    also catches the matching preview ``.jpg``, whose ``file_suffix`` is the
+    generic ``_preview``. The ``_rate`` image is never matched, despite
+    ``rate`` being a prefix of ``rateints``, because only the whole token is
+    compared.
+
+    Parameters
+    ----------
+    product : dict
+        Product descriptor as returned by MAST; uses ``file_suffix`` and
+        ``filename`` when present.
+
+    Returns
+    -------
+    bool
+        ``True`` for a ``_rateints`` (or ``_rateint``) product or its preview.
+    """
+    suffix = (product.get("file_suffix") or "").strip().lstrip("_").lower()
+    if suffix in RATEINT_SUFFIXES:
+        return True
+    stem = product.get("filename", "").rsplit(".", 1)[0]
+    return stem.rsplit("_", 1)[-1].lower() in RATEINT_SUFFIXES
+
+
+def is_fits_product(product: dict) -> bool:
+    """Return whether ``product`` is a FITS data file (not a preview or thumbnail).
+
+    MAST lists, alongside each FITS file, preview and thumbnail ``.jpg`` images.
+    Those are rarely wanted for a data download, so the search keeps only FITS
+    files unless the caller opts into all formats.
+
+    Parameters
+    ----------
+    product : dict
+        Product descriptor as returned by MAST; uses ``filename``.
+
+    Returns
+    -------
+    bool
+        ``True`` when ``filename`` ends in ``.fits`` or ``.fits.gz``.
+    """
+    name = product.get("filename", "").lower()
+    return name.endswith((".fits", ".fits.gz"))
+
 
 async def fetch_proposal_file_sets(
     http: HTTPSession,
