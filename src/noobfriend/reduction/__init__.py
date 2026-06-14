@@ -7,8 +7,10 @@ run in a ``jwst`` environment) is what unwraps a datamodel into arrays, calls
 these steps between the official pipeline steps, and writes the result back.
 """
 
+from noobfriend.reduction._background import subtract_background
 from noobfriend.reduction._oneoverf import subtract_oneoverf
 
 __all__ = [
+    "subtract_background",
     "subtract_oneoverf",
 ]

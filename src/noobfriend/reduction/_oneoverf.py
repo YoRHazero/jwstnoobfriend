@@ -20,9 +20,8 @@ from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy import ndimage as ndi
 
-from noobfriend.core.imgutils import segment
+from noobfriend.reduction._masking import source_exclusion
 
 _Floats = NDArray[np.floating]
 _Ints = NDArray[np.integer]
@@ -112,7 +111,9 @@ def subtract_oneoverf(
     if by not in ("row", "column", "both"):
         raise ValueError(f"by must be 'row', 'column' or 'both'; got {by!r}.")
 
-    excluded = _build_exclusion(image, dq, mask, dq_bad_bits, nsigma, dilate)
+    excluded = source_exclusion(
+        image, dq, mask=mask, nsigma=nsigma, dilate=dilate, dq_bad_bits=dq_bad_bits
+    )
 
     n_blocks = n_amps if amp_aware else 1
     width = image.shape[1]
@@ -139,33 +140,6 @@ def subtract_oneoverf(
             ]
 
     return corrected, err, dq
-
-
-def _build_exclusion(
-    image: _Floats,
-    dq: _Ints,
-    mask: NDArray[np.bool_] | None,
-    dq_bad_bits: int,
-    nsigma: float,
-    dilate: int,
-) -> NDArray[np.bool_]:
-    """Return the boolean mask of pixels excluded from the offset estimate.
-
-    Combines non-finite pixels, ``dq`` bits in ``dq_bad_bits`` and either the
-    caller's ``mask`` or an automatic, dilated source mask (see
-    :func:`subtract_oneoverf`).
-    """
-    excluded = ~np.isfinite(image)
-    if dq_bad_bits:
-        excluded |= (np.asarray(dq) & dq_bad_bits) != 0
-    if mask is not None:
-        return excluded | np.asarray(mask, dtype=bool)
-
-    sources = segment(np.where(excluded, np.nan, image), nsigma=nsigma, deblend=False)
-    source_mask = sources > 0
-    if dilate > 0 and source_mask.any():
-        source_mask = ndi.binary_dilation(source_mask, iterations=dilate)
-    return excluded | source_mask
 
 
 def _safe_median(values: _Floats, *, axis: int, min_samples: int) -> _Floats:
