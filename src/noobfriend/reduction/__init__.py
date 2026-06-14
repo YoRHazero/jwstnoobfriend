@@ -10,11 +10,9 @@ these steps between the official pipeline steps, and writes the result back.
 from noobfriend.reduction._background import subtract_background
 from noobfriend.reduction._badpixel import flag_outlier_pixels
 from noobfriend.reduction._oneoverf import subtract_oneoverf
-from noobfriend.reduction._wisp import subtract_wisp
 
 __all__ = [
     "flag_outlier_pixels",
     "subtract_background",
     "subtract_oneoverf",
-    "subtract_wisp",
 ]
