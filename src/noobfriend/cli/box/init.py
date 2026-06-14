@@ -84,11 +84,11 @@ def cli_init(
     if target.exists() and not force:
         typer.confirm(f"{target} already exists. Overwrite?", abort=True)
 
+    console.print(f"[dim]Scanning for stage {resolved_stage} products ...[/dim]")
     try:
-        with console.status(f"Scanning for stage {resolved_stage} products ..."):
-            box = NooBox.from_directory(
-                resolved_stage, root, wildcard=wildcard, probe=probe
-            )
+        box = NooBox.from_directory(
+            resolved_stage, root, wildcard=wildcard, probe=probe
+        )
     except (ValueError, RemoteReadError) as error:
         console.print(Panel(str(error), title="Discovery failed", border_style="red"))
         raise typer.Exit(code=1) from error

@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from noobfriend.core.display import track
 from noobfriend.core.env import get_settings, stage_path_var
 from noobfriend.core.io import list_remote_dir
 from noobfriend.navigation._store import ByteStore, LruByteStore
@@ -237,7 +238,8 @@ class NooBox:
             Glob pattern selecting product files, by default ``"*.fits"``.
         probe : bool, optional
             When ``True``, populate header-derived fields by reading each file
-            now (slower); when ``False`` (default), build thin books.
+            now (slower, shown with a progress bar); when ``False`` (default),
+            build thin books.
         max_cache_bytes : int or None, optional
             Forwarded to the new box's :class:`LruByteStore`.
 
@@ -256,7 +258,9 @@ class NooBox:
         resolved = _resolve_stage_root(stage, root)
 
         box = cls(max_cache_bytes=max_cache_bytes)
-        for location in _discover_locations(resolved, wildcard):
+        locations = _discover_locations(resolved, wildcard)
+        tracked = track(locations, f"Probing {stage} headers") if probe else locations
+        for location in tracked:
             book = (
                 NooBook.from_file(location, stage, store=box._store)
                 if probe
