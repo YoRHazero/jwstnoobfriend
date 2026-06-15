@@ -84,6 +84,7 @@ class Recipe(BaseModel):
     select: Selection
     steps: dict[str, StepConfig] = {}
     output_noobox: str | None = None
+    mute_jwst: bool = False
 
     @model_validator(mode="after")
     def _known_steps(self) -> "Recipe":
@@ -119,6 +120,7 @@ def scaffold(stage: str = "2a") -> str:
         "",
         '# output_noobox = "data/reduced_noobox.json"  '
         "# omit to update NOOBOX_PATH in place",
+        "# mute_jwst = true  # silence jwst / CRDS / stpipe INFO+WARNING logging",
         "",
         "[select]",
         f'stage = "{stage}"',

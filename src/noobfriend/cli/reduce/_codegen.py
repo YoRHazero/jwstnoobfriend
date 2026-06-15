@@ -38,7 +38,7 @@ from astropy.io import fits
 
 from noobfriend.core.env import get_settings, stage_path_var
 
-get_settings()  # load .env into os.environ (CRDS, stage paths, NOOBOX_PATH)
+__MUTE_BLOCK__get_settings()  # load .env into os.environ (CRDS, stage paths, NOOBOX_PATH)
 
 from noobfriend.core.display import track
 from noobfriend.core.io import write_bytes
@@ -140,6 +140,14 @@ def render(recipe: Recipe) -> str:
         if (value := getattr(recipe.select, field)) is not None
     }
 
+    mute_block = (
+        "import logging\n\n"
+        "logging.disable(logging.WARNING)  "
+        "# silence jwst / CRDS / stpipe INFO+WARNING chatter\n\n"
+        if recipe.mute_jwst
+        else ""
+    )
+
     body: list[str] = []
     for spec, cfg in steps:
         if spec.custom:
@@ -163,6 +171,7 @@ def render(recipe: Recipe) -> str:
     source = (
         _TEMPLATE.replace("__REDUCTION_IMPORT__", reduction_import)
         .replace("__JWST_IMPORTS__", "\n".join(jwst_imports))
+        .replace("__MUTE_BLOCK__", mute_block)
         .replace("__STAGE_IN__", recipe.select.stage)
         .replace("__SELECT__", repr(select))
         .replace("__OUTPUT_NOOBOX__", repr(recipe.output_noobox))

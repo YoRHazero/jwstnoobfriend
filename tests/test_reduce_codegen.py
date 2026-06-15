@@ -45,6 +45,15 @@ def test_skip_removes_a_custom_step() -> None:
     assert "flag_outlier_pixels" in source  # the others remain
 
 
+def test_mute_jwst_renders_logging_disable() -> None:
+    recipe = _recipe()
+    recipe.mute_jwst = True
+    source = render(recipe)
+    assert "logging.disable(logging.WARNING)" in source
+    # mute is opt-in: the default recipe leaves logging untouched.
+    assert "logging.disable" not in render(_recipe())
+
+
 def test_unknown_step_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown step"):
         Recipe.model_validate({"select": {"stage": "2a"}, "steps": {"bogus": {}}})
