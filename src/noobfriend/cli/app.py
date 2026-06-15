@@ -7,6 +7,7 @@ import typer
 from noobfriend.cli.box import box_app
 from noobfriend.cli.env import env_app
 from noobfriend.cli.fetch import fetch_app
+from noobfriend.cli.reduce import reduce_app
 from noobfriend.core.log import setup_logging
 
 app = typer.Typer(
@@ -18,6 +19,7 @@ app = typer.Typer(
 app.add_typer(env_app, name="env")
 app.add_typer(fetch_app, name="fetch")
 app.add_typer(box_app, name="box")
+app.add_typer(reduce_app, name="reduce")
 
 
 @app.callback()
