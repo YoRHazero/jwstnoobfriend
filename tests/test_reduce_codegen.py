@@ -30,8 +30,9 @@ def test_render_is_valid_python_with_the_chain() -> None:
 
 def test_save_points_thread_explicit_lineage() -> None:
     source = render(_recipe())
-    assert "NooBook.from_file(_out, '2b', parents=[parent])" in source
-    assert "NooBook.from_file(_out, '2bi', parents=[parent])" in source
+    assert "write_bytes(_loc, _raw)" in source  # local or remote upload
+    assert "NooBook.from_file(_loc, '2b', parents=[parent], raw=_raw)" in source
+    assert "NooBook.from_file(_loc, '2bi', parents=[parent], raw=_raw)" in source
     # the 2b save-point is rendered before the 2bi one, so 2bi's parent is 2b.
     assert source.index("'2b'") < source.index("'2bi'")
 

@@ -15,16 +15,19 @@ from noobfriend.core.io.grizli_cutout import (
 from noobfriend.core.io.network import HTTPSession
 from noobfriend.core.io.remote import (
     RemoteReadError,
+    RemoteWriteError,
     fetch_bytes,
     list_remote_dir,
     remote_exists,
     remote_makedirs,
+    write_bytes,
 )
 
 __all__ = [
     "GrizliCutout",
     "HTTPSession",
     "RemoteReadError",
+    "RemoteWriteError",
     "fetch_bytes",
     "list_remote_dir",
     "load_grizli_cutout",
@@ -36,4 +39,5 @@ __all__ = [
     "read_meta",
     "remote_exists",
     "remote_makedirs",
+    "write_bytes",
 ]

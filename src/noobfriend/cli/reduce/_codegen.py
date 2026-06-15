@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from noobfriend.core.env import get_settings, stage_path_var
 get_settings()  # load .env into os.environ (CRDS, stage paths, NOOBOX_PATH)
 
 from noobfriend.core.display import track
+from noobfriend.core.io import write_bytes
 from noobfriend.navigation import NooBook, NooBox
 __REDUCTION_IMPORT__
 import jwst.datamodels as _dm
@@ -62,8 +64,13 @@ def _keep(book) -> bool:
     return True
 
 
-def _out_path(book, stage: str) -> str:
-    """Build <STAGE_<stage>_PATH>/<exposure-stem>_<stage>.fits for an output."""
+def _out_location(book, stage: str) -> str:
+    """Compose <NOOB_SERVER>:<STAGE_<stage>_PATH>/<exposure-stem>_<stage>.fits.
+
+    Remote (a ``host:path`` spec) when NOOB_SERVER names a host, so write_bytes
+    uploads over SSH; local otherwise. Parent directories are created by
+    write_bytes, not here.
+    """
     directory = os.getenv(stage_path_var(stage))
     if directory is None:
         raise RuntimeError(f"{stage_path_var(stage)} is unset in the environment.")
@@ -73,8 +80,20 @@ def _out_path(book, stage: str) -> str:
             stem = stem[: -len(ext)]
             break
     stem = stem.rsplit("_", 1)[0]  # drop the input product suffix
-    Path(directory).mkdir(parents=True, exist_ok=True)
-    return os.path.join(directory, f"{stem}_{stage}.fits")
+    host = get_settings().server_host()
+    base = f"{host}:{directory}" if host else directory
+    return base.rstrip("/") + "/" + f"{stem}_{stage}.fits"
+
+
+def _save_bytes(model, stage: str) -> bytes:
+    """Serialise ``model`` to bytes through a temp file (jwst save needs a path)."""
+    with tempfile.NamedTemporaryFile(suffix=f"_{stage}.fits", delete=False) as handle:
+        tmp = handle.name
+    try:
+        model.save(tmp)
+        return Path(tmp).read_bytes()
+    finally:
+        os.unlink(tmp)
 
 
 def main(output_noobox_path: str | None = None) -> None:
@@ -132,10 +151,12 @@ def render(recipe: Recipe) -> str:
             cls = spec.jwst.rsplit(".", 1)[1]
             body.append(f"model = {cls}.call(model)")
         if cfg.save_as:
+            stage = cfg.save_as
             body += [
-                f"_out = _out_path(book, {cfg.save_as!r})",
-                "model.save(_out)",
-                f"parent = NooBook.from_file(_out, {cfg.save_as!r}, parents=[parent])",
+                f"_loc = _out_location(book, {stage!r})",
+                f"_raw = _save_bytes(model, {stage!r})",
+                "write_bytes(_loc, _raw)",
+                f"parent = NooBook.from_file(_loc, {stage!r}, parents=[parent], raw=_raw)",
                 "out_box.add(parent)",
             ]
 

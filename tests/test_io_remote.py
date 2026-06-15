@@ -7,9 +7,11 @@ import pytest
 
 from noobfriend.core.io.remote import (
     RemoteReadError,
+    RemoteWriteError,
     _parse_spec,
     fetch_bytes,
     list_remote_dir,
+    write_bytes,
 )
 
 
@@ -102,3 +104,41 @@ class TestListRemoteDir:
 
         with pytest.raises(RemoteReadError, match="no such directory"):
             list_remote_dir("icrhome08:/missing")
+
+
+class TestWriteBytes:
+    """Writing bytes to a local path (real) or a remote host:path (mocked SSH)."""
+
+    def test_writes_local_creating_parents(self, tmp_path: Path) -> None:
+        target = tmp_path / "sub" / "deep" / "blob.bin"
+        payload = b"\x00written\xff"
+        write_bytes(str(target), payload)
+        assert target.read_bytes() == payload
+
+    def test_remote_pipes_bytes_over_ssh(self, monkeypatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["input"] = kwargs.get("input")
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+
+        write_bytes("icrhome08:/data/2b/x_cal.fits", b"remote-bytes")
+
+        assert captured["cmd"][0] == "ssh"
+        assert "icrhome08" in captured["cmd"]
+        assert any("mkdir -p" in part and "cat >" in part for part in captured["cmd"])
+        assert captured["input"] == b"remote-bytes"
+
+    def test_remote_failure_raises_write_error(self, monkeypatch) -> None:
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(
+                returncode=1, stdout=b"", stderr=b"permission denied"
+            )
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+
+        with pytest.raises(RemoteWriteError, match="permission denied"):
+            write_bytes("icrhome08:/data/x.fits", b"x")

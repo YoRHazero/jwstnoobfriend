@@ -16,6 +16,7 @@ repeated reads of the same host onto a single authenticated connection, so a
 notebook that reads many files only pays the SSH handshake once.
 """
 
+import posixpath
 import shlex
 import subprocess
 from pathlib import Path
@@ -31,6 +32,10 @@ _CONTROL_PERSIST: int = 600
 
 class RemoteReadError(RuntimeError):
     """A remote ``ssh`` read failed (unreachable host, missing file, ...)."""
+
+
+class RemoteWriteError(RuntimeError):
+    """A remote ``ssh`` write failed (unreachable host, permission denied, ...)."""
 
 
 def _parse_spec(spec: str | Path) -> tuple[str | None, str]:
@@ -151,6 +156,53 @@ def fetch_bytes(spec: str | Path) -> bytes:
             detail or f"ssh cat {host}:{path} exited with status {proc.returncode}"
         )
     return proc.stdout
+
+
+def write_bytes(spec: str | Path, data: bytes) -> None:
+    """Write ``data`` to a local path or a remote ``host:path``, making parents.
+
+    The write counterpart of :func:`fetch_bytes`: a local spec is written to disk
+    (its parent directories are created first); a remote ``[user@]host:path`` spec
+    is streamed over ``ssh`` -- ``mkdir -p`` then ``cat`` from stdin -- so the
+    bytes are uploaded in one shot. This is how a reduction script run off the
+    data server stores a product back into a remote stage directory.
+
+    Parameters
+    ----------
+    spec : str or Path
+        A local path, or an ``[user@]host:path`` string naming the destination
+        file on a host resolvable through the user's ``~/.ssh/config`` (see
+        :func:`_parse_spec` for the local-versus-remote rule).
+    data : bytes
+        The content to write.
+
+    Raises
+    ------
+    ValueError
+        The spec is malformed (see :func:`_parse_spec`).
+    RemoteWriteError
+        The remote ``ssh`` upload failed (unreachable host, permission denied,
+        authentication declined under ``BatchMode``, ...).
+    """
+    host, path = _parse_spec(spec)
+    if host is None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return
+
+    directory = posixpath.dirname(path) or "."
+    remote_cmd = f"mkdir -p {shlex.quote(directory)} && cat > {shlex.quote(path)}"
+    proc = subprocess.run(  # noqa: S603
+        ["ssh", *_ssh_opts(), host, remote_cmd],
+        input=data,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip()
+        raise RemoteWriteError(
+            detail or f"ssh write {host}:{path} exited with status {proc.returncode}"
+        )
 
 
 def list_remote_dir(spec: str) -> list[str]:

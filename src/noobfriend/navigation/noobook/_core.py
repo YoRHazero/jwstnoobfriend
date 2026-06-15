@@ -221,6 +221,7 @@ class NooBook(BaseModel):
         *,
         parents: "Iterable[NooBook | str] | None" = None,
         store: ByteStore | None = None,
+        raw: bytes | None = None,
     ) -> Self:
         """Build a fully-populated NooBook, reading the file's header once.
 
@@ -239,6 +240,11 @@ class NooBook(BaseModel):
             Shared byte store to read through (and bind for later data access).
             When ``None``, the file is read directly and the book is left
             unbound.
+        raw : bytes, optional
+            The file's bytes, already in hand. When given they are used for the
+            header instead of reading ``location`` -- so a reduction step that has
+            just written (and uploaded) a product can register it without fetching
+            it back over SSH. ``location`` is still recorded as the book's path.
 
         Returns
         -------
@@ -248,11 +254,12 @@ class NooBook(BaseModel):
         """
         filename = _basename(location)
         book_id = f"{strip_fits_suffix(filename)}@{stage}"
-        raw = (
-            store.fetch(book_id, location)
-            if store is not None
-            else fetch_bytes(location)
-        )
+        if raw is None:
+            raw = (
+                store.fetch(book_id, location)
+                if store is not None
+                else fetch_bytes(location)
+            )
         book = cls(
             id=book_id,
             location=location,
