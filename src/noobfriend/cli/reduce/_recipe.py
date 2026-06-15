@@ -83,6 +83,7 @@ class Recipe(BaseModel):
 
     select: Selection
     steps: dict[str, StepConfig] = {}
+    output_noobox: str | None = None
 
     @model_validator(mode="after")
     def _known_steps(self) -> "Recipe":
@@ -115,6 +116,9 @@ def scaffold(stage: str = "2a") -> str:
         "# [select] picks which NooBox files to reduce; each step below carries",
         '# skip (default false) and an optional save_as = "<stage>" save-point.',
         "# Step parameters live in the generated code, not here.",
+        "",
+        '# output_noobox = "data/reduced_noobox.json"  '
+        "# omit to update NOOBOX_PATH in place",
         "",
         "[select]",
         f'stage = "{stage}"',
