@@ -357,8 +357,21 @@ class NooBook(BaseModel):
 
     # -- live data access (read on demand, never pinned) ----------------------
 
-    def _read_bytes(self) -> bytes:
-        """Return the file's raw bytes, via the bound store or a direct read."""
+    def read_bytes(self) -> bytes:
+        """Return the product file's raw bytes, read on demand.
+
+        Fetched through the bound :class:`~noobfriend.navigation._store.ByteStore`
+        when the book belongs to a NooBox -- so the read is cached and shared, and
+        a remote ``host:path`` location is pulled over SSH -- or read directly
+        otherwise. Passed to e.g. ``astropy.io.fits.open(BytesIO(...))`` it yields
+        the whole file, which is how a reduction script opens a (possibly remote)
+        product as a jwst datamodel.
+
+        Returns
+        -------
+        bytes
+            The complete bytes of the FITS product.
+        """
         if self._store is not None:
             return self._store.fetch(self.id, self.location)
         return fetch_bytes(self.location)
@@ -366,26 +379,26 @@ class NooBook(BaseModel):
     @property
     def meta(self) -> AttrView:
         """The ASDF ``meta`` tree as an :class:`AttrView` (read on access)."""
-        return read_meta(BytesIO(self._read_bytes()))
+        return read_meta(BytesIO(self.read_bytes()))
 
     @property
     def wcs(self) -> WCS | None:
         """The GWCS, or ``None`` if the file has no assigned WCS yet."""
         try:
-            return read_gwcs(BytesIO(self._read_bytes()))
+            return read_gwcs(BytesIO(self.read_bytes()))
         except KeyError:
             return None
 
     @property
     def data(self) -> np.ndarray:
         """The ``SCI`` array, read fresh on each access (not cached)."""
-        return read_data(BytesIO(self._read_bytes()))
+        return read_data(BytesIO(self.read_bytes()))
 
     @property
     def err(self) -> np.ndarray | None:
         """The ``ERR`` array, or ``None`` if the product has no ``ERR``."""
         try:
-            return read_err(BytesIO(self._read_bytes()))
+            return read_err(BytesIO(self.read_bytes()))
         except KeyError:
             return None
 
@@ -393,6 +406,6 @@ class NooBook(BaseModel):
     def dq(self) -> np.ndarray | None:
         """The ``DQ`` array, or ``None`` if the product has no ``DQ``."""
         try:
-            return read_dq(BytesIO(self._read_bytes()))
+            return read_dq(BytesIO(self.read_bytes()))
         except KeyError:
             return None

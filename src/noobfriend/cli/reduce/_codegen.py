@@ -86,7 +86,7 @@ def main(output_noobox_path: str | None = None) -> None:
         if not _keep(book):
             continue
         # bytes via the NooBox store: remote-capable and reuses the probe fetch.
-        model = _dm.open(fits.open(BytesIO(book._read_bytes())))
+        model = _dm.open(fits.open(BytesIO(book.read_bytes())))
         parent = book
 __BODY__
         model.close()
