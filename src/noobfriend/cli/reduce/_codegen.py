@@ -27,15 +27,19 @@ path to write a separate manifest instead (parallel shards merge those later).
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import os
-import sys
+from io import BytesIO
 from pathlib import Path
+
+from astropy.io import fits
 
 from noobfriend.core.env import get_settings, stage_path_var
 
 get_settings()  # load .env into os.environ (CRDS, stage paths, NOOBOX_PATH)
 
+from noobfriend.core.display import track
 from noobfriend.navigation import NooBook, NooBox
 __REDUCTION_IMPORT__
 import jwst.datamodels as _dm
@@ -75,13 +79,14 @@ def _out_path(book, stage: str) -> str:
 def main(output_noobox_path: str | None = None) -> None:
     box = NooBox.load()
     out_box = box if output_noobox_path is None else NooBox()
-    for book in box.select(stage=STAGE_IN):
+    for book in track(box.select(stage=STAGE_IN), f"Reducing {STAGE_IN}"):
         if not book.is_probed:
             book = book.probe()
             out_box.add(book)  # back-fill the probed copy into the manifest
         if not _keep(book):
             continue
-        model = _dm.open(book.location)
+        # bytes via the NooBox store: remote-capable and reuses the probe fetch.
+        model = _dm.open(fits.open(BytesIO(book._read_bytes())))
         parent = book
 __BODY__
         model.close()
@@ -89,7 +94,15 @@ __BODY__
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else None)
+    parser = argparse.ArgumentParser(description="Run this generated reduction chain.")
+    parser.add_argument(
+        "--output-noobox",
+        metavar="PATH",
+        default=None,
+        help="Write the updated manifest here instead of in place (NOOBOX_PATH); "
+        "use a separate path per shard when running in parallel.",
+    )
+    main(parser.parse_args().output_noobox)
 '''
 
 
