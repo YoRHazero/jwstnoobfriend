@@ -10,6 +10,11 @@ aperture-growth ``label_map``) and the navigation layer.
 mechanism-only primitive: the variance of a weighted pixel sum under spatially
 *correlated* noise, estimated from blank sky — the honest error bar for aperture
 photometry on drizzled frames, where the independent-pixel formula underestimates.
+
+:func:`build_catalog` is the detection primitive: a matched-filter peak finder
+plus intensity-weighted-moment shape statistics, returning a columnar
+:class:`SourceCatalog` (with sky coordinates from an optional ``pixel_to_world``
+callable) — the raw material a caller turns into a stellar selection.
 """
 
 from noobfriend.core.imgutils._noise import (
@@ -18,9 +23,12 @@ from noobfriend.core.imgutils._noise import (
     noise_autocovariance,
 )
 from noobfriend.core.imgutils._segment import segment
+from noobfriend.core.imgutils._sources import SourceCatalog, build_catalog
 
 __all__ = [
     "NoiseAutocovariance",
+    "SourceCatalog",
+    "build_catalog",
     "correlated_sum_variance",
     "noise_autocovariance",
     "segment",
