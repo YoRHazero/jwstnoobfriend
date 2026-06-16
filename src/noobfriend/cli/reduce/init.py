@@ -1,4 +1,4 @@
-"""The ``reduce init`` command: scaffold a starter reduction recipe."""
+"""The ``reduce init`` command: scaffold starter reduction recipe(s)."""
 
 from pathlib import Path
 from typing import Annotated
@@ -6,42 +6,53 @@ from typing import Annotated
 import typer
 from rich.syntax import Syntax
 
-from noobfriend.cli.reduce._io import DEFAULT_RECIPE, resolve_stage
-from noobfriend.cli.reduce._recipe import scaffold
+from noobfriend.cli.reduce._registry import select_pipelines
 from noobfriend.core.console import console
 
 
 def cli_init(
-    stage: Annotated[
+    pupil: Annotated[
         str | None,
-        typer.Argument(
-            help="Input stage to reduce from. Defaults to [yellow]START_STAGE[/yellow] from .env.",
+        typer.Option(
+            "-p",
+            "--pupil",
+            help="Pipeline to scaffold: [yellow]clear[/yellow] or [yellow]grism[/yellow]. "
+            "Omit to scaffold all.",
         ),
     ] = None,
-    path: Annotated[
-        Path,
+    stage: Annotated[
+        str | None,
         typer.Option(
-            "-o",
-            "--path",
-            help="Recipe file to write.",
+            "-s",
+            "--stage",
+            help="Broad stage to scaffold, e.g. [yellow]2[/yellow]. Omit for all.",
         ),
-    ] = DEFAULT_RECIPE,
+    ] = None,
     force: Annotated[
         bool,
-        typer.Option("--force", help="Overwrite an existing recipe without prompting."),
+        typer.Option("--force", help="Overwrite existing recipes without prompting."),
     ] = False,
     show: Annotated[
         bool,
-        typer.Option("-v", "--show", help="Print the recipe after writing."),
+        typer.Option("-v", "--show", help="Print each recipe after writing."),
     ] = False,
 ) -> None:
-    """Write a starter recipe listing every reduction step in order, none skipped."""
-    resolved_stage = resolve_stage(stage)
-    if path.exists() and not force:
-        typer.confirm(f"{path} already exists. Overwrite?", abort=True)
+    """Write starter recipe(s) -- one per selected pipeline -- listing every step."""
+    pipelines = select_pipelines(pupil, stage)
+    if not pipelines:
+        console.print(
+            f"[red]No pipeline matches pupil={pupil!r} stage={stage!r}.[/red]"
+        )
+        raise typer.Exit(code=1)
 
-    text = scaffold(resolved_stage)
-    path.write_text(text)
-    console.print(f"[bold green]Wrote recipe to [yellow]{path}[/yellow][/bold green]")
-    if show:
-        console.print(Syntax(text, "toml", background_color="default"))
+    for pipeline in pipelines:
+        path = Path(pipeline.recipe_name)
+        if path.exists() and not force:
+            typer.confirm(f"{path} already exists. Overwrite?", abort=True)
+        text = pipeline.scaffold(pipeline.input_stage)
+        path.write_text(text)
+        console.print(
+            f"[bold green]Wrote recipe to [yellow]{path}[/yellow][/bold green]"
+        )
+        if show:
+            console.print(Syntax(text, "toml", background_color="default"))
