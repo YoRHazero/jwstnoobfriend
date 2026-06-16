@@ -19,7 +19,9 @@ in memory; core / wing stamps are sliced from them at build time.
 """
 
 from collections.abc import Callable
+from fnmatch import fnmatchcase
 from pathlib import Path
+from re import Pattern
 
 import numpy as np
 
@@ -45,6 +47,25 @@ def _group_aggregate(
     groups = np.split(values[order], bounds)
     ids = sorted_index[np.concatenate(([0], bounds))]
     return {int(gid): float(func(group)) for gid, group in zip(ids, groups)}
+
+
+def _match_labels(labels: list[object] | np.ndarray, matcher: object) -> np.ndarray:
+    """Return which labels match an exact value, glob string, or compiled regex."""
+    values = np.asarray(labels, dtype=object)
+    if isinstance(matcher, Pattern):
+        return np.array(
+            [
+                label is not None and matcher.fullmatch(str(label)) is not None
+                for label in values
+            ],
+            dtype=bool,
+        )
+    if isinstance(matcher, str):
+        return np.array(
+            [label is not None and fnmatchcase(str(label), matcher) for label in values],
+            dtype=bool,
+        )
+    return values == matcher
 
 
 def _pixel_to_world(
@@ -284,7 +305,7 @@ class SourceExtractor:
         include: "list[int] | np.ndarray | None" = None,
         exclude: "list[int] | np.ndarray | None" = None,
         filter: object = None,  # noqa: A002 -- the JWST band label, an astro convention
-        module: str | None = None,
+        module: object = None,
         detector: object = None,
         snr_min: float | None = None,
         max_ellipticity: float | None = None,
@@ -297,7 +318,9 @@ class SourceExtractor:
         Three kinds of cut combine with logical AND:
 
         - **per-detection labels** -- ``filter`` / ``module`` (the NIRCam module
-          letter, ``detector[3:4]``) / ``detector`` restrict to one group;
+          letter, ``detector[3:4]``) / ``detector`` restrict to one group. String
+          matchers use shell wildcards (plain strings are exact), compiled regex
+          matchers use ``fullmatch``, and non-string values use equality;
         - **per-source aggregates** -- ``snr_min`` / ``fwhm`` / ``flux`` /
           ``isolation_min`` test a source's *median* over its (label-restricted)
           detections, while ``max_ellipticity`` tests the *maximum* ellipticity
@@ -311,9 +334,11 @@ class SourceExtractor:
         include, exclude : list of int, optional
             Source indices to keep / drop.
         filter, detector : object, optional
-            Restrict to detections of this band / detector.
-        module : str, optional
-            Restrict to this NIRCam module letter (``"a"`` / ``"b"``).
+            Restrict to detections of this band / detector. Strings may include
+            shell wildcards; compiled regular expressions match the whole label.
+        module : object, optional
+            Restrict to this NIRCam module letter (``"a"`` / ``"b"``), with the
+            same string / regex matching rules as ``detector``.
         snr_min, isolation_min : float, optional
             Minimum per-source median SNR / nearest-neighbour distance.
         max_ellipticity : float, optional
@@ -337,12 +362,12 @@ class SourceExtractor:
             source_max = _group_aggregate(index, catalogue.ellipticity, np.max)
             keep &= np.array([source_max[i] <= max_ellipticity for i in index])
         if filter is not None:
-            keep &= np.asarray(self._filter, dtype=object) == filter
+            keep &= _match_labels(self._filter, filter)
         if detector is not None:
-            keep &= np.asarray(self._detector, dtype=object) == detector
+            keep &= _match_labels(self._detector, detector)
         if module is not None:
             letters = np.array([(d or "")[3:4] for d in self._detector], dtype=object)
-            keep &= letters == module
+            keep &= _match_labels(letters, module)
 
         if any(c is not None for c in (snr_min, fwhm, flux, isolation_min)):
             kept_index = index[keep]

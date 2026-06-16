@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from noobfriend.navigation import Footprint, NooBook, NooBox
@@ -63,6 +64,64 @@ def _box(*books: NooBook) -> NooBox:
     for book in books:
         box.add(book)
     return box
+
+
+def _patch_book_pixels(monkeypatch, *, wcs_by_id: dict[str, object | None]) -> None:
+    data_by_id = {
+        book_id: np.full((5, 5), float(i + 1))
+        for i, book_id in enumerate(wcs_by_id)
+    }
+    err_by_id = {book_id: np.ones((5, 5)) for book_id in wcs_by_id}
+    dq_by_id = {
+        book_id: np.zeros((5, 5), dtype=np.int32) for book_id in wcs_by_id
+    }
+
+    monkeypatch.setattr(NooBook, "wcs", property(lambda self: wcs_by_id[self.id]))
+    monkeypatch.setattr(NooBook, "data", property(lambda self: data_by_id[self.id]))
+    monkeypatch.setattr(NooBook, "err", property(lambda self: err_by_id[self.id]))
+    monkeypatch.setattr(NooBook, "dq", property(lambda self: dq_by_id[self.id]))
+
+
+def _capture_source_extractor(monkeypatch):
+    created = []
+
+    class FakeSourceExtractor:
+        """Capture SourceExtractor constructor and frame-ingest calls."""
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.calls = []
+            created.append(self)
+
+        def add_from_frame(
+            self,
+            data,
+            err=None,
+            dq=None,
+            *,
+            wcs,
+            mask=None,
+            filename=None,
+            filter=None,
+            detector=None,
+            max_ellipticity=0.1,
+        ):
+            self.calls.append(
+                {
+                    "data": data,
+                    "err": err,
+                    "dq": dq,
+                    "wcs": wcs,
+                    "mask": mask,
+                    "filename": filename,
+                    "filter": filter,
+                    "detector": detector,
+                    "max_ellipticity": max_ellipticity,
+                }
+            )
+
+    monkeypatch.setattr("noobfriend.extraction.psf.SourceExtractor", FakeSourceExtractor)
+    return created
 
 
 # -- discovery ----------------------------------------------------------------
@@ -209,6 +268,92 @@ def test_copy_is_an_independent_sandbox():
     assert box[cal.id].parent_ids == ()  # original book untouched
     assert clone._store is not box._store  # own byte cache
     assert len(clone) == 2
+
+
+# -- collection extraction ------------------------------------------------------
+
+
+def test_extract_psf_forwards_books_to_source_extractor(monkeypatch):
+    book_a = _exposure_book(
+        "2a", "cal", exposure="00001", detector="nrca1", filter="F210M"
+    )
+    book_b = _exposure_book(
+        "2a", "cal", exposure="00002", detector="nrcb1", filter="F182M"
+    )
+    wcs_a, wcs_b = object(), object()
+    _patch_book_pixels(monkeypatch, wcs_by_id={book_a.id: wcs_a, book_b.id: wcs_b})
+    created = _capture_source_extractor(monkeypatch)
+
+    extractor = _box(book_a, book_b).extract.psf(
+        fwhm=4.0,
+        cutout_size=55,
+        nsigma=4.5,
+        match_radius=0.2,
+        max_in_memory=8,
+        max_ellipticity=0.12,
+        mask_fn=lambda _book, data, _err, _dq: data > 1.5,
+        probe=False,
+        progress=False,
+    )
+
+    assert extractor is created[0]
+    assert extractor.kwargs == {
+        "fwhm": 4.0,
+        "cutout_size": 55,
+        "nsigma": 4.5,
+        "match_radius": 0.2,
+        "aperture_radius": None,
+        "min_distance": None,
+        "dq_bad_bits": 1,
+        "max_in_memory": 8,
+        "spill_dir": None,
+    }
+    assert [call["filename"] for call in extractor.calls] == [book_a.id, book_b.id]
+    assert [call["filter"] for call in extractor.calls] == ["F210M", "F182M"]
+    assert [call["detector"] for call in extractor.calls] == ["nrca1", "nrcb1"]
+    assert [call["wcs"] for call in extractor.calls] == [wcs_a, wcs_b]
+    assert extractor.calls[0]["mask"].sum() == 0
+    assert extractor.calls[1]["mask"].sum() == 25
+    assert all(call["max_ellipticity"] == 0.12 for call in extractor.calls)
+
+
+def test_extract_psf_probes_thin_books_for_filter_labels(monkeypatch):
+    book = _exposure_book("2a", "cal", filter=None)
+    _patch_book_pixels(monkeypatch, wcs_by_id={book.id: object()})
+    created = _capture_source_extractor(monkeypatch)
+
+    def fake_probe(self, *, store=None):
+        return self.model_copy(update={"shape": (5, 5), "filter": "F210M"})
+
+    monkeypatch.setattr(NooBook, "probe", fake_probe)
+
+    extractor = _box(book).extract.psf(fwhm=4.0, cutout_size=21, progress=False)
+
+    assert extractor is created[0]
+    assert extractor.calls[0]["filter"] == "F210M"
+
+
+def test_extract_psf_missing_wcs_raises_or_skips(monkeypatch):
+    missing = _exposure_book("2a", "cal", exposure="00001")
+    good = _exposure_book("2a", "cal", exposure="00002")
+    _patch_book_pixels(monkeypatch, wcs_by_id={missing.id: None, good.id: object()})
+    created = _capture_source_extractor(monkeypatch)
+
+    with pytest.raises(ValueError, match="has no assigned WCS"):
+        _box(missing).extract.psf(
+            fwhm=4.0, cutout_size=21, probe=False, progress=False
+        )
+
+    extractor = _box(missing, good).extract.psf(
+        fwhm=4.0,
+        cutout_size=21,
+        skip_missing_wcs=True,
+        probe=False,
+        progress=False,
+    )
+
+    assert extractor is created[-1]
+    assert [call["filename"] for call in extractor.calls] == [good.id]
 
 
 # -- merge: lineage resolution ------------------------------------------------

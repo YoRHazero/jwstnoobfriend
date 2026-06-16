@@ -4,6 +4,7 @@ Synthetic frames + a linear fake WCS only -- no FITS / example_data.
 """
 
 import collections
+import re
 
 import astropy.units as u
 import numpy as np
@@ -168,6 +169,25 @@ class TestSelect:
         assert ext.n_sources == 2
         assert len(ext.select(module="a")) == 1
         assert len(ext.select(module="b")) == 1
+
+    def test_label_matchers_accept_globs_and_regex(self) -> None:
+        wcs = _LinearWCS()
+        ext = SourceExtractor(fwhm=4.0, cutout_size=21)
+        ext.add_from_frame(
+            _frame([(35, 35)], seed=1), wcs=wcs, filter="F210M", detector="nrca1"
+        )
+        ext.add_from_frame(
+            _frame([(60, 60)], seed=2), wcs=wcs, filter="F182M", detector="nrca2"
+        )
+        ext.add_from_frame(
+            _frame([(90, 90)], seed=3), wcs=wcs, filter="F210M", detector="nrcb1"
+        )
+
+        assert len(ext.select(filter="F2*")) == 2
+        assert len(ext.select(detector="nrca*")) == 2
+        assert len(ext.select(detector=re.compile(r"nrc[ab]1"))) == 2
+        assert len(ext.select(module="[ab]")) == 3
+        assert len(ext.select(module=re.compile(r"a|b"))) == 3
 
     def test_max_ellipticity_is_cross_band(self) -> None:
         wcs = _LinearWCS()

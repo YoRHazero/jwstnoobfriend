@@ -19,6 +19,7 @@ from noobfriend.core.env import get_settings, stage_path_var
 from noobfriend.core.io import list_remote_dir
 from noobfriend.navigation._store import ByteStore, LruByteStore
 from noobfriend.navigation.noobook import NooBook
+from noobfriend.navigation.noobox._extract import BoxExtract
 from noobfriend.navigation.noobox._viz import BoxViz
 
 if TYPE_CHECKING:
@@ -628,6 +629,11 @@ class NooBox:
     def viz(self) -> BoxViz:
         """Plotting sugar bound to this box, e.g. ``box.viz.footprints()``."""
         return BoxViz(self)
+
+    @property
+    def extract(self) -> BoxExtract:
+        """Extraction sugar bound to this box, e.g. ``box.extract.psf(...)``."""
+        return BoxExtract(self)
 
     def get(self, book_id: str) -> NooBook | None:
         """Return the book with ``book_id``, or ``None`` if absent."""
