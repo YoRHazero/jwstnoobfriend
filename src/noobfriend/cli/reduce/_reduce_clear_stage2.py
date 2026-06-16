@@ -56,7 +56,7 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         "",
         "[select]",
         f'stage = "{stage}"',
-        '# pupil = "CLEAR"',
+        'pupil = "CLEAR"',
         '# filter = ["F182M", "F210M"]',
         '# detector = "nrca*"',
         "",

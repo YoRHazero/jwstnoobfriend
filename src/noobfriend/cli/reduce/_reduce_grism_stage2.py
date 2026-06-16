@@ -55,7 +55,7 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         "",
         "[select]",
         f'stage = "{stage}"',
-        'pupil = "GRISMR"  # dispersed LW frames (the grism images)',
+        'pupil = ["GRISMR", "GRISMC"]  # dispersed LW frames (the grism images)',
         '# detector = "nrc?long"',
         "",
         "# Per-(module, direction) sky-residual template options.",
