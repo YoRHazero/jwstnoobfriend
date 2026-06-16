@@ -632,7 +632,7 @@ class NooBox:
 
     @property
     def extract(self) -> BoxExtract:
-        """Extraction sugar bound to this box, e.g. ``box.extract.psf(...)``."""
+        """Collection extraction adapters, e.g. ``box.extract.psf(...)``."""
         return BoxExtract(self)
 
     def get(self, book_id: str) -> NooBook | None:

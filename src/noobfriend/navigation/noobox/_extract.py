@@ -1,9 +1,10 @@
-"""The :class:`BoxExtract` accessor: extraction sugar bound to one NooBox.
+"""Collection-level extraction adapters for :class:`NooBox`.
 
 Reached as
 :attr:`NooBox.extract <noobfriend.navigation.noobox._core.NooBox.extract>`.
-Methods delegate to :mod:`noobfriend.extraction`, using the box as the
-collection driver and byte-cache owner.
+This layer turns a curated collection of :class:`~noobfriend.navigation.NooBook`
+products into inputs for :mod:`noobfriend.extraction`; the returned extraction
+object owns the science-specific state and follow-up operations.
 """
 
 from __future__ import annotations
@@ -23,9 +24,17 @@ MaskBuilder = Callable[
     ["NooBook", np.ndarray, np.ndarray | None, np.ndarray | None], np.ndarray | None
 ]
 
+_DEFAULT_PSF_FWHM = 4.0
+_DEFAULT_PSF_CUTOUT_SIZE = 55
+
 
 class BoxExtract:
-    """Extraction sugar bound to one :class:`NooBox`.
+    """Extraction adapters bound to one :class:`NooBox`.
+
+    ``BoxExtract`` keeps collection concerns in navigation: iteration order,
+    shared byte-cache reads, and per-product provenance labels. It does not hold
+    extraction results; each method returns an object from
+    :mod:`noobfriend.extraction` that owns the accumulated state.
 
     Parameters
     ----------
@@ -40,8 +49,8 @@ class BoxExtract:
     def psf(
         self,
         *,
-        fwhm: float,
-        cutout_size: int,
+        fwhm: float = _DEFAULT_PSF_FWHM,
+        cutout_size: int = _DEFAULT_PSF_CUTOUT_SIZE,
         nsigma: float = 5.0,
         match_radius: float = 0.1,
         aperture_radius: float | None = None,
@@ -55,26 +64,57 @@ class BoxExtract:
         probe: bool = True,
         progress: bool = True,
     ) -> "SourceExtractor":
-        """Accumulate PSF-star candidates from every member of this box.
+        """Create a PSF source extractor from this box's products.
 
-        The box drives I/O and provenance only: each member contributes its
-        ``SCI`` / ``ERR`` / ``DQ`` arrays plus WCS, filter and detector labels to
-        :meth:`noobfriend.extraction.psf.SourceExtractor.add_from_frame`. The
-        returned extractor owns the accumulated detections, cutouts, selection
-        panel and core / wing PSF build methods.
+        This is the hand-off from navigation to PSF extraction. The method
+        iterates the current box members in order, optionally probes thin books
+        for resident header labels, reads each member's ``SCI`` / ``ERR`` /
+        ``DQ`` arrays and WCS, then calls
+        :meth:`noobfriend.extraction.psf.SourceExtractor.add_from_frame`.
+
+        Curate the box first with :meth:`NooBox.select` or :meth:`NooBox.filter`
+        to choose the relevant stage, field or detector set. The returned
+        :class:`~noobfriend.extraction.psf.SourceExtractor` is where sky
+        matching, candidate selection, the interactive panel, and core / wing
+        PSF building happen.
+
+        The defaults are intended as a practical first pass for calibrated
+        NIRCam imaging products: ``fwhm=4.0`` pixels gives the matched-filter
+        detector a broad point-source scale to start from, and
+        ``cutout_size=55`` is large enough for the default
+        :meth:`~noobfriend.extraction.psf.SourceExtractor.build_psf_wings`
+        ``wing_size=51`` while still keeping per-detection cutouts compact. Tune
+        ``fwhm`` when the stellar locus or detections show the PSF is
+        substantially narrower or broader in the selected products. Increase
+        ``cutout_size`` before asking for larger wings.
+
+        Typical workflow::
+
+            ext = box.select(stage="2a").extract.psf()
+            ext.panel(band="F210M")
+            stars = ext.select(filter="F210M", detector="nrca*")
+            core = stars.build_psf_core()
+            psf = stars.build_psf_wings(core)
 
         Parameters
         ----------
-        fwhm, cutout_size, nsigma, match_radius, aperture_radius, min_distance,
-        dq_bad_bits, max_in_memory, spill_dir
+        fwhm : float, default 4.0
+            Expected point-source FWHM in pixels, forwarded to the detection
+            layer. Treat it as a starting value, not a calibrated instrument
+            constant.
+        cutout_size : int, default 55
+            Edge length of the cached per-detection cutouts. The default supports
+            the default PSF wing build (``wing_size=51``).
+        nsigma, match_radius, aperture_radius, min_distance, dq_bad_bits,
+        max_in_memory, spill_dir
             Forwarded to :class:`noobfriend.extraction.psf.SourceExtractor`.
         max_ellipticity : float, default 0.1
             Per-frame point-like threshold forwarded to
             :meth:`~noobfriend.extraction.psf.SourceExtractor.add_from_frame`.
         mask_fn : callable, optional
-            ``mask_fn(book, data, err, dq) -> mask`` for a trusted bad-pixel mask
-            passed to detection. ``DQ`` is still forwarded separately as the PSF
-            cutout bad-pixel mask.
+            ``mask_fn(book, data, err, dq) -> mask`` for trusted pixels to
+            exclude from detection. ``DQ`` is still forwarded separately to the
+            PSF extractor as each cutout's bad-pixel mask.
         skip_missing_wcs : bool, default False
             When ``True``, silently skip products without assigned WCS. Otherwise
             raise a :class:`ValueError`.

@@ -327,9 +327,11 @@ def test_extract_psf_probes_thin_books_for_filter_labels(monkeypatch):
 
     monkeypatch.setattr(NooBook, "probe", fake_probe)
 
-    extractor = _box(book).extract.psf(fwhm=4.0, cutout_size=21, progress=False)
+    extractor = _box(book).extract.psf(progress=False)
 
     assert extractor is created[0]
+    assert extractor.kwargs["fwhm"] == 4.0
+    assert extractor.kwargs["cutout_size"] == 55
     assert extractor.calls[0]["filter"] == "F210M"
 
 
