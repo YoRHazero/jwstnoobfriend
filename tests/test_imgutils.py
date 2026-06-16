@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from noobfriend.core.imgutils import (
+    build_catalog,
     correlated_sum_variance,
     noise_autocovariance,
     segment,
@@ -132,6 +133,187 @@ def _brute_variance(weights: np.ndarray, autocov: object) -> float:
             if abs(dy) <= lag and abs(dx) <= lag:
                 total += weights[r1, c1] * weights[r2, c2] * cov[dy + lag, dx + lag]
     return total
+
+
+def _add_gaussian(
+    image: np.ndarray,
+    yc: float,
+    xc: float,
+    peak: float,
+    sigma_y: float,
+    sigma_x: float = None,  # type: ignore[assignment]
+) -> None:
+    """Add an (optionally elongated, axis-aligned) 2-D Gaussian in place."""
+    if sigma_x is None:
+        sigma_x = sigma_y
+    yy, xx = np.mgrid[0 : image.shape[0], 0 : image.shape[1]]
+    image += peak * np.exp(
+        -0.5 * (((yy - yc) / sigma_y) ** 2 + ((xx - xc) / sigma_x) ** 2)
+    )
+
+
+class TestBuildCatalog:
+    """Matched-filter detection and weighted-moment shape measurement."""
+
+    def test_recovers_known_positions(self) -> None:
+        rng = np.random.default_rng(0)
+        img = rng.normal(0.0, 0.5, size=(80, 80))
+        _add_gaussian(img, 25.3, 40.6, 200.0, sigma_y=1.5)
+        _add_gaussian(img, 55.0, 18.0, 120.0, sigma_y=1.5)
+
+        cat = build_catalog(img, fwhm=3.5, nsigma=5.0)
+
+        assert len(cat) == 2
+        assert cat.y[0] == pytest.approx(25.3, abs=0.3)
+        assert cat.x[0] == pytest.approx(40.6, abs=0.3)
+        assert cat.peak[0] > cat.peak[1]  # ordered by descending peak
+
+    def test_round_vs_elongated_ellipticity(self) -> None:
+        img = np.zeros((60, 120))
+        _add_gaussian(img, 30.0, 30.0, 100.0, sigma_y=2.0, sigma_x=2.0)
+        _add_gaussian(img, 30.0, 90.0, 100.0, sigma_y=2.0, sigma_x=5.0)
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=3.0)
+        by_x = np.argsort(cat.x)
+
+        assert cat.ellipticity[by_x][0] < 0.1
+        assert cat.ellipticity[by_x][1] > 0.3
+
+    def test_measured_fwhm_matches_input(self) -> None:
+        img = np.zeros((60, 60))
+        sigma = 2.0
+        _add_gaussian(img, 30.0, 30.0, 500.0, sigma_y=sigma)
+
+        cat = build_catalog(img, fwhm=2.35 * sigma, nsigma=3.0)
+
+        assert len(cat) == 1
+        assert cat.fwhm[0] == pytest.approx(2.3548 * sigma, rel=0.15)
+
+    def test_pixel_to_world_fills_ra_dec(self) -> None:
+        img = np.zeros((60, 60))
+        _add_gaussian(img, 30.0, 30.0, 200.0, sigma_y=2.0)
+
+        def p2w(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            return 53.0 + 0.01 * x, -27.0 + 0.01 * y
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=3.0, pixel_to_world=p2w)
+
+        assert cat.ra[0] == pytest.approx(53.0 + 0.01 * cat.x[0])
+        assert cat.dec[0] == pytest.approx(-27.0 + 0.01 * cat.y[0])
+
+    def test_no_wcs_gives_nan_sky(self) -> None:
+        img = np.zeros((40, 40))
+        _add_gaussian(img, 20.0, 20.0, 200.0, sigma_y=2.0)
+        cat = build_catalog(img, fwhm=4.0, nsigma=3.0)
+        assert np.isnan(cat.ra[0]) and np.isnan(cat.dec[0])
+
+    def test_mask_excludes_source(self) -> None:
+        rng = np.random.default_rng(11)
+        img = rng.normal(0.0, 1.0, size=(60, 120))
+        _add_gaussian(img, 30.0, 30.0, 200.0, sigma_y=2.0)  # masked away
+        _add_gaussian(img, 30.0, 90.0, 200.0, sigma_y=2.0)  # survives
+        mask = np.zeros_like(img, dtype=bool)
+        mask[15:46, 15:46] = True  # over the first source and its wings
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=5.0, mask=mask)
+
+        assert len(cat) == 1
+        assert cat.x[0] == pytest.approx(90.0, abs=0.5)
+
+    def test_negative_error_excludes_source(self) -> None:
+        rng = np.random.default_rng(12)
+        img = rng.normal(0.0, 1.0, size=(60, 120))
+        _add_gaussian(img, 30.0, 30.0, 200.0, sigma_y=2.0)  # excluded by bad err
+        _add_gaussian(img, 30.0, 90.0, 200.0, sigma_y=2.0)  # survives
+        err = np.ones_like(img)
+        err[15:46, 15:46] = -1.0  # non-physical error over the first source
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=5.0, err=err)
+
+        assert len(cat) == 1
+        assert cat.x[0] == pytest.approx(90.0, abs=0.5)
+
+    def test_snr_from_error_map(self) -> None:
+        img = np.zeros((60, 60))
+        _add_gaussian(img, 30.0, 30.0, 500.0, sigma_y=2.0)
+        err = np.ones_like(img)
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=3.0, err=err)
+
+        assert len(cat) == 1
+        assert np.isfinite(cat.snr[0]) and cat.snr[0] > 50.0
+
+    def test_nearest_neighbour_distance(self) -> None:
+        img = np.zeros((60, 60))
+        _add_gaussian(img, 20.0, 20.0, 100.0, sigma_y=1.5)
+        _add_gaussian(img, 20.0, 40.0, 100.0, sigma_y=1.5)
+
+        cat = build_catalog(img, fwhm=3.0, nsigma=3.0)
+
+        assert len(cat) == 2
+        np.testing.assert_allclose(cat.nn_dist, [20.0, 20.0], atol=0.5)
+
+    def test_hot_pixel_is_sharper_than_source(self) -> None:
+        img = np.zeros((60, 120))
+        _add_gaussian(img, 30.0, 30.0, 100.0, sigma_y=2.0)
+        img[30, 90] = 100.0  # single hot pixel
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=3.0)
+        by_x = np.argsort(cat.x)
+
+        assert cat.sharpness[by_x][1] > cat.sharpness[by_x][0]
+
+    def test_boolean_subset(self) -> None:
+        img = np.zeros((60, 120))
+        _add_gaussian(img, 30.0, 30.0, 100.0, sigma_y=2.0, sigma_x=2.0)
+        _add_gaussian(img, 30.0, 90.0, 100.0, sigma_y=2.0, sigma_x=6.0)
+
+        cat = build_catalog(img, fwhm=4.0, nsigma=3.0)
+        compact = cat[cat.ellipticity < 0.1]
+
+        assert len(compact) == 1
+        assert compact.x[0] == pytest.approx(30.0, abs=0.5)
+
+    def test_empty_when_nothing_above_threshold(self) -> None:
+        rng = np.random.default_rng(3)
+        img = rng.normal(0.0, 1.0, size=(40, 40))
+        assert len(build_catalog(img, fwhm=3.0, nsigma=50.0)) == 0
+
+    def test_to_table_columns(self) -> None:
+        img = np.zeros((40, 40))
+        _add_gaussian(img, 20.0, 20.0, 100.0, sigma_y=2.0)
+        table = build_catalog(img, fwhm=4.0, nsigma=3.0).to_table()
+        assert set(table.colnames) == {
+            "x",
+            "y",
+            "ra",
+            "dec",
+            "fwhm",
+            "ellipticity",
+            "flux",
+            "peak",
+            "snr",
+            "sharpness",
+            "nn_dist",
+        }
+
+    def test_non_2d_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be 2-D"):
+            build_catalog(np.zeros((3, 3, 3)), fwhm=3.0)
+
+    def test_non_positive_fwhm_raises(self) -> None:
+        with pytest.raises(ValueError, match="fwhm must be positive"):
+            build_catalog(np.zeros((10, 10)), fwhm=0.0)
+
+    def test_err_shape_mismatch_raises(self) -> None:
+        with pytest.raises(ValueError, match="err shape"):
+            build_catalog(np.zeros((10, 10)), fwhm=3.0, err=np.zeros((5, 5)))
+
+    def test_mask_shape_mismatch_raises(self) -> None:
+        with pytest.raises(ValueError, match="mask shape"):
+            build_catalog(
+                np.zeros((10, 10)), fwhm=3.0, mask=np.zeros((5, 5), dtype=bool)
+            )
 
 
 class TestLaggedAutocorr:

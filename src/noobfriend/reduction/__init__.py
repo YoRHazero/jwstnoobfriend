@@ -10,9 +10,21 @@ these steps between the official pipeline steps, and writes the result back.
 from noobfriend.reduction._background import subtract_background
 from noobfriend.reduction._badpixel import flag_outlier_pixels
 from noobfriend.reduction._oneoverf import subtract_oneoverf
+from noobfriend.reduction._sky_template import (
+    combine_sky_template,
+    fit_template_scalar,
+    sky_residual_grid,
+    subtract_sky_template,
+)
+from noobfriend.reduction._trace_mask import grism_trace_mask
 
 __all__ = [
+    "combine_sky_template",
+    "fit_template_scalar",
     "flag_outlier_pixels",
+    "grism_trace_mask",
+    "sky_residual_grid",
     "subtract_background",
     "subtract_oneoverf",
+    "subtract_sky_template",
 ]
