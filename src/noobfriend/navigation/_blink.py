@@ -190,7 +190,16 @@ def blink_frames(
     labels: Sequence[str] | None = None,
     align: Literal["wcs"] | None = None,
     atol: float = 1.0,
-    **kwargs: Any,
+    offsets: Sequence[tuple[float, float]] | None = None,
+    vmin: float | Sequence[float] | None = None,
+    vmax: float | Sequence[float] | None = None,
+    pmin: float = 1.0,
+    pmax: float = 99.0,
+    cmap: str = "Greys",
+    stretch: str = "linear",
+    size: int = 620,
+    title: str | None = None,
+    blink: bool = True,
 ) -> Any:
     """Resolve book/array frames and hand them to the core blink comparator.
 
@@ -205,18 +214,34 @@ def blink_frames(
         When ``"wcs"``, derive each frame's pixel ``offsets`` from its GWCS so
         co-gridded imaging frames (e.g. a pointing's dithers) line up on the sky;
         every frame must then be a NooBook with a non-grism WCS, and passing
-        ``offsets`` as well is an error. When ``None`` (default), offsets come
-        from ``kwargs`` (or default to zero). Grism frames are imaging-only's
-        deliberate gap -- align them by passing explicit ``offsets``.
+        ``offsets`` as well is an error. When ``None`` (default), ``offsets`` is
+        used directly, defaulting to zero for every frame. Grism frames are
+        imaging-only's deliberate gap -- align them by passing explicit
+        ``offsets``.
     atol : float, optional
         Only with ``align="wcs"``: the maximum spread, in pixels, allowed between
         a frame's four corners' implied offsets before the frames are judged to
         differ by more than a translation (and rejected). Default ``1.0``.
-    **kwargs
-        Forwarded verbatim to
-        :func:`noobfriend.core.display.plot.imshow_blink` (``offsets``,
-        ``vmin``, ``vmax``, ``cmap``, ``stretch``, ``size``, ``title``,
-        ``blink``, ...).
+    offsets : sequence of (float, float), optional
+        Per-frame ``(dx, dy)`` lower-left placement in pixels. Mutually
+        exclusive with ``align="wcs"``. Defaults to all frames stacked at a
+        common origin.
+    vmin, vmax : float or sequence of float, optional
+        Color-stretch limits. A scalar applies to every frame; a sequence gives
+        one limit per frame. A side left unset falls back to ``pmin``/``pmax``.
+    pmin, pmax : float, default 1.0, 99.0
+        Percentile cuts used per frame for whichever of ``vmin``/``vmax`` is not
+        given.
+    cmap : str, default ``"Greys"``
+        Colormap shared by all frames.
+    stretch : str, default ``"linear"``
+        Intensity stretch shared by all frames.
+    size : int, default 620
+        Length of the longer figure edge, in pixels.
+    title : str, optional
+        Figure title.
+    blink : bool, default True
+        Add a play/pause button that auto-cycles through the frames.
 
     Returns
     -------
@@ -232,12 +257,27 @@ def blink_frames(
     """
     images, resolved_labels = _resolve_frames(frames, labels)
     if align == "wcs":
-        if kwargs.get("offsets") is not None:
+        if offsets is not None:
             raise ValueError("pass either align='wcs' or offsets, not both")
-        kwargs["offsets"] = _wcs_offsets(frames, images, atol)
+        resolved_offsets = _wcs_offsets(frames, images, atol)
     elif align is not None:
         raise ValueError(f"align must be 'wcs' or None, got {align!r}")
+    else:
+        resolved_offsets = offsets
 
     from noobfriend.core.display.plot import imshow_blink
 
-    return imshow_blink(images, labels=resolved_labels, **kwargs)
+    return imshow_blink(
+        images,
+        offsets=resolved_offsets,
+        labels=resolved_labels,
+        vmin=vmin,
+        vmax=vmax,
+        pmin=pmin,
+        pmax=pmax,
+        cmap=cmap,
+        stretch=stretch,
+        size=size,
+        title=title,
+        blink=blink,
+    )

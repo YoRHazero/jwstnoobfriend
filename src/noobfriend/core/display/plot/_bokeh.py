@@ -169,8 +169,10 @@ def resolve_palette(cmap: str | Sequence[str]) -> Sequence[str]:
 def categorical_palette(n: int) -> list[str]:
     """Return ``n`` visually distinct colors for labelling categorical items.
 
-    Uses Category10 / Category20 for small counts and falls back to a sampled
-    viridis ramp beyond 20, so footprints stay distinguishable at any count.
+    Uses Category10 / Category20 for small counts and falls back to viridis
+    beyond 20. When more colors are requested than Bokeh's 256-colour viridis
+    function supports, the 256-colour ramp is cycled so callers still receive a
+    length-``n`` list instead of an exception.
 
     Parameters
     ----------
@@ -188,4 +190,7 @@ def categorical_palette(n: int) -> list[str]:
         return list(Category10[10])[:n]
     if n <= 20:
         return list(Category20[20])[:n]
-    return list(viridis(n))
+    if n <= 256:
+        return list(viridis(n))
+    base = list(viridis(256))
+    return [base[i % len(base)] for i in range(n)]

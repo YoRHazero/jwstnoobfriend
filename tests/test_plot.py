@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from noobfriend.core.display.plot._bokeh import categorical_palette
 from noobfriend.core.display.plot._footprint import (
     _resolve_colors,
     orthographic,
@@ -159,6 +160,15 @@ class TestResolveColors:
     def test_length_mismatch_raises(self) -> None:
         with pytest.raises(ValueError, match="colors length 1 != 2"):
             _resolve_colors(["a"], 2, ["x", "y"], "colors")
+
+
+class TestCategoricalPalette:
+    """Categorical palette generation for any requested count."""
+
+    def test_more_than_bokeh_base_palette_length(self) -> None:
+        colors = categorical_palette(300)
+
+        assert len(colors) == 300
 
 
 class TestOrthographic:

@@ -5,8 +5,12 @@ import math
 import numpy as np
 import pytest
 
-from noobfriend.navigation import NooBook
-from noobfriend.navigation._blink import _resolve_frames, _translation_offset
+from noobfriend.navigation import NooBook, NooBox
+from noobfriend.navigation._blink import (
+    _resolve_frames,
+    _translation_offset,
+    blink_frames,
+)
 
 
 def _thin_book(book_id: str) -> NooBook:
@@ -42,6 +46,152 @@ class TestResolveFrames:
         monkeypatch.setattr(NooBook, "data", property(lambda self: np.zeros((1, 1))))
         with pytest.raises(ValueError, match="labels has length 1, expected 2"):
             _resolve_frames([_thin_book("x@2a"), np.zeros((1, 1))], ["only-one"])
+
+
+class TestBlinkFrames:
+    """Explicit navigation blink options forwarded to the core plot."""
+
+    def test_forwards_display_options(self, monkeypatch) -> None:
+        arr = np.zeros((2, 2))
+        monkeypatch.setattr(NooBook, "data", property(lambda self: arr))
+        captured = {}
+
+        def fake_imshow_blink(images, **kwargs):
+            captured["images"] = images
+            captured.update(kwargs)
+            return "plot"
+
+        monkeypatch.setattr(
+            "noobfriend.core.display.plot.imshow_blink", fake_imshow_blink
+        )
+
+        result = blink_frames(
+            [_thin_book("x@2a"), np.ones((3, 3))],
+            labels=["science", "mask"],
+            offsets=[(0.0, 0.0), (2.0, -1.0)],
+            vmin=[0.0, 1.0],
+            vmax=5.0,
+            pmin=2.0,
+            pmax=98.0,
+            cmap="Viridis",
+            stretch="log",
+            size=512,
+            title="Blink",
+            blink=False,
+        )
+
+        assert result == "plot"
+        assert captured["labels"] == ["science", "mask"]
+        assert captured["offsets"] == [(0.0, 0.0), (2.0, -1.0)]
+        assert captured["vmin"] == [0.0, 1.0]
+        assert captured["vmax"] == 5.0
+        assert captured["pmin"] == 2.0
+        assert captured["pmax"] == 98.0
+        assert captured["cmap"] == "Viridis"
+        assert captured["stretch"] == "log"
+        assert captured["size"] == 512
+        assert captured["title"] == "Blink"
+        assert captured["blink"] is False
+
+    def test_align_wcs_conflicts_with_offsets(self, monkeypatch) -> None:
+        monkeypatch.setattr(NooBook, "data", property(lambda self: np.zeros((1, 1))))
+
+        with pytest.raises(ValueError, match="either align='wcs' or offsets"):
+            blink_frames([_thin_book("x@2a")], align="wcs", offsets=[(0.0, 0.0)])
+
+
+class TestVizBlinkAccessors:
+    """NooBook/NooBox blink accessors expose the same explicit options."""
+
+    def test_book_viz_forwards_imshow_options(self, monkeypatch) -> None:
+        arr = np.zeros((2, 2))
+        monkeypatch.setattr(NooBook, "data", property(lambda self: arr))
+        captured = {}
+
+        def fake_imshow(data, **kwargs):
+            captured["data"] = data
+            captured.update(kwargs)
+            return "image"
+
+        monkeypatch.setattr("noobfriend.core.display.plot.imshow", fake_imshow)
+        book = _thin_book("x@2a")
+
+        assert (
+            book.viz.imshow(
+                vmin=0.0,
+                vmax=10.0,
+                pmin=5.0,
+                pmax=95.0,
+                cmap="Viridis",
+                stretch="eqhist",
+                size=400,
+                title="Image",
+                coord_format="hms",
+            )
+            == "image"
+        )
+
+        assert captured["data"] is arr
+        assert captured["vmin"] == 0.0
+        assert captured["vmax"] == 10.0
+        assert captured["pmin"] == 5.0
+        assert captured["pmax"] == 95.0
+        assert captured["cmap"] == "Viridis"
+        assert captured["stretch"] == "eqhist"
+        assert captured["size"] == 400
+        assert captured["title"] == "Image"
+        assert captured["coord_format"] == "hms"
+
+    def test_book_viz_forwards_blink_options(self, monkeypatch) -> None:
+        captured = {}
+
+        def fake_blink_frames(frames, **kwargs):
+            captured["frames"] = frames
+            captured.update(kwargs)
+            return "plot"
+
+        monkeypatch.setattr(
+            "noobfriend.navigation._blink.blink_frames", fake_blink_frames
+        )
+        book = _thin_book("x@2a")
+        other = np.ones((2, 2))
+
+        assert (
+            book.viz.imshow_blink(
+                other,
+                labels=["book", "array"],
+                offsets=[(0.0, 0.0), (1.0, 1.0)],
+                blink=False,
+            )
+            == "plot"
+        )
+
+        assert captured["frames"] == [book, other]
+        assert captured["labels"] == ["book", "array"]
+        assert captured["offsets"] == [(0.0, 0.0), (1.0, 1.0)]
+        assert captured["blink"] is False
+
+    def test_box_viz_forwards_blink_options(self, monkeypatch) -> None:
+        captured = {}
+
+        def fake_blink_frames(frames, **kwargs):
+            captured["frames"] = frames
+            captured.update(kwargs)
+            return "plot"
+
+        monkeypatch.setattr(
+            "noobfriend.navigation._blink.blink_frames", fake_blink_frames
+        )
+        box = NooBox()
+        first = box.add(_thin_book("a@2a"))
+        second = box.add(_thin_book("b@2a"))
+
+        assert box.viz.imshow_blink(labels=["a", "b"], size=480, blink=False) == "plot"
+
+        assert captured["frames"] == [first, second]
+        assert captured["labels"] == ["a", "b"]
+        assert captured["size"] == 480
+        assert captured["blink"] is False
 
 
 def _identity(a: float, b: float) -> tuple[float, float]:

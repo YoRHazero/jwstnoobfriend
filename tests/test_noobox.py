@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from noobfriend.navigation import NooBook, NooBox
+from noobfriend.navigation import Footprint, NooBook, NooBox
 
 
 def _touch(directory: Path, name: str) -> None:
@@ -26,6 +26,8 @@ def _exposure_book(
     detector: str = "nrca1",
     program: str = "01345",
     parent_ids: tuple[str, ...] = (),
+    filter: str | None = None,
+    footprint: Footprint | None = None,
 ) -> NooBook:
     """Build a single-exposure NooBook with explicit identifier fields."""
     stem = f"jw{program}001001_02201_{exposure}_{detector}_{suffix}"
@@ -40,6 +42,19 @@ def _exposure_book(
         exposure=(exposure,),
         detector=detector,
         parent_ids=parent_ids,
+        filter=filter,
+        footprint=footprint,
+    )
+
+
+def _footprint(offset: float = 0.0) -> Footprint:
+    return Footprint.from_corners(
+        [
+            (offset, 0.0),
+            (offset + 1.0, 0.0),
+            (offset + 1.0, 1.0),
+            (offset, 1.0),
+        ]
     )
 
 
@@ -317,6 +332,63 @@ def test_to_table_summarises_members():
 
     assert len(table) == 2
     assert {"id", "stage", "detector", "exposure", "n_parents"} <= set(table.colnames)
+
+
+def test_viz_footprints_defaults_to_one_colour(monkeypatch):
+    captured = {}
+
+    def fake_plot_footprints(polygons, **kwargs):
+        captured["polygons"] = polygons
+        captured.update(kwargs)
+        return "plot"
+
+    monkeypatch.setattr(
+        "noobfriend.core.display.plot.plot_footprints", fake_plot_footprints
+    )
+    box = _box(
+        _exposure_book("2a", "cal", exposure="00001", footprint=_footprint(0.0)),
+        _exposure_book("2a", "cal", exposure="00002", footprint=_footprint(2.0)),
+    )
+
+    assert box.viz.footprints() == "plot"
+
+    assert len(captured["polygons"]) == 2
+    assert captured["colors"] == "#1f77b4"
+    assert captured["labels"] == [book.id for book in box]
+
+
+def test_viz_footprints_colours_by_group(monkeypatch):
+    captured = {}
+
+    def fake_plot_footprints(polygons, **kwargs):
+        captured.update(kwargs)
+        return "plot"
+
+    monkeypatch.setattr(
+        "noobfriend.core.display.plot.plot_footprints", fake_plot_footprints
+    )
+    box = _box(
+        _exposure_book(
+            "2a", "cal", exposure="00001", filter="F200W", footprint=_footprint(0.0)
+        ),
+        _exposure_book(
+            "2a", "cal", exposure="00002", filter="F356W", footprint=_footprint(2.0)
+        ),
+        _exposure_book(
+            "2a", "cal", exposure="00003", filter="F200W", footprint=_footprint(4.0)
+        ),
+    )
+
+    assert (
+        box.viz.footprints(
+            group_by="filter",
+            group_colors={"F200W": "red"},
+            palette=["blue"],
+        )
+        == "plot"
+    )
+
+    assert captured["colors"] == ["red", "blue", "red"]
 
 
 def test_save_load_roundtrip_preserves_lineage(tmp_path):

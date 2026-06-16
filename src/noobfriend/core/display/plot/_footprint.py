@@ -25,7 +25,9 @@ from bokeh.events import Pan, PanStart
 from bokeh.models import ColumnDataSource, CustomJS, HoverTool, Range1d
 from bokeh.plotting import figure
 
-from noobfriend.core.display.plot._bokeh import categorical_palette, display
+from noobfriend.core.display.plot._bokeh import display
+
+DEFAULT_FOOTPRINT_COLOR = "#1f77b4"
 
 
 def reference_center(polygons: Sequence[np.ndarray]) -> tuple[float, float]:
@@ -221,7 +223,8 @@ def plot_footprints(
         ...``. Must match ``len(polygons)`` if given.
     colors : str or sequence of str, optional
         Footprint colours: a single colour applied to all, or one per footprint
-        (length ``len(polygons)``). Defaults to an automatic categorical palette.
+        (length ``len(polygons)``). Defaults to one blue colour for every
+        footprint.
     point_labels : sequence of str, optional
         Per-point labels shown in the point hover. Requires ``points`` and must
         match ``len(points)`` if given.
@@ -261,7 +264,10 @@ def plot_footprints(
     center_dec = default_dec if center_dec is None else float(center_dec)
     names = list(labels) if labels is not None else [f"#{i}" for i in range(len(polys))]
     colors = _resolve_colors(
-        colors, len(polys), categorical_palette(len(polys)), "colors"
+        colors,
+        len(polys),
+        [DEFAULT_FOOTPRINT_COLOR] * len(polys),
+        "colors",
     )
 
     # Footprint outlines (closed loops) and a hoverable marker at each original
