@@ -10,10 +10,12 @@ import tomllib
 import pytest
 
 from noobfriend.cli.reduce._codegen_clear_stage2 import render as render_clear
+from noobfriend.cli.reduce._codegen_clear_stage3 import render as render_clear3
 from noobfriend.cli.reduce._codegen_grism_stage2 import render as render_grism
 from noobfriend.cli.reduce._io import validate_stages
 from noobfriend.cli.reduce._recipe import Recipe, StepConfig
 from noobfriend.cli.reduce._reduce_clear_stage2 import scaffold as scaffold_clear
+from noobfriend.cli.reduce._reduce_clear_stage3 import scaffold as scaffold_clear3
 from noobfriend.cli.reduce._reduce_grism_stage2 import scaffold as scaffold_grism
 
 
@@ -22,6 +24,10 @@ def _clear(**select: object) -> Recipe:
     for field, value in select.items():
         setattr(recipe.select, field, value)
     return recipe
+
+
+def _clear3() -> Recipe:
+    return Recipe.model_validate(tomllib.loads(scaffold_clear3("2bi")))
 
 
 def _grism() -> Recipe:
@@ -108,6 +114,71 @@ def test_grism_skip_template_disables_second_pass() -> None:
     # the two-pass scaffold stays, gated off by the runtime flag (still valid Python)
     assert "DO_TEMPLATE = False" in source
     ast.parse(source)
+
+
+# -- CLEAR stage-3 (mosaicking) renderer --------------------------------------
+
+
+def test_clear3_render_is_valid_group_based_python() -> None:
+    source = render_clear3(_clear3())
+    ast.parse(source)
+    assert "from jwst.tweakreg import TweakRegStep" in source
+    assert "TweakRegStep.call(" in source
+    assert "SkyMatchStep.call(library, in_memory=IN_MEMORY)" in source
+    assert "OutlierDetectionStep.call(library, in_memory=IN_MEMORY)" in source
+    assert "ResampleStep.call(" in source
+    assert "abs_refcat=str(absref)" in source
+    assert "build_catalog(" in source and "select_point_sources(cat)" in source
+    assert "GROUP_BY = ['observation', 'filter']" in source
+    assert "PIXEL_SCALE_SW = 0.025" in source and "PIXEL_SCALE_LW = 0.05" in source
+    assert "scale = _pixel_scale(gbooks)" in source  # per-channel output scale
+    assert 'STAGE_IN = "2bi"' in source and 'STAGE_OUT = "3a"' in source
+
+
+def test_clear3_uses_modellibrary_borrow_pattern() -> None:
+    # stage-3 steps return a ModelLibrary (not the input), so the runner must
+    # build a (possibly on-disk) library and borrow/shelve, not iterate a list
+    source = render_clear3(_clear3())
+    assert "ModelLibrary(_asn(paths), on_disk=not IN_MEMORY)" in source
+    assert "library = TweakRegStep.call(" in source
+    assert "library.borrow(i) for i in members" in source
+    assert "library.shelve(model, index, modify=False)" in source
+    # the per-tile subset is in memory, so its resample is always in_memory=True
+    assert "in_memory=True" in source
+
+
+def test_clear3_stamps_many_to_one_tile_lineage() -> None:
+    source = render_clear3(_clear3())
+    assert "tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP)" in source
+    assert "tile_members(field, tile, corners)" in source
+    assert "parents=[gbooks[i] for i in members]" in source
+
+
+def test_clear3_skip_align_gates_tweakreg() -> None:
+    recipe = _clear3()
+    recipe.steps["align"] = StepConfig(skip=True)
+    source = render_clear3(recipe)
+    # steps are gated by runtime DO_* flags, not by omitting their code/imports
+    assert "DO_ALIGN = False" in source
+    assert "ResampleStep.call(" in source  # resample still runs
+    ast.parse(source)
+
+
+def test_clear3_recipe_validates_stage3_steps() -> None:
+    recipe = _clear3()
+    assert recipe.pipeline == "clear"
+    assert recipe.select.stage == "2bi"
+    assert recipe.stage3.pixel_scale_sw == 0.025
+    assert recipe.stage3.pixel_scale_lw == 0.05
+    assert set(recipe.steps) == {"align", "skymatch", "outlier", "resample"}
+
+
+def test_clear3_names_carry_scale_token_and_clean_work_gated() -> None:
+    source = render_clear3(_clear3())
+    assert "_scale_token(scale)" in source  # scale token in the output filename
+    assert "WORK_DIR = Path('stage3_work')" in source
+    assert "CLEAN_WORK = False" in source
+    assert "shutil.rmtree(work, ignore_errors=True)" in source
 
 
 # -- recipe / stage validation ------------------------------------------------

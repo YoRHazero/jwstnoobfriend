@@ -68,13 +68,10 @@ def _box(*books: NooBook) -> NooBox:
 
 def _patch_book_pixels(monkeypatch, *, wcs_by_id: dict[str, object | None]) -> None:
     data_by_id = {
-        book_id: np.full((5, 5), float(i + 1))
-        for i, book_id in enumerate(wcs_by_id)
+        book_id: np.full((5, 5), float(i + 1)) for i, book_id in enumerate(wcs_by_id)
     }
     err_by_id = {book_id: np.ones((5, 5)) for book_id in wcs_by_id}
-    dq_by_id = {
-        book_id: np.zeros((5, 5), dtype=np.int32) for book_id in wcs_by_id
-    }
+    dq_by_id = {book_id: np.zeros((5, 5), dtype=np.int32) for book_id in wcs_by_id}
 
     monkeypatch.setattr(NooBook, "wcs", property(lambda self: wcs_by_id[self.id]))
     monkeypatch.setattr(NooBook, "data", property(lambda self: data_by_id[self.id]))
@@ -120,7 +117,9 @@ def _capture_source_extractor(monkeypatch):
                 }
             )
 
-    monkeypatch.setattr("noobfriend.extraction.psf.SourceExtractor", FakeSourceExtractor)
+    monkeypatch.setattr(
+        "noobfriend.extraction.psf.SourceExtractor", FakeSourceExtractor
+    )
     return created
 
 
@@ -342,9 +341,7 @@ def test_extract_psf_missing_wcs_raises_or_skips(monkeypatch):
     created = _capture_source_extractor(monkeypatch)
 
     with pytest.raises(ValueError, match="has no assigned WCS"):
-        _box(missing).extract.psf(
-            fwhm=4.0, cutout_size=21, probe=False, progress=False
-        )
+        _box(missing).extract.psf(fwhm=4.0, cutout_size=21, probe=False, progress=False)
 
     extractor = _box(missing, good).extract.psf(
         fwhm=4.0,

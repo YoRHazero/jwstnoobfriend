@@ -62,6 +62,39 @@ class GrismOptions(BaseModel):
     smooth_sigma: float = 24.0
 
 
+class Stage3Options(BaseModel):
+    """Stage-3 mosaicking knobs: grouping, unified output grid and astrometry.
+
+    ``group_by`` are the :class:`~noobfriend.navigation.NooBook` fields whose
+    distinct combinations define one mosaic (``["observation", "filter"]`` =
+    one per field per band). The output scale is per channel --
+    ``pixel_scale_sw`` for short-wave detectors (``nrc[ab][1-4]``) and
+    ``pixel_scale_lw`` for long-wave (``nrc[ab]long``); set them equal for one
+    unified grid. Each mosaic is tiled into evenly-sized ``tile_size`` cells with
+    a ``tile_overlap`` border, and tiles whose real footprint coverage is below
+    ``min_coverage`` are dropped. ``obs_epoch`` is the decimal-year target for
+    GAIA proper-motion propagation and ``star_fwhm_px`` the expected
+    point-source FWHM for image-source detection. ``in_memory`` (default false)
+    spills the skymatch / outlier / resample models to disk -- safe on the large
+    fields stage-3 targets; set true to keep them resident for speed on small
+    ones. Per-group astrometry sidecars go under ``work_dir`` and are deleted
+    afterwards when ``clean_work`` is set.
+    """
+
+    group_by: list[str] = ["observation", "filter"]
+    pixel_scale_sw: float = 0.025
+    pixel_scale_lw: float = 0.05
+    tile_size: int = 4096
+    tile_overlap: int = 128
+    min_coverage: float = 0.02
+    obs_epoch: float = 2023.6
+    star_fwhm_px: float = 2.2
+    pixfrac: float = 0.8
+    in_memory: bool = False
+    work_dir: str = "stage3_work"
+    clean_work: bool = False
+
+
 class Recipe(BaseModel):
     """A parsed ``reduce`` recipe: a pipeline, a selection and per-step controls."""
 
@@ -71,6 +104,7 @@ class Recipe(BaseModel):
     output_noobox: str | None = None
     mute_jwst: bool = False
     grism: GrismOptions = GrismOptions()
+    stage3: Stage3Options = Stage3Options()
 
     @model_validator(mode="after")
     def _known_steps(self) -> "Recipe":
