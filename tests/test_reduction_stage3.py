@@ -20,6 +20,7 @@ from noobfriend.reduction import (
     tile_members,
     tile_resample_params,
     to_tweakreg_catalog,
+    within_footprints,
 )
 
 
@@ -53,6 +54,45 @@ def test_field_grid_centres_on_the_footprints() -> None:
     field = field_grid([_square(189.2, 62.25, 0.01)], pixel_scale=0.04)
     assert field.crval[0] == pytest.approx(189.2, abs=1e-6)
     assert field.crval[1] == pytest.approx(62.25, abs=1e-6)
+
+
+def _rotated_strip(angle_deg: float) -> list[np.ndarray]:
+    """Return a 3x1 strip of square footprints rolled by ``angle_deg``."""
+    base = []
+    for k in range(3):  # three abutting squares along the (pre-rotation) x-axis
+        cx = (k - 1) * 0.04
+        base.append(
+            np.array(
+                [
+                    [cx - 0.02, -0.02],
+                    [cx + 0.02, -0.02],
+                    [cx + 0.02, 0.02],
+                    [cx - 0.02, 0.02],
+                ]
+            )
+        )
+    theta = np.deg2rad(angle_deg)
+    rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    cdec = 0.0
+    out = []
+    for sq in base:
+        xy = sq.copy()
+        xy[:, 0] *= np.cos(np.deg2rad(cdec))  # to a local tangent frame
+        xy = xy @ rot.T
+        xy[:, 0] = 60.0 + xy[:, 0] / np.cos(np.deg2rad(cdec))
+        xy[:, 1] = cdec + xy[:, 1]
+        out.append(xy)
+    return out
+
+
+def test_field_grid_auto_rotation_beats_north_up_on_a_rolled_field() -> None:
+    strip = _rotated_strip(40.0)  # an elongated field rolled 40 deg from north
+    auto = field_grid(strip, pixel_scale=0.05)  # rotation="auto" by default
+    north = field_grid(strip, pixel_scale=0.05, rotation=0.0)
+    auto_area = auto.shape[0] * auto.shape[1]
+    north_area = north.shape[0] * north.shape[1]
+    assert auto_area < 0.7 * north_area  # roll-aligned packs the strip much tighter
+    assert 25.0 < (auto.rotation % 90.0) < 55.0  # recovered ~the 40 deg roll
 
 
 def test_field_grid_rejects_bad_input() -> None:
@@ -224,3 +264,22 @@ def test_build_reference_stacks_providers() -> None:
     out = build_reference(10.0, 20.0, 0.1, 2023.0, providers=(fake, fake))
     assert set(out.colnames) == {"RA", "DEC"}
     assert len(out) == 4
+
+
+def test_within_footprints_keeps_inside_drops_outside() -> None:
+    fp = [np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])]  # unit square
+    ra = np.array([0.5, 2.0, 0.1, -0.1])
+    dec = np.array([0.5, 2.0, 0.9, 0.5])
+    mask = within_footprints(ra, dec, fp)
+    assert list(mask) == [True, False, True, False]
+
+
+def test_build_reference_trims_to_footprints() -> None:
+    def fake(ra: float, dec: float, radius: float, epoch: float) -> Table:
+        # one source inside the unit square, one far outside (cone over-query)
+        return Table({"RA": [0.5, 5.0], "DEC": [0.5, 5.0]})
+
+    fp = [np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])]
+    out = build_reference(0.0, 0.0, 1.0, 2023.0, providers=(fake,), footprints=fp)
+    assert len(out) == 1
+    assert out["RA"][0] == 0.5

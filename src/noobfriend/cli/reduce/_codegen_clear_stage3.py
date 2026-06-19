@@ -68,11 +68,14 @@ GROUP_BY = __GROUP_BY__
 OUTPUT_NOOBOX = __OUTPUT_NOOBOX__
 PIXEL_SCALE_SW = __PIXEL_SCALE_SW__
 PIXEL_SCALE_LW = __PIXEL_SCALE_LW__
+ALIGN_TO_ROLL = __ALIGN_TO_ROLL__
 TILE_SIZE = __TILE_SIZE__
 TILE_OVERLAP = __TILE_OVERLAP__
 MIN_COVERAGE = __MIN_COVERAGE__
 OBS_EPOCH = __OBS_EPOCH__
 STAR_FWHM_PX = __STAR_FWHM_PX__
+MINOBJ = __MINOBJ__
+ABS_MINOBJ = __ABS_MINOBJ__
 PIXFRAC = __PIXFRAC__
 IN_MEMORY = __IN_MEMORY__
 DO_ALIGN = __DO_ALIGN__
@@ -207,10 +210,14 @@ def _align_inputs(library, work: Path) -> tuple[Path, list[np.ndarray]]:
 
 
 def _abs_refcat(corners_list: list[np.ndarray], work: Path) -> Path:
-    """Build + write the PM-propagated, quality-filtered GAIA absolute reference."""
+    """Build + write the GAIA absolute reference, trimmed to the footprints.
+
+    The cone query over-covers by ~2x, so the reference is filtered to sources
+    actually inside the frames' footprints -- the honest on-pixel anchor set.
+    """
     work.mkdir(parents=True, exist_ok=True)
     ra0, dec0, radius = _field_cone(corners_list)
-    refcat = build_reference(ra0, dec0, radius, OBS_EPOCH)
+    refcat = build_reference(ra0, dec0, radius, OBS_EPOCH, footprints=corners_list)
     path = work / "abs_refcat.ecsv"
     refcat.write(path, overwrite=True)
     return path
@@ -280,6 +287,8 @@ def main(output_noobox_path: str | None = None) -> None:
                 use_custom_catalogs=True,
                 catfile=str(catfile),
                 abs_refcat=str(absref),
+                minobj=MINOBJ,
+                abs_minobj=ABS_MINOBJ,
             )
         if DO_SKYMATCH:
             library = SkyMatchStep.call(library, in_memory=IN_MEMORY)
@@ -288,7 +297,7 @@ def main(output_noobox_path: str | None = None) -> None:
 
         scale = _pixel_scale(gbooks)
         corners = _library_corners(library)
-        field = field_grid(corners, scale)
+        field = field_grid(corners, scale, rotation="auto" if ALIGN_TO_ROLL else 0.0)
         program_id = gbooks[0].program_id
         for tile in tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP):
             members, coverage = tile_members(field, tile, corners)
@@ -361,11 +370,14 @@ def render(recipe: Recipe) -> str:
         .replace("__OUTPUT_NOOBOX__", repr(recipe.output_noobox))
         .replace("__PIXEL_SCALE_SW__", repr(s3.pixel_scale_sw))
         .replace("__PIXEL_SCALE_LW__", repr(s3.pixel_scale_lw))
+        .replace("__ALIGN_TO_ROLL__", repr(s3.align_to_roll))
         .replace("__TILE_SIZE__", repr(s3.tile_size))
         .replace("__TILE_OVERLAP__", repr(s3.tile_overlap))
         .replace("__MIN_COVERAGE__", repr(s3.min_coverage))
         .replace("__OBS_EPOCH__", repr(s3.obs_epoch))
         .replace("__STAR_FWHM_PX__", repr(s3.star_fwhm_px))
+        .replace("__MINOBJ__", repr(s3.minobj))
+        .replace("__ABS_MINOBJ__", repr(s3.abs_minobj))
         .replace("__PIXFRAC__", repr(s3.pixfrac))
         .replace("__IN_MEMORY__", repr(s3.in_memory))
         .replace("__WORK_DIR__", repr(s3.work_dir))

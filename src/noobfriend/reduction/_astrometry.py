@@ -249,6 +249,43 @@ def _as_refcat(table: "Table") -> "Table":
     return Table({"RA": np.asarray(table["ra"]), "DEC": np.asarray(table["dec"])})
 
 
+def within_footprints(
+    ra: np.ndarray, dec: np.ndarray, footprints: "list[np.ndarray]"
+) -> np.ndarray:
+    """Boolean mask of ``(ra, dec)`` points inside the union of footprint quads.
+
+    A TAP cone query returns sources over a circle roughly twice the area of the
+    real (gappy, multi-detector) field, so most of them never land on a pixel.
+    This keeps only the points inside at least one footprint polygon, via a
+    half-plane (cross-product) test on the boundary-ordered corners -- valid for
+    the convex detector quads, away from the RA 0/360 seam and the poles.
+
+    Parameters
+    ----------
+    ra, dec : numpy.ndarray
+        Point coordinates in degrees.
+    footprints : list of numpy.ndarray
+        One ``(K, 2)`` array of boundary-ordered ``(ra, dec)`` corners per frame.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask, ``True`` where the point falls inside any footprint.
+    """
+    pts = np.column_stack([np.asarray(ra, float), np.asarray(dec, float)])
+    inside = np.zeros(len(pts), dtype=bool)
+    for footprint in footprints:
+        verts = np.asarray(footprint, dtype=float)
+        crosses = []
+        for i in range(len(verts)):
+            a, b = verts[i], verts[(i + 1) % len(verts)]
+            edge = b - a
+            crosses.append(edge[0] * (pts[:, 1] - a[1]) - edge[1] * (pts[:, 0] - a[0]))
+        signs = np.array(crosses)
+        inside |= np.all(signs >= -1e-12, axis=0) | np.all(signs <= 1e-12, axis=0)
+    return inside
+
+
 def build_reference(
     ra: float,
     dec: float,
@@ -256,29 +293,43 @@ def build_reference(
     obs_epoch: float,
     *,
     providers: tuple[ReferenceProvider, ...] = (GaiaReference(),),
+    footprints: "list[np.ndarray] | None" = None,
 ) -> "Table":
     """Assemble the absolute-reference catalog from one or more providers.
 
     Each provider's ``RA`` / ``DEC`` rows are stacked into a single
     ``abs_refcat`` table. With the single default provider this is just cleaned
     GAIA; supplying additional providers (a deeper, GAIA-registered catalog) is
-    how a sparse field is densified while staying on the GAIA frame.
+    how a sparse field is densified while staying on the GAIA frame. When
+    ``footprints`` is given the result is trimmed to sources actually inside the
+    coverage (the cone over-queries by ~2x), so the count reflects the real
+    on-pixel anchors rather than the whole circle.
 
     Parameters
     ----------
     ra, dec, radius : float
-        Field cone (degrees).
+        Field cone (degrees) used for the provider query.
     obs_epoch : float
         Observation epoch (decimal year).
     providers : tuple of ReferenceProvider, optional
         Providers to query, by default a single :class:`GaiaReference`.
+    footprints : list of numpy.ndarray, optional
+        Per-frame ``(ra, dec)`` corner arrays; when given, the reference is
+        filtered to sources inside the union of footprints (see
+        :func:`within_footprints`).
 
     Returns
     -------
     astropy.table.Table
-        The merged reference with ``RA`` / ``DEC`` columns.
+        The merged (and optionally footprint-trimmed) reference with ``RA`` /
+        ``DEC`` columns.
     """
     from astropy.table import vstack
 
     parts = [p(ra, dec, radius, obs_epoch) for p in providers]
-    return parts[0] if len(parts) == 1 else vstack(parts)
+    out = parts[0] if len(parts) == 1 else vstack(parts)
+    if footprints is not None:
+        out = out[
+            within_footprints(np.asarray(out["RA"]), np.asarray(out["DEC"]), footprints)
+        ]
+    return out

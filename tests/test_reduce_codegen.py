@@ -128,10 +128,12 @@ def test_clear3_render_is_valid_group_based_python() -> None:
     assert "OutlierDetectionStep.call(library, in_memory=IN_MEMORY)" in source
     assert "ResampleStep.call(" in source
     assert "abs_refcat=str(absref)" in source
+    assert "abs_minobj=ABS_MINOBJ" in source and "ABS_MINOBJ = 6" in source
     assert "build_catalog(" in source and "select_point_sources(cat)" in source
     assert "GROUP_BY = ['observation', 'filter']" in source
     assert "PIXEL_SCALE_SW = 0.025" in source and "PIXEL_SCALE_LW = 0.05" in source
     assert "scale = _pixel_scale(gbooks)" in source  # per-channel output scale
+    assert 'rotation="auto" if ALIGN_TO_ROLL else 0.0' in source  # roll-aligned grid
     assert 'STAGE_IN = "2bi"' in source and 'STAGE_OUT = "3a"' in source
 
 

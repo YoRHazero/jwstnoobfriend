@@ -93,7 +93,7 @@ def field_grid(
     footprints: list[Corners],
     pixel_scale: float,
     *,
-    rotation: float = 0.0,
+    rotation: float | str = "auto",
     margin: int = 8,
 ) -> FieldGrid:
     """Build the canonical output grid covering every footprint.
@@ -103,14 +103,23 @@ def field_grid(
     box (plus a small ``margin``). The reference pixel is shifted so the whole
     field lands at non-negative pixel coordinates.
 
+    By default the grid is **rolled to the data** (``rotation="auto"``): the
+    output axes are aligned to the exposures' position angle, so a field observed
+    at a single roll fills a tight rectangle instead of a diagonal band inside a
+    north-up box. For FRESCO GOODS-N (roll ~51 deg) this roughly halves the
+    mosaic area and leaves almost no empty tiles; a near-north-up field (GOODS-S)
+    is left essentially north-up. Pass ``rotation=0.0`` to force north-up.
+
     Parameters
     ----------
     footprints : list of numpy.ndarray
         One ``(K, 2)`` array of world ``(ra, dec)`` corners per input product.
     pixel_scale : float
         Output pixel scale in arcsec/pixel (the unified mosaic scale).
-    rotation : float, optional
-        Output rotation in degrees; 0 (default) is north-up, east-left.
+    rotation : float or {"auto"}, optional
+        Output rotation in degrees (0 = north-up, east-left), or ``"auto"``
+        (default) to align the grid to the data by minimising the footprint
+        bounding-box area.
     margin : int, optional
         Extra blank pixels added on every side, by default 8.
 
@@ -123,8 +132,6 @@ def field_grid(
     ValueError
         If ``footprints`` is empty or ``pixel_scale`` is not positive.
     """
-    from astropy.wcs import WCS
-
     if not footprints:
         raise ValueError("field_grid needs at least one footprint.")
     if not pixel_scale > 0:
@@ -134,17 +141,11 @@ def field_grid(
     cra = _circmean_deg(corners[:, 0])
     cdec = float(np.mean(corners[:, 1]))
 
-    scale_deg = pixel_scale / 3600.0
-    rot = np.deg2rad(rotation)
-    wcs = WCS(naxis=2)
-    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    wcs.wcs.crval = [cra, cdec]
-    wcs.wcs.crpix = [1.0, 1.0]
-    # North-up, east-left: RA increases to the left (negative first CD column).
-    wcs.wcs.cd = scale_deg * np.array(
-        [[-np.cos(rot), np.sin(rot)], [np.sin(rot), np.cos(rot)]]
-    )
+    if rotation == "auto":
+        rotation = _roll_aligned_rotation(corners, cra, cdec, pixel_scale)
+    rotation = float(rotation)
 
+    wcs = _tan_wcs(cra, cdec, pixel_scale, rotation)
     x, y = wcs.world_to_pixel_values(corners[:, 0], corners[:, 1])
     x0, y0 = float(np.min(x)), float(np.min(y))
     nx = int(np.ceil(np.max(x) - x0)) + 1 + 2 * margin
@@ -162,6 +163,49 @@ def field_grid(
         pixel_scale=pixel_scale,
         rotation=rotation,
     )
+
+
+def _tan_wcs(cra: float, cdec: float, pixel_scale: float, rotation: float) -> "WCS":
+    """Return a TAN WCS at ``(cra, cdec)`` with the given scale and rotation.
+
+    ``rotation`` is degrees east of north; 0 is north-up, east-left (RA increases
+    to the left, the negative first CD column).
+    """
+    from astropy.wcs import WCS
+
+    scale_deg = pixel_scale / 3600.0
+    rot = np.deg2rad(rotation)
+    wcs = WCS(naxis=2)
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    wcs.wcs.crval = [cra, cdec]
+    wcs.wcs.crpix = [1.0, 1.0]
+    wcs.wcs.cd = scale_deg * np.array(
+        [[-np.cos(rot), np.sin(rot)], [np.sin(rot), np.cos(rot)]]
+    )
+    return wcs
+
+
+def _roll_aligned_rotation(
+    corners: np.ndarray, cra: float, cdec: float, pixel_scale: float
+) -> float:
+    """Return the grid rotation (deg, in [0, 90)) minimising the bounding box.
+
+    A rectangular field is tightest when the output axes parallel its edges, so
+    the bounding-box area as a function of rotation is minimised -- coarsely over
+    ``[0, 90)`` then refined -- which recovers the exposures' roll without any
+    sign/convention bookkeeping. Periodicity is 90 deg (a swap of the two axes).
+    """
+
+    def area(rotation: float) -> float:
+        x, y = _tan_wcs(cra, cdec, pixel_scale, rotation).world_to_pixel_values(
+            corners[:, 0], corners[:, 1]
+        )
+        return float((np.max(x) - np.min(x)) * (np.max(y) - np.min(y)))
+
+    coarse = np.arange(0.0, 90.0, 2.0)
+    centre = float(coarse[int(np.argmin([area(r) for r in coarse]))])
+    fine = np.arange(centre - 2.0, centre + 2.0 + 1e-9, 0.2)
+    return float(fine[int(np.argmin([area(r) for r in fine]))])
 
 
 def _even_bounds(length: int, target: int, overlap: int) -> list[tuple[int, int]]:
@@ -271,18 +315,25 @@ def tile_members(
     return members, _coverage(member_px, tile.ny, tile.nx)
 
 
-def _coverage(member_px: list[np.ndarray], ny: int, nx: int) -> float:
+def _coverage(
+    member_px: list[np.ndarray], ny: int, nx: int, *, cap: int = 512
+) -> float:
     """Fraction of an ``ny``-by-``nx`` tile inside the union of polygons.
 
-    ``member_px`` are corner arrays already shifted into tile-local pixels.
+    ``member_px`` are corner arrays already shifted into tile-local pixels. The
+    union is rasterised on a grid downsampled so its longest side is at most
+    ``cap`` pixels -- the coverage *fraction* is essentially unchanged but a
+    multi-thousand-pixel tile costs a tiny raster instead of a 4k-square one.
     """
     if not member_px or ny <= 0 or nx <= 0:
         return 0.0
     from skimage.draw import polygon
 
-    mask = np.zeros((ny, nx), dtype=bool)
+    factor = max(1, math.ceil(max(ny, nx) / cap))
+    rny, rnx = max(1, ny // factor), max(1, nx // factor)
+    mask = np.zeros((rny, rnx), dtype=bool)
     for px in member_px:
-        rr, cc = polygon(px[:, 1], px[:, 0], shape=(ny, nx))
+        rr, cc = polygon(px[:, 1] / factor, px[:, 0] / factor, shape=(rny, rnx))
         mask[rr, cc] = True
     return float(mask.mean())
 

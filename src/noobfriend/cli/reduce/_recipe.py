@@ -70,11 +70,19 @@ class Stage3Options(BaseModel):
     one per field per band). The output scale is per channel --
     ``pixel_scale_sw`` for short-wave detectors (``nrc[ab][1-4]``) and
     ``pixel_scale_lw`` for long-wave (``nrc[ab]long``); set them equal for one
-    unified grid. Each mosaic is tiled into evenly-sized ``tile_size`` cells with
+    unified grid. ``align_to_roll`` (default) rolls the output grid to the
+    exposures' position angle so a single-roll field fills a tight rectangle
+    instead of a diagonal band in a north-up box (set false to force north-up).
+    Each mosaic is tiled into evenly-sized ``tile_size`` cells with
     a ``tile_overlap`` border, and tiles whose real footprint coverage is below
     ``min_coverage`` are dropped. ``obs_epoch`` is the decimal-year target for
     GAIA proper-motion propagation and ``star_fwhm_px`` the expected
-    point-source FWHM for image-source detection. ``in_memory`` (default false)
+    point-source FWHM for image-source detection. ``minobj`` / ``abs_minobj`` are
+    the tweakreg relative / absolute minimum-match thresholds: the absolute tie
+    is matched image-source-to-GAIA, and the jwst default (15) silently rejects
+    the fit -- leaving the WCS un-corrected -- when fewer clean sources coincide
+    with GAIA, so the default here is lowered (verified: an F444W field tied at
+    ~6 mas with ~12 matches). ``in_memory`` (default false)
     spills the skymatch / outlier / resample models to disk -- safe on the large
     fields stage-3 targets; set true to keep them resident for speed on small
     ones. Per-group astrometry sidecars go under ``work_dir`` and are deleted
@@ -84,11 +92,14 @@ class Stage3Options(BaseModel):
     group_by: list[str] = ["observation", "filter"]
     pixel_scale_sw: float = 0.025
     pixel_scale_lw: float = 0.05
+    align_to_roll: bool = True
     tile_size: int = 4096
     tile_overlap: int = 128
     min_coverage: float = 0.02
     obs_epoch: float = 2023.6
     star_fwhm_px: float = 2.2
+    minobj: int = 7
+    abs_minobj: int = 6
     pixfrac: float = 0.8
     in_memory: bool = False
     work_dir: str = "stage3_work"

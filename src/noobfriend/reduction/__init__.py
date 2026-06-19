@@ -19,6 +19,7 @@ from noobfriend.reduction._astrometry import (
     query_gaia,
     select_point_sources,
     to_tweakreg_catalog,
+    within_footprints,
 )
 from noobfriend.reduction._background import subtract_background
 from noobfriend.reduction._badpixel import flag_outlier_pixels
@@ -61,4 +62,5 @@ __all__ = [
     "tile_members",
     "tile_resample_params",
     "to_tweakreg_catalog",
+    "within_footprints",
 ]
