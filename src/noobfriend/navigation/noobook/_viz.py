@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import numpy as np
+    from numpy.typing import ArrayLike
 
+    from noobfriend.core.display.plot import ImageOverlay
     from noobfriend.navigation.noobook._core import NooBook
 
 
@@ -41,8 +43,12 @@ class BookViz:
         stretch: str = "linear",
         size: int = 620,
         title: str | None = None,
-        transform_pixel_to_world: Callable[[Any, Any], tuple[Any, Any]] | None = None,
+        transform_pixel_to_world: Callable[
+            [ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]
+        ]
+        | None = None,
         coord_format: Literal["deg", "hms"] = "deg",
+        overlays: ImageOverlay | Sequence[ImageOverlay] | None = None,
     ) -> Any:
         """Show the book's ``SCI`` array as an interactive Bokeh image.
 
@@ -69,6 +75,8 @@ class BookViz:
             coordinates in degrees. When given, the hover gains an RA/Dec row.
         coord_format : {"deg", "hms"}, default ``"deg"``
             RA/Dec hover format.
+        overlays : ImageOverlay or sequence of ImageOverlay, optional
+            Overlays drawn after the image.
 
         Returns
         -------
@@ -89,6 +97,7 @@ class BookViz:
             title=title,
             transform_pixel_to_world=transform_pixel_to_world,
             coord_format=coord_format,
+            overlays=overlays,
         )
 
     def imshow_blink(

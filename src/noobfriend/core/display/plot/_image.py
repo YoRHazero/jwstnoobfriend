@@ -31,9 +31,12 @@ from bokeh.palettes import (
     Viridis256,
 )
 from bokeh.plotting import figure
+from numpy.typing import ArrayLike
 
 from noobfriend.core.display.plot._bokeh import display
 from noobfriend.core.display.plot._norm import resolve_limits
+from noobfriend.core.display.plot._overlay import ImageOverlay
+
 
 #: Selectable colormaps, ``name -> Bokeh palette``.
 CMAPS: dict[str, Sequence[str]] = {
@@ -127,7 +130,7 @@ return pad(H % 24, 2) + ":" + pad(M, 2) + ":" + sec(S, 3)
 
 
 def _radec_formatter(
-    transform: Callable[[Any, Any], tuple[Any, Any]],
+    transform: Callable[[ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]],
     n_rows: int,
     n_cols: int,
     coord_format: str,
@@ -204,8 +207,12 @@ def imshow(
     stretch: str = "linear",
     size: int = 620,
     title: str | None = None,
-    transform_pixel_to_world: Callable[[Any, Any], tuple[Any, Any]] | None = None,
+    transform_pixel_to_world: Callable[
+        [ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]
+    ]
+    | None = None,
     coord_format: Literal["deg", "hms"] = "deg",
+    overlays: ImageOverlay | Sequence[ImageOverlay] | None = None,
 ) -> Any:
     """Display a 2-D array as a zoomable, hoverable Bokeh image.
 
@@ -250,6 +257,9 @@ def imshow(
     coord_format : {"deg", "hms"}, default ``"deg"``
         RA/Dec hover format: ``"deg"`` (decimal degrees, 6 dp) or ``"hms"``
         (``HH:MM:SS.sss +DD:MM:SS.ss``).
+    overlays : ImageOverlay or sequence of ImageOverlay, optional
+        Overlays drawn after the image. Each overlay receives the Bokeh figure
+        and image pixel frame and is responsible for its own glyphs and tools.
 
     Returns
     -------
@@ -300,7 +310,7 @@ def imshow(
     )
     image = fig.image(image=[arr], x=0, y=0, dw=n_cols, dh=n_rows, color_mapper=mapper)
     tooltips = [("(x, y)", "$x{0.0}, $y{0.0}"), ("value", "@image")]
-    formatters: dict[str, Any] = {}
+    formatters: dict[str, CustomJSHover] = {}
     if transform_pixel_to_world is not None:
         tooltips.append(("RA, Dec", "$x{custom}"))
         formatters["$x"] = _radec_formatter(
@@ -309,4 +319,23 @@ def imshow(
     fig.add_tools(
         HoverTool(renderers=[image], tooltips=tooltips, formatters=formatters)
     )
+    frame = {"n_rows": n_rows, "n_cols": n_cols}
+    for overlay in _overlay_list(overlays):
+        if not hasattr(overlay, "draw"):
+            raise TypeError(
+                "imshow overlays must implement draw(fig, frame); "
+                f"got {type(overlay).__name__}"
+            )
+        overlay.draw(fig, frame)
     return display(fig, height=fig_h + 80)
+
+
+def _overlay_list(
+    overlays: ImageOverlay | Sequence[ImageOverlay] | None,
+) -> list[ImageOverlay]:
+    """Normalise one overlay, many overlays, or none to a list."""
+    if overlays is None:
+        return []
+    if hasattr(overlays, "draw"):
+        return [overlays]
+    return list(overlays)

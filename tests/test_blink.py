@@ -115,6 +115,7 @@ class TestVizBlinkAccessors:
 
         monkeypatch.setattr("noobfriend.core.display.plot.imshow", fake_imshow)
         book = _thin_book("x@2a")
+        overlays = [object()]
 
         assert (
             book.viz.imshow(
@@ -127,6 +128,7 @@ class TestVizBlinkAccessors:
                 size=400,
                 title="Image",
                 coord_format="hms",
+                overlays=overlays,
             )
             == "image"
         )
@@ -141,6 +143,7 @@ class TestVizBlinkAccessors:
         assert captured["size"] == 400
         assert captured["title"] == "Image"
         assert captured["coord_format"] == "hms"
+        assert captured["overlays"] is overlays
 
     def test_book_viz_forwards_blink_options(self, monkeypatch) -> None:
         captured = {}

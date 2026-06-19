@@ -11,6 +11,7 @@ from noobfriend.core.display.plot._footprint import (
 )
 from noobfriend.core.display.plot._image import _grid_axis
 from noobfriend.core.display.plot._norm import percentile_limits, resolve_limits
+from noobfriend.core.display.plot._overlay import CatalogOverlay, ImageFrame
 from noobfriend.core.display.plot._blink import _broadcast_limits, _union_bounds
 from noobfriend.core.display.plot._spectrum import (
     _ModelCurve,
@@ -132,6 +133,94 @@ class TestGridAxis:
 
     def test_clamped_to_maximum(self) -> None:
         assert _grid_axis(10**6) == 129
+
+
+class TestCatalogOverlay:
+    """Normalising catalogue overlays for image plots."""
+
+    def test_pixel_catalog_can_derive_world_hover(self) -> None:
+        cat = {
+            "x": [1.0, 3.0, 20.0],
+            "y": [2.0, 4.0, 20.0],
+            "snr": [10.0, 20.0, 30.0],
+        }
+
+        overlay = CatalogOverlay(
+            cat,
+            pixel_to_world=lambda x, y: (x + 100.0, y - 50.0),
+            hover_cols=["snr"],
+        )
+        resolved = overlay.resolve({"n_rows": 10, "n_cols": 10})
+
+        assert resolved.data["x"] == [1.0, 3.0]
+        assert resolved.data["y"] == [2.0, 4.0]
+        assert resolved.data["ra"] == [101.0, 103.0]
+        assert resolved.data["dec"] == [-48.0, -46.0]
+        assert resolved.data["hover_0"] == [10.0, 20.0]
+        assert ("RA, Dec", "@ra{0.000000}, @dec{0.000000}") in resolved.tooltips
+        assert ("snr", "@hover_0") in resolved.tooltips
+
+    def test_world_catalog_can_derive_pixel_position(self) -> None:
+        cat = {
+            "RA": [150.0, 151.0],
+            "DEC": [2.0, 3.0],
+            "mag": [25.1, 26.2],
+        }
+
+        overlay = CatalogOverlay(
+            cat,
+            world_cols=("RA", "DEC"),
+            world_to_pixel=lambda ra, dec: ((ra - 149.0) * 2.0, dec + 1.0),
+            hover_cols=["mag"],
+        )
+        resolved = overlay.resolve((10, 10))
+
+        assert resolved.data["x"] == [2.0, 4.0]
+        assert resolved.data["y"] == [3.0, 4.0]
+        assert resolved.data["ra"] == [150.0, 151.0]
+        assert resolved.data["dec"] == [2.0, 3.0]
+        assert resolved.data["hover_0"] == [25.1, 26.2]
+
+    def test_missing_drawing_coordinates_raise(self) -> None:
+        overlay = CatalogOverlay(
+            {"ra": [1.0], "dec": [2.0]},
+            pixel_cols=None,
+            world_cols=("ra", "dec"),
+        )
+
+        with pytest.raises(ValueError, match="needs pixel coordinates"):
+            overlay.resolve({"n_rows": 10, "n_cols": 10})
+
+    def test_hover_column_length_mismatch_raises(self) -> None:
+        overlay = CatalogOverlay(
+            {"x": [1.0, 2.0], "y": [3.0, 4.0], "bad": [5.0]},
+            hover_cols=["bad"],
+        )
+
+        with pytest.raises(ValueError, match="hover column 'bad' has length 1"):
+            overlay.resolve((10, 10))
+
+    def test_draw_overlay_adds_renderer_and_hover_tool(self) -> None:
+        from bokeh.models import HoverTool
+        from bokeh.plotting import figure
+
+        fig = figure()
+        renderers = CatalogOverlay({"x": [1.0], "y": [2.0]}).draw(
+            fig, {"n_rows": 10, "n_cols": 10}
+        )
+
+        assert renderers[0] in fig.renderers
+        assert any(
+            isinstance(tool, HoverTool) and tool.renderers == renderers
+            for tool in fig.tools
+        )
+
+    def test_image_frame_from_spec_rejects_bad_input(self) -> None:
+        with pytest.raises(ValueError, match="n_rows and n_cols"):
+            ImageFrame.from_spec({"n_rows": 10})
+
+        with pytest.raises(ValueError, match="must be .n_rows, n_cols."):
+            ImageFrame.from_spec((10, 20, 30))
 
 
 class TestReferenceCenter:

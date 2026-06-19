@@ -4,7 +4,8 @@ Two entry points, both returning Bokeh models that render automatically as a
 notebook cell's last expression (or via :func:`bokeh.io.show`):
 
 - :func:`imshow` — a zoomable, hoverable view of a 2-D detector frame with a
-  percentile stretch and an optional RA/Dec hover read-out.
+  percentile stretch, an optional RA/Dec hover read-out, and optional
+  :class:`ImageOverlay` instances such as :class:`CatalogOverlay`.
 - :func:`imshow_blink` — several frames overlaid at their own offsets with a
   segmented control (and optional auto-blink) to flip between them, like a
   blink comparator.
@@ -29,6 +30,7 @@ from noobfriend.core.display.plot._bokeh import set_render_mode
 from noobfriend.core.display.plot._footprint import plot_footprints
 from noobfriend.core.display.plot._image import imshow
 from noobfriend.core.display.plot._blink import imshow_blink
+from noobfriend.core.display.plot._overlay import CatalogOverlay, ImageFrame, ImageOverlay
 from noobfriend.core.display.plot._psf_select import psf_select_panel
 from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
 from noobfriend.core.display.plot._spectrum1d import plot_spectrum1d
@@ -36,6 +38,9 @@ from noobfriend.core.display.plot._spectrum2d import plot_spectrum2d
 
 __all__ = [
     "ModelSpec",
+    "CatalogOverlay",
+    "ImageFrame",
+    "ImageOverlay",
     "draw_spectrum",
     "imshow",
     "imshow_blink",
