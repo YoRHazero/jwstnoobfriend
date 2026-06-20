@@ -129,6 +129,37 @@ class SourceCatalog:
         )
 
     @classmethod
+    def from_table(cls, table: "Table") -> "SourceCatalog":
+        """Rebuild a catalogue from a :meth:`to_table` table (inverse of it).
+
+        Reads the eleven catalogue columns by name as ``float`` arrays; any extra
+        columns (e.g. provenance labels written alongside) are ignored.
+
+        Parameters
+        ----------
+        table : astropy.table.Table
+            A table carrying the :class:`SourceCatalog` columns.
+
+        Returns
+        -------
+        SourceCatalog
+        """
+        fields = (
+            "x",
+            "y",
+            "ra",
+            "dec",
+            "fwhm",
+            "ellipticity",
+            "flux",
+            "peak",
+            "snr",
+            "sharpness",
+            "nn_dist",
+        )
+        return cls(**{name: np.asarray(table[name], dtype=float) for name in fields})
+
+    @classmethod
     def empty(cls) -> "SourceCatalog":
         """Return an empty catalogue."""
         z = np.empty(0, dtype=float)

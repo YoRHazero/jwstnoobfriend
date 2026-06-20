@@ -175,6 +175,7 @@ class CutoutStore:
         self._n = 0
 
         self._dir: Path | None = None
+        self._owns_dir: bool = True
         self._finalizer: weakref.finalize | None = None
         self._loaded_index = -1
         self._loaded: list[Cutout] | None = None
@@ -263,6 +264,94 @@ class CutoutStore:
             sub.append(self[index])  # type: ignore[arg-type]
         return sub
 
+    # -- persistence ----------------------------------------------------------
+
+    def save(
+        self, directory: str | Path, *, chunk_size: int | None = None
+    ) -> list[int]:
+        """Write every cutout to ``directory`` as append-only ``.npz`` chunks.
+
+        Streams the cutouts (at most one source chunk resident) into fixed-size
+        ``chunk_000000.npz`` ... files, independent of this store's own in-memory
+        or spill state. The files use the same atomic format as the live spill
+        chunks and are **not** owned by any store -- they persist past
+        :meth:`close` and are reopened by :meth:`load`.
+
+        Parameters
+        ----------
+        directory : str or Path
+            Destination directory (created if missing).
+        chunk_size : int, optional
+            Cutouts per chunk file; defaults to this store's chunk size.
+
+        Returns
+        -------
+        list of int
+            The number of cutouts in each written chunk, in order.
+        """
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        size = max(1, int(chunk_size if chunk_size is not None else self._chunk_size))
+        lens: list[int] = []
+        buffer: list[Cutout] = []
+        for cut in self:
+            buffer.append(cut)
+            if len(buffer) >= size:
+                _write_chunk(
+                    directory / f"chunk_{len(lens):06d}.npz", buffer, self.cutout_size
+                )
+                lens.append(len(buffer))
+                buffer = []
+        if buffer:
+            _write_chunk(
+                directory / f"chunk_{len(lens):06d}.npz", buffer, self.cutout_size
+            )
+            lens.append(len(buffer))
+        return lens
+
+    @classmethod
+    def load(
+        cls,
+        directory: str | Path,
+        cutout_size: int,
+        *,
+        max_in_memory: int | None = None,
+        spill_dir: str | Path | None = None,
+    ) -> "CutoutStore":
+        """Open a store backed by persisted chunks written by :meth:`save`.
+
+        The chunks stay on disk and are read lazily (one chunk resident at a
+        time), so a large cache is never fully materialised. The returned store
+        does **not** own ``directory``: :meth:`close` and the finalizer backstop
+        never delete it. ``max_in_memory`` / ``spill_dir`` configure only the
+        *owned* stores that :meth:`subset` derives from it.
+
+        Parameters
+        ----------
+        directory : str or Path
+            Directory of ``chunk_*.npz`` files written by :meth:`save`.
+        cutout_size : int
+            Edge length of the stored cutouts.
+        max_in_memory, spill_dir
+            Spill configuration inherited by stores derived via :meth:`subset`.
+
+        Returns
+        -------
+        CutoutStore
+        """
+        directory = Path(directory)
+        store = cls(cutout_size, max_in_memory=max_in_memory, spill_dir=spill_dir)
+        store._owns_dir = False
+        for path in sorted(directory.glob("chunk_*.npz")):
+            with np.load(path) as npz:
+                length = int(npz["origin"].shape[0])  # reads only the tiny origin array
+            store._chunks.append(path)
+            store._chunk_lens.append(length)
+            store._n += length
+        if store._chunks:
+            store._dir = directory
+        return store
+
     # -- lifecycle ------------------------------------------------------------
 
     def close(self) -> None:
@@ -271,7 +360,7 @@ class CutoutStore:
         self._buffer = []
         self._loaded = None
         self._loaded_index = -1
-        if self._finalizer is not None:
+        if self._owns_dir and self._finalizer is not None:
             self._finalizer()  # runs _cleanup_dir once; subsequent calls are no-ops
         self._dir = None
         self._chunks = []

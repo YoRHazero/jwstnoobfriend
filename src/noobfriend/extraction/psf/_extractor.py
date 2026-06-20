@@ -34,6 +34,41 @@ from noobfriend.extraction.psf._build import (
 )
 from noobfriend.extraction.psf._store import Cutout, CutoutStore
 
+#: On-disk layout version for :meth:`SourceExtractor.save` / ``load``.
+_SAVE_FORMAT_VERSION: int = 1
+
+
+def _labels_to_column(labels: list[object]) -> object:
+    """Encode object labels as a masked string column (``None`` -> masked).
+
+    Labels are stored as strings; ``None`` becomes a masked entry, restored by
+    :func:`_labels_from_column`. A minimum width of one keeps a column that is
+    entirely ``None`` writable as a FITS string.
+    """
+    from astropy.table import MaskedColumn
+
+    mask = [v is None for v in labels]
+    data = np.array(["" if v is None else str(v) for v in labels], dtype=str)
+    if data.dtype.itemsize == 0:
+        data = data.astype("U1")
+    return MaskedColumn(data=data, mask=mask)
+
+
+def _labels_from_column(column: object) -> list[object]:
+    """Decode a masked string column back to labels (masked -> ``None``).
+
+    FITS character columns round-trip as byte strings, so unmasked values are
+    decoded to ``str``.
+    """
+    values = np.asarray(column)
+    mask = np.asarray(getattr(column, "mask", np.zeros(values.shape, dtype=bool)))
+    return [
+        None
+        if is_masked
+        else (v.decode() if isinstance(v, bytes | np.bytes_) else str(v))
+        for v, is_masked in zip(values, mask)
+    ]
+
 
 def _group_aggregate(
     index: np.ndarray, values: np.ndarray, func: Callable[[np.ndarray], float]
@@ -62,7 +97,10 @@ def _match_labels(labels: list[object] | np.ndarray, matcher: object) -> np.ndar
         )
     if isinstance(matcher, str):
         return np.array(
-            [label is not None and fnmatchcase(str(label), matcher) for label in values],
+            [
+                label is not None and fnmatchcase(str(label), matcher)
+                for label in values
+            ],
             dtype=bool,
         )
     return values == matcher
@@ -479,6 +517,179 @@ class SourceExtractor:
                 f"cutout_size {self.cutout_size} is smaller than wing_size {wing_size}."
             )
         return build_wings(self._store, core, wing_size=wing_size, **extended_kwargs)
+
+    # -- persistence ----------------------------------------------------------
+
+    def save(
+        self, path: str | Path, *, overwrite: bool = False, chunk_size: int = 4096
+    ) -> None:
+        """Persist this extractor to ``path`` for a later :meth:`load`.
+
+        Writes a self-contained directory: ``meta.json`` (config and counts),
+        ``catalog.fits`` (the detection table plus per-detection ``index`` /
+        ``filename`` / ``filter`` / ``detector`` labels as a FITS binary table)
+        and ``cutouts/`` (the cached cutouts as ``.npz`` chunks). ``meta.json`` is
+        written **last** as a commit marker, so an interrupted save is detectable
+        (:meth:`load` requires it). Cutouts are streamed out chunk by chunk, so
+        saving never needs the whole cache resident.
+
+        Pre-filter with :meth:`select` before saving to persist only the cutouts
+        you intend to build from -- e.g.
+        ``ext.select(snr_min=8, max_ellipticity=0.25).save(path)``.
+
+        Parameters
+        ----------
+        path : str or Path
+            Destination directory.
+        overwrite : bool, default False
+            Replace ``path`` if it already exists.
+        chunk_size : int, default 4096
+            Cutouts per ``.npz`` chunk file.
+
+        Raises
+        ------
+        FileExistsError
+            ``path`` already exists and ``overwrite`` is ``False``.
+        """
+        import json
+        import shutil
+
+        path = Path(path)
+        if path.exists():
+            if not overwrite:
+                raise FileExistsError(
+                    f"{path} already exists; pass overwrite=True to replace it."
+                )
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+        path.mkdir(parents=True)
+
+        self._write_catalog(path / "catalog.fits")
+        chunk_lens = self._store.save(path / "cutouts", chunk_size=chunk_size)
+
+        meta = {
+            "format_version": _SAVE_FORMAT_VERSION,
+            "fwhm": self.fwhm,
+            "cutout_size": self.cutout_size,
+            "nsigma": self.nsigma,
+            "match_radius": self.match_radius,
+            "aperture_radius": self.aperture_radius,
+            "min_distance": self.min_distance,
+            "dq_bad_bits": self.dq_bad_bits,
+            "n_detections": len(self),
+            "n_sources": self.n_sources,
+            "chunk_lens": chunk_lens,
+        }
+        (path / "meta.json").write_text(json.dumps(meta, indent=2))
+
+    @classmethod
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        max_in_memory: int | None = None,
+        spill_dir: str | Path | None = None,
+    ) -> "SourceExtractor":
+        """Reconstruct an extractor written by :meth:`save`.
+
+        The cutouts stay on disk and are read lazily, so a large cache is not
+        fully materialised; a later :meth:`select` streams through them. The
+        per-source sky positions are recomputed from the catalogue rather than
+        stored. ``max_in_memory`` / ``spill_dir`` configure the *new* stores that
+        :meth:`select` derives -- the loaded cache directory itself is never
+        written to or deleted.
+
+        Parameters
+        ----------
+        path : str or Path
+            Directory written by :meth:`save`.
+        max_in_memory, spill_dir
+            Spill configuration for stores derived via :meth:`select`.
+
+        Returns
+        -------
+        SourceExtractor
+
+        Raises
+        ------
+        FileNotFoundError
+            ``path`` has no ``meta.json`` (absent, or an interrupted save).
+        """
+        import json
+
+        path = Path(path)
+        meta_path = path / "meta.json"
+        if not meta_path.is_file():
+            raise FileNotFoundError(
+                f"{meta_path} not found; not a SourceExtractor save (or incomplete)."
+            )
+        meta = json.loads(meta_path.read_text())
+
+        ext = cls(
+            fwhm=meta["fwhm"],
+            cutout_size=meta["cutout_size"],
+            nsigma=meta["nsigma"],
+            match_radius=meta["match_radius"],
+            aperture_radius=meta["aperture_radius"],
+            min_distance=meta["min_distance"],
+            dq_bad_bits=meta["dq_bad_bits"],
+            max_in_memory=max_in_memory,
+            spill_dir=spill_dir,
+        )
+        catalogue, index, labels = ext._read_catalog(path / "catalog.fits")
+        ext._store = CutoutStore.load(
+            path / "cutouts",
+            meta["cutout_size"],
+            max_in_memory=max_in_memory,
+            spill_dir=spill_dir,
+        )
+        ext._parts = [catalogue] if len(catalogue) else []
+        ext._index = index.tolist()
+        ext._filename, ext._filter, ext._detector = labels
+        ext._rebuild_source_positions()
+        return ext
+
+    def _write_catalog(self, path: Path) -> None:
+        """Write the detection table and labels as a FITS binary table."""
+        table = self.catalog.to_table()
+        table["index"] = self.index
+        table["filename"] = _labels_to_column(self._filename)
+        table["filter"] = _labels_to_column(self._filter)
+        table["detector"] = _labels_to_column(self._detector)
+        table.write(path, format="fits", overwrite=True)
+
+    @staticmethod
+    def _read_catalog(
+        path: Path,
+    ) -> tuple[
+        SourceCatalog, np.ndarray, tuple[list[object], list[object], list[object]]
+    ]:
+        """Read back the catalogue, ``index`` array, and the three label lists."""
+        from astropy.table import Table
+
+        table = Table.read(path, format="fits")
+        catalogue = SourceCatalog.from_table(table)
+        index = np.asarray(table["index"], dtype=int)
+        labels = (
+            _labels_from_column(table["filename"]),
+            _labels_from_column(table["filter"]),
+            _labels_from_column(table["detector"]),
+        )
+        return catalogue, index, labels
+
+    def _rebuild_source_positions(self) -> None:
+        """Recompute the per-source running sky-position sums from the catalogue."""
+        index = self.index
+        n_sources = int(index.max()) + 1 if index.size else 0
+        self._sum_ra = [0.0] * n_sources
+        self._sum_dec = [0.0] * n_sources
+        self._count = [0] * n_sources
+        if not index.size:
+            return
+        catalogue = self.catalog
+        for j, k in enumerate(index.tolist()):
+            self._sum_ra[k] += float(catalogue.ra[j])
+            self._sum_dec[k] += float(catalogue.dec[j])
+            self._count[k] += 1
 
     def panel(
         self,
