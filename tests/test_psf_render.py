@@ -10,11 +10,12 @@ import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
 
+from noobase.image import convolve_psf
+
 from noobfriend.extraction.psf import (
     CorePsf,
     EffectivePsf,
     SourceExtractor,
-    convolve,
     render_core,
 )
 
@@ -123,14 +124,14 @@ class TestRenderEffective:
         assert img.sum() == pytest.approx(1.0)
 
 
-class TestConvolve:
-    """Convolving with a rendered kernel."""
+class TestConvolveWithNoobase:
+    """A rendered kernel pairs with noobase's flip-correct, NaN-aware convolution."""
 
     def test_delta_returns_kernel(self, core_psf: CorePsf) -> None:
         kernel = core_psf.render()
         image = np.zeros((41, 41))
         image[20, 20] = 1.0
-        out = convolve(image, kernel)
+        out = convolve_psf(image, kernel)
         # a delta convolved with the kernel reproduces the kernel at the centre
         assert out.shape == (41, 41)
         assert out[10:31, 10:31] == pytest.approx(kernel, abs=1e-6)
@@ -139,8 +140,8 @@ class TestConvolve:
         # a point source with margin >= kernel half-width keeps all its flux inside
         image = np.zeros((81, 81))
         image[40, 40] = 5.0
-        out = convolve(image, effective_psf.render())
-        assert out.sum() == pytest.approx(5.0, rel=1e-6)
+        out = convolve_psf(image, effective_psf.render())
+        assert out.sum() == pytest.approx(5.0, rel=1e-3)  # noobase renorm: ~5e-5
 
 
 class TestCorePsfIO:

@@ -1,4 +1,4 @@
-"""Render built PSFs to detector-sampled images and convolve with them.
+"""Render built PSFs to detector-sampled images.
 
 A :class:`~noobfriend.extraction.psf.CorePsf` / :class:`EffectivePsf` is held on
 an *oversampled* grid (plus, for the hybrid, a native wing). To use it -- as a
@@ -8,9 +8,14 @@ sampled onto a native detector-pixel grid. :func:`render_core` and
 sampling contract ``recon(r) = (1 - f_wing(r)) * core_sample(r) + wing_sample(r)``
 with a raised-cosine ``f_wing`` reconstructed from the stitch geometry.
 
-For PSF-matching photometry, render both bands' PSFs onto the same grid, build a
-matching kernel (e.g. ``photutils.psf.matching.create_matching_kernel``), and
-:func:`convolve` the sharper image with it.
+Convolution itself is noobase's job: feed the rendered (odd, sum-normalised)
+kernel to :func:`noobase.image.convolve_psf`, which does a genuine flip-correct
+convolution and treats NaN / inf / edge pixels as missing (the same
+NaN-as-missing renormalisation as ``reproject_exact``) -- the right behaviour for
+JWST frames with off-detector NaNs. For PSF-matching photometry, render both
+bands onto the same grid, build a matching kernel (e.g.
+``photutils.psf.matching.create_matching_kernel``), then convolve the sharper
+band with it.
 """
 
 from typing import TYPE_CHECKING
@@ -146,34 +151,3 @@ def render_effective(
     f_wing = _feather(edge, psf.match_radius, psf.feather_width)
     recon = (1.0 - f_wing) * core_grid + wing_grid
     return _normalize(recon) if normalize else recon
-
-
-def convolve(
-    image: np.ndarray, kernel: np.ndarray, *, mode: str = "same"
-) -> np.ndarray:
-    """Convolve an image with a (PSF) kernel via an FFT.
-
-    A thin wrapper over :func:`scipy.signal.fftconvolve`. With a unit-sum kernel
-    (the :func:`render_core` / :func:`render_effective` default) the flux of each
-    source is preserved, except near the image boundary where ``mode="same"``
-    truncates the part of the kernel that falls off the frame.
-
-    Parameters
-    ----------
-    image : numpy.ndarray
-        The 2-D image to convolve.
-    kernel : numpy.ndarray
-        The 2-D convolution kernel (e.g. a rendered PSF or a matching kernel).
-    mode : str, default "same"
-        Forwarded to :func:`scipy.signal.fftconvolve`.
-
-    Returns
-    -------
-    numpy.ndarray
-        The convolved image.
-    """
-    from scipy.signal import fftconvolve
-
-    return fftconvolve(
-        np.asarray(image, dtype=float), np.asarray(kernel, dtype=float), mode=mode
-    )
