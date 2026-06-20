@@ -10,6 +10,7 @@ which also reports the sub-pixel ``delta`` (the phase) consumed by the engine.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,8 +18,6 @@ from noobase.image import build_stamp
 from noobase.image.psf import build_epsf, build_extended_psf
 
 if TYPE_CHECKING:
-    from noobase.image.psf import ExtendedPsf
-
     from noobfriend.extraction.psf._store import CutoutStore
 
 
@@ -55,19 +54,58 @@ class CorePsf:
     n_sources: int
     phase_grid: np.ndarray
 
+    def render(self, size: int | None = None, *, normalize: bool = True) -> np.ndarray:
+        """Render a native-resolution core image (see :func:`render_core`)."""
+        from noobfriend.extraction.psf._render import render_core
+
+        return render_core(self.core, self.oversample, size=size, normalize=normalize)
+
+    def save(self, path: str | Path, *, overwrite: bool = False) -> None:
+        """Write this core to a multi-extension FITS file (see :func:`load`)."""
+        from noobfriend.extraction.psf._persist import save_core
+
+        save_core(self, path, overwrite=overwrite)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "CorePsf":
+        """Read a core back from a file written by :meth:`save`."""
+        from noobfriend.extraction.psf._persist import load_core
+
+        return load_core(path)
+
 
 @dataclass(frozen=True)
 class EffectivePsf:
-    """A core with native wings stitched on, from :func:`build_wings`.
+    """A self-contained hybrid effective PSF: oversampled core + native wing.
+
+    Built by :func:`build_wings` (which drives noobase's stitch), then held as
+    plain arrays -- no live noobase handle -- so it renders, convolves, and
+    round-trips through :meth:`save` / :meth:`load` without re-stitching (which
+    would re-process the already-baked wing).
+
+    The noobase sampling contract is
+    ``recon(r) = (1 - f_wing(r)) * core_sample(r) + wing_sample(r)`` with a
+    raised-cosine ``f_wing`` centred on :attr:`match_radius` of full width
+    :attr:`feather_width` (native pixels). The stored :attr:`wing` already has
+    ``f_wing`` and the scalar match baked in (it is ~0 in the core region), and
+    both planes are encircled-energy normalised within :attr:`ee_aperture_radius`.
 
     Attributes
     ----------
     core : CorePsf
-        The oversampled core the wings were stitched onto.
-    extended : ExtendedPsf
-        The noobase extended PSF (oversampled core + native wing + stitch params).
+        The oversampled core the wings were stitched onto (provenance).
+    core_plane : numpy.ndarray
+        ``(oversample * core_size, oversample * core_size)`` encircled-energy
+        normalised oversampled core plane of the stitch -- the contract's
+        ``core_sample`` source (differs from ``core.core`` by the EE gauge).
+    wing : numpy.ndarray
+        ``(wing_size, wing_size)`` native wing plane (``f_wing`` + scalar baked
+        in, encircled-energy normalised).
     oversample : int
         Oversampling factor (inherited from ``core``).
+    match_radius, feather_width, ee_aperture_radius : float
+        Stitch geometry in native pixels: the feather ring centre, the
+        raised-cosine feather full width, and the EE-normalisation aperture.
     wing_size : int
         Detector-pixel edge length of the native wing stamps.
     n_wing_stars : int
@@ -75,10 +113,33 @@ class EffectivePsf:
     """
 
     core: CorePsf
-    extended: "ExtendedPsf"
+    core_plane: np.ndarray
+    wing: np.ndarray
     oversample: int
+    match_radius: float
+    feather_width: float
+    ee_aperture_radius: float
     wing_size: int
     n_wing_stars: int
+
+    def render(self, size: int | None = None, *, normalize: bool = True) -> np.ndarray:
+        """Render a native-resolution hybrid image (see :func:`render_effective`)."""
+        from noobfriend.extraction.psf._render import render_effective
+
+        return render_effective(self, size=size, normalize=normalize)
+
+    def save(self, path: str | Path, *, overwrite: bool = False) -> None:
+        """Write this hybrid PSF to a multi-extension FITS file (see :meth:`load`)."""
+        from noobfriend.extraction.psf._persist import save_effective
+
+        save_effective(self, path, overwrite=overwrite)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "EffectivePsf":
+        """Read a hybrid PSF back from a file written by :meth:`save`."""
+        from noobfriend.extraction.psf._persist import load_effective
+
+        return load_effective(path)
 
 
 def _phase_grid(delta: np.ndarray, oversample: int) -> np.ndarray:
@@ -247,10 +308,15 @@ def build_wings(
         wing_weight=weight,
         **extended_kwargs,  # type: ignore[arg-type]
     )
+    extended = built.extended
     return EffectivePsf(
         core=core,
-        extended=built.extended,
-        oversample=core.oversample,
+        core_plane=np.asarray(extended.core),
+        wing=np.asarray(extended.wing),
+        oversample=int(extended.oversample),
+        match_radius=float(extended.match_radius),
+        feather_width=float(extended.feather_width),
+        ee_aperture_radius=float(extended.ee_aperture_radius),
         wing_size=wing_size,
         n_wing_stars=int(data.shape[0]),
     )

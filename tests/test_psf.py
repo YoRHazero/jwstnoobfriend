@@ -247,8 +247,8 @@ class TestBuild:
         sub = self._filled(55)
         core = sub.build_psf_core(oversample=3, core_size=21)
         psf = sub.build_psf_wings(core, wing_size=51)
-        assert psf.extended is not None
-        assert np.asarray(psf.extended.wing).shape == (51, 51)
+        assert psf.wing.shape == (51, 51)
+        assert psf.core_plane.shape == (63, 63)
         assert psf.oversample == 3
         assert psf.n_wing_stars > 0
 
