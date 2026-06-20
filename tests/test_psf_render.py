@@ -6,13 +6,15 @@ rendered to native grids, convolved, and round-tripped through FITS.
 """
 
 import astropy.units as u
+import matplotlib
 import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
-
 from noobase.image import convolve_psf
 
-from noobfriend.extraction.psf import (
+matplotlib.use("Agg")
+
+from noobfriend.extraction.psf import (  # noqa: E402
     CorePsf,
     EffectivePsf,
     SourceExtractor,
@@ -194,3 +196,28 @@ class TestEffectivePsfIO:
         core_psf.save(tmp_path / "core.fits")
         with pytest.raises(ValueError, match="EffectivePsf"):
             EffectivePsf.load(tmp_path / "core.fits")
+
+
+class TestPlot:
+    """The .plot() diagnostic figure (image + radial profile)."""
+
+    def test_core_plot_returns_figure(self, core_psf: CorePsf) -> None:
+        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
+
+        fig = core_psf.plot()
+        assert isinstance(fig, Figure)
+        assert len(fig.axes) >= 2  # image panel + radial-profile panel (+ colorbar)
+        plt.close(fig)
+
+    def test_effective_plot_and_save(
+        self, effective_psf: EffectivePsf, tmp_path
+    ) -> None:
+        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
+
+        out = tmp_path / "psf.png"
+        fig = effective_psf.plot(save=out)
+        assert isinstance(fig, Figure)
+        assert out.is_file() and out.stat().st_size > 0
+        plt.close(fig)

@@ -16,6 +16,25 @@ JWST frames with off-detector NaNs. For PSF-matching photometry, render both
 bands onto the same grid, build a matching kernel (e.g.
 ``photutils.psf.matching.create_matching_kernel``), then convolve the sharper
 band with it.
+
+Examples
+--------
+Build a PSF, persist it, then reload and convolve an image with it::
+
+    from noobase.image import convolve_psf
+
+    ext = box.select(stage="2bi").extract.psf()
+    stars = ext.select(filter="F210M", module="a", snr_min=20, isolation_min=10)
+    psf = stars.build_psf_wings(stars.build_psf_core())
+    psf.save("psf_cache/F210M_a.fits")
+
+    # ... later, in another session ...
+    from noobfriend.extraction.psf import EffectivePsf
+
+    psf = EffectivePsf.load("psf_cache/F210M_a.fits")
+    psf.plot()                               # inspect the PSF + radial profile
+    kernel = psf.render(size=41)             # odd, unit-sum native kernel
+    smoothed = convolve_psf(image, kernel)   # NaN-aware convolution
 """
 
 from typing import TYPE_CHECKING

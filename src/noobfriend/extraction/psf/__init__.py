@@ -20,6 +20,7 @@ from noobfriend.extraction.psf._build import (
     build_wings,
 )
 from noobfriend.extraction.psf._extractor import SourceExtractor
+from noobfriend.extraction.psf._plot import plot_psf
 from noobfriend.extraction.psf._render import render_core, render_effective
 from noobfriend.extraction.psf._store import Cutout, CutoutStore
 
@@ -31,6 +32,7 @@ __all__ = [
     "SourceExtractor",
     "build_core",
     "build_wings",
+    "plot_psf",
     "render_core",
     "render_effective",
 ]

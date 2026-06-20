@@ -18,6 +18,8 @@ from noobase.image import build_stamp
 from noobase.image.psf import build_epsf, build_extended_psf
 
 if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+
     from noobfriend.extraction.psf._store import CutoutStore
 
 
@@ -59,6 +61,15 @@ class CorePsf:
         from noobfriend.extraction.psf._render import render_core
 
         return render_core(self.core, self.oversample, size=size, normalize=normalize)
+
+    def plot(
+        self, *, size: int | None = None, save: str | Path | None = None
+    ) -> "Figure":
+        """Plot the rendered core and its radial profile (see :func:`plot_psf`)."""
+        from noobfriend.extraction.psf._plot import plot_psf
+
+        title = f"core PSF · oversample {self.oversample} · {self.n_stars} stamps"
+        return plot_psf(self.render(size=size), title=title, save=save)
 
     def save(self, path: str | Path, *, overwrite: bool = False) -> None:
         """Write this core to a multi-extension FITS file (see :func:`load`)."""
@@ -127,6 +138,26 @@ class EffectivePsf:
         from noobfriend.extraction.psf._render import render_effective
 
         return render_effective(self, size=size, normalize=normalize)
+
+    def plot(
+        self, *, size: int | None = None, save: str | Path | None = None
+    ) -> "Figure":
+        """Plot the rendered hybrid PSF and its radial profile (see :func:`plot_psf`).
+
+        The core<->wing crossover (``match_radius``) is marked on the profile.
+        """
+        from noobfriend.extraction.psf._plot import plot_psf
+
+        title = (
+            f"effective PSF · oversample {self.oversample}"
+            f" · {self.n_wing_stars} wing stamps"
+        )
+        return plot_psf(
+            self.render(size=size),
+            title=title,
+            match_radius=self.match_radius,
+            save=save,
+        )
 
     def save(self, path: str | Path, *, overwrite: bool = False) -> None:
         """Write this hybrid PSF to a multi-extension FITS file (see :meth:`load`)."""
