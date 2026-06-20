@@ -10,5 +10,6 @@ directly.
 
 from noobfriend.navigation.noobox.extract._core import BoxExtract
 from noobfriend.navigation.noobox.extract._cutout import BoxCutout
+from noobfriend.navigation.noobox.extract._grism import BoxGrism
 
-__all__ = ["BoxCutout", "BoxExtract"]
+__all__ = ["BoxCutout", "BoxExtract", "BoxGrism"]

@@ -25,10 +25,13 @@ from noobfriend.navigation.noobox.extract._sources import (
 )
 
 if TYPE_CHECKING:
+    from noobase.axis import Grid
+
     from noobfriend.extraction.psf import SourceExtractor
     from noobfriend.navigation.noobook._core import NooBook
     from noobfriend.navigation.noobox._core import NooBox
     from noobfriend.navigation.noobox.extract._cutout import BoxCutout
+    from noobfriend.navigation.noobox.extract._grism import BoxGrism
 
 
 class BoxExtract:
@@ -144,6 +147,95 @@ class BoxExtract:
             on=on,
             reproject=reproject,
             with_err=with_err,
+            skip_missing_wcs=skip_missing_wcs,
+            probe=probe,
+            progress=progress,
+        )
+
+    def grism(
+        self,
+        ra: float,
+        dec: float,
+        *,
+        spatial_half: int,
+        wavelength: "Grid | None" = None,
+        oversample: int = 1,
+        min_fraction: float = 0.0,
+        pre_gate: bool = True,
+        skip_missing_wcs: bool = True,
+        probe: bool = True,
+        progress: bool = True,
+    ) -> "BoxGrism":
+        """Extract a source's WFSS grism spectrum across this box's exposures.
+
+        Finds the grism exposures (resident ``pupil`` matching ``GRISM*``) whose
+        order-1 trace covers ``(ra, dec)`` and resolves the common
+        ``(spatial, wavelength)`` grid; the returned
+        :class:`~noobfriend.navigation.noobox.extract._grism.BoxGrism` then
+        rectifies (:attr:`~..._grism.BoxGrism.spectra`) and combines
+        (:meth:`~..._grism.BoxGrism.combine`) them on demand, reading pixels
+        through this box's shared cache. Construction reads only WCS + resident
+        footprints -- no pixels.
+
+        Curate the box first (e.g. ``box.select(pupil="GRISMR")``) to bound the
+        work. Coverage uses a cheap resident-footprint pre-gate by default; see
+        :mod:`~noobfriend.navigation.noobox.extract._grism`.
+
+        Typical workflow::
+
+            g = box.extract.grism(ra, dec, spatial_half=8)
+            g.coverage                  # which exposures, wavelength ranges (no pixels)
+            beams = g.spectra           # per-exposure 2-D spectra (reads pixels)
+            spectrum = g.combine(group_by=None)   # one co-added 2-D spectrum
+
+        Parameters
+        ----------
+        ra, dec : float
+            Source world coordinates in degrees.
+        spatial_half : int
+            Half-height of the cross-dispersion axis in detector-y pixels; the
+            spatial axis spans ``[-spatial_half, +spatial_half]``.
+        wavelength : noobase.axis.Grid, optional
+            Explicit common wavelength axis (microns). ``None`` (default) builds
+            it from the union of the covered exposures' ranges.
+        oversample : int, default 1
+            Sub-pixel sampling of the spatial axis.
+        min_fraction : float, default 0.0
+            Minimum on-array fraction of the trace for an exposure to count as
+            covered (forwarded to ``find_coverage``).
+        pre_gate : bool, default True
+            Use the cheap footprint pre-filter before ``find_coverage``. When
+            ``False``, ``find_coverage`` runs on every grism frame (slower,
+            exhaustive).
+        skip_missing_wcs : bool, default True
+            Skip grism books without a footprint (unprobed / no WCS); when
+            ``False``, raise instead.
+        probe : bool, default True
+            Probe thin books so their pupil and footprint are available.
+        progress : bool, default True
+            Show a progress bar while reading candidate WCS.
+
+        Returns
+        -------
+        BoxGrism
+            The grism extraction driver.
+
+        Raises
+        ------
+        ValueError
+            If the box has no grism frames, or none covers ``(ra, dec)``.
+        """
+        from noobfriend.navigation.noobox.extract._grism import _build
+
+        return _build(
+            self._box,
+            ra,
+            dec,
+            spatial_half=spatial_half,
+            wavelength=wavelength,
+            oversample=oversample,
+            min_fraction=min_fraction,
+            pre_gate=pre_gate,
             skip_missing_wcs=skip_missing_wcs,
             probe=probe,
             progress=progress,
