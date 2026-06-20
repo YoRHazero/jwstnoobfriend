@@ -39,11 +39,14 @@ def world_detector_transforms(wcs: WCS) -> tuple[Transform, Transform]:
 
     Notes
     -----
-    When the WCS exposes a ``grism_detector`` frame (JWST WFSS products), the
-    underlying transforms additionally consume a spectral order and a source
-    identifier. The wrappers below supply the fixed values ``(4, 1)`` and keep
-    only the first two outputs, reproducing the dispersion convention used by
-    the upstream pipeline. Non-grism products use the transforms unchanged.
+    When the WCS exposes a ``grism_detector`` frame (JWST WFSS products), its
+    ``world`` frame is celestial + spectral, so both transforms take (and
+    return) a wavelength in microns and a spectral order alongside the
+    ``(ra, dec)`` / ``(x, y)`` pair. The wrappers below supply the fixed values
+    ``(4, 1)`` -- a 4 micron wavelength and order 1 -- and keep only the first
+    two outputs. The undispersed detector position is independent of both (it is
+    the direct imaging astrometry), so the fixed values merely satisfy the
+    signature. Non-grism products use the transforms unchanged.
     """
     is_grism = "grism_detector" in wcs.available_frames
     if is_grism:
