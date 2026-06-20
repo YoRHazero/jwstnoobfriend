@@ -23,7 +23,7 @@ Build a PSF, persist it, then reload and convolve an image with it::
 
     from noobase.image import convolve_psf
 
-    ext = box.select(stage="2bi").extract.psf()
+    ext = box.select(stage="2bi").extract.sources()
     stars = ext.select(filter="F210M", module="a", snr_min=20, isolation_min=10)
     psf = stars.build_psf_wings(stars.build_psf_core())
     psf.save("psf_cache/F210M_a.fits")

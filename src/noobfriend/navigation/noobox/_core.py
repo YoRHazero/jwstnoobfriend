@@ -19,7 +19,7 @@ from noobfriend.core.env import get_settings, stage_path_var
 from noobfriend.core.io import list_remote_dir
 from noobfriend.navigation._store import ByteStore, LruByteStore
 from noobfriend.navigation.noobook import NooBook
-from noobfriend.navigation.noobox._extract import BoxExtract
+from noobfriend.navigation.noobox.extract import BoxExtract
 from noobfriend.navigation.noobox._viz import BoxViz
 
 if TYPE_CHECKING:
@@ -632,7 +632,7 @@ class NooBox:
 
     @property
     def extract(self) -> BoxExtract:
-        """Collection extraction adapters, e.g. ``box.extract.psf(...)``."""
+        """Collection extraction adapters, e.g. ``box.extract.cutout(...)``."""
         return BoxExtract(self)
 
     def get(self, book_id: str) -> NooBook | None:

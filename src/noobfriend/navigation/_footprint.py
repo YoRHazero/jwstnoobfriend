@@ -61,3 +61,36 @@ class Footprint(BaseModel):
             for ra, dec in (detector_to_world(x, y) for x, y in pixel_corners)
         ]
         return cls(corners=corners)
+
+    def contains(self, ra: float, dec: float) -> bool:
+        """Return whether the sky position ``(ra, dec)`` lies inside the footprint.
+
+        A planar ray-casting (even-odd) point-in-polygon test over the
+        :attr:`corners`, treating ``(ra, dec)`` as Cartesian degrees. This is
+        accurate for the small fields of a single JWST product, which neither
+        reach a celestial pole nor straddle the ``RA = 0/360`` wrap; it is not
+        meant for footprints that do.
+
+        Parameters
+        ----------
+        ra, dec : float
+            World coordinates in degrees.
+
+        Returns
+        -------
+        bool
+            ``True`` when the point falls within the corner polygon.
+        """
+        vertices = self.corners
+        n = len(vertices)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            ra_i, dec_i = vertices[i]
+            ra_j, dec_j = vertices[j]
+            if (dec_i > dec) != (dec_j > dec):
+                ra_cross = ra_i + (dec - dec_i) / (dec_j - dec_i) * (ra_j - ra_i)
+                if ra < ra_cross:
+                    inside = not inside
+            j = i
+        return inside

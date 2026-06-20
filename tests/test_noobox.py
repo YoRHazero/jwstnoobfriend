@@ -123,6 +123,29 @@ def _capture_source_extractor(monkeypatch):
     return created
 
 
+def _patch_fake_cutout(monkeypatch):
+    """Replace extraction.cutout.Cutout with a lightweight WCS-free stand-in."""
+
+    class FakeCutout:
+        def __init__(self, wcs):
+            self.wcs = wcs
+
+        @classmethod
+        def from_world(cls, wcs, ra, dec, **size):
+            return cls(wcs)
+
+        def array(self, data):
+            return np.asarray(data, dtype=float) * 10.0
+
+        def reproject(self, data, wcs):
+            image = np.asarray(data, dtype=float)
+            ones = np.ones_like(image)
+            return image, ones, ones
+
+    monkeypatch.setattr("noobfriend.extraction.cutout.Cutout", FakeCutout)
+    return FakeCutout
+
+
 # -- discovery ----------------------------------------------------------------
 
 
@@ -272,7 +295,7 @@ def test_copy_is_an_independent_sandbox():
 # -- collection extraction ------------------------------------------------------
 
 
-def test_extract_psf_forwards_books_to_source_extractor(monkeypatch):
+def test_extract_sources_forwards_books_to_source_extractor(monkeypatch):
     book_a = _exposure_book(
         "2a", "cal", exposure="00001", detector="nrca1", filter="F210M"
     )
@@ -283,7 +306,7 @@ def test_extract_psf_forwards_books_to_source_extractor(monkeypatch):
     _patch_book_pixels(monkeypatch, wcs_by_id={book_a.id: wcs_a, book_b.id: wcs_b})
     created = _capture_source_extractor(monkeypatch)
 
-    extractor = _box(book_a, book_b).extract.psf(
+    extractor = _box(book_a, book_b).extract.sources(
         fwhm=4.0,
         cutout_size=55,
         nsigma=4.5,
@@ -316,7 +339,7 @@ def test_extract_psf_forwards_books_to_source_extractor(monkeypatch):
     assert all(call["max_ellipticity"] == 0.12 for call in extractor.calls)
 
 
-def test_extract_psf_probes_thin_books_for_filter_labels(monkeypatch):
+def test_extract_sources_probes_thin_books_for_filter_labels(monkeypatch):
     book = _exposure_book("2a", "cal", filter=None)
     _patch_book_pixels(monkeypatch, wcs_by_id={book.id: object()})
     created = _capture_source_extractor(monkeypatch)
@@ -326,7 +349,7 @@ def test_extract_psf_probes_thin_books_for_filter_labels(monkeypatch):
 
     monkeypatch.setattr(NooBook, "probe", fake_probe)
 
-    extractor = _box(book).extract.psf(progress=False)
+    extractor = _box(book).extract.sources(progress=False)
 
     assert extractor is created[0]
     assert extractor.kwargs["fwhm"] == 4.0
@@ -334,16 +357,18 @@ def test_extract_psf_probes_thin_books_for_filter_labels(monkeypatch):
     assert extractor.calls[0]["filter"] == "F210M"
 
 
-def test_extract_psf_missing_wcs_raises_or_skips(monkeypatch):
+def test_extract_sources_missing_wcs_raises_or_skips(monkeypatch):
     missing = _exposure_book("2a", "cal", exposure="00001")
     good = _exposure_book("2a", "cal", exposure="00002")
     _patch_book_pixels(monkeypatch, wcs_by_id={missing.id: None, good.id: object()})
     created = _capture_source_extractor(monkeypatch)
 
     with pytest.raises(ValueError, match="has no assigned WCS"):
-        _box(missing).extract.psf(fwhm=4.0, cutout_size=21, probe=False, progress=False)
+        _box(missing).extract.sources(
+            fwhm=4.0, cutout_size=21, probe=False, progress=False
+        )
 
-    extractor = _box(missing, good).extract.psf(
+    extractor = _box(missing, good).extract.sources(
         fwhm=4.0,
         cutout_size=21,
         skip_missing_wcs=True,
@@ -353,6 +378,80 @@ def test_extract_psf_missing_wcs_raises_or_skips(monkeypatch):
 
     assert extractor is created[-1]
     assert [call["filename"] for call in extractor.calls] == [good.id]
+
+
+# -- footprint coverage -------------------------------------------------------
+
+
+def test_footprint_contains_inside_and_outside():
+    footprint = _footprint(0.0)  # the unit square [0, 1] x [0, 1]
+
+    assert footprint.contains(0.5, 0.5)
+    assert not footprint.contains(1.5, 0.5)  # east of the square
+    assert not footprint.contains(0.5, 1.5)  # north of the square
+    assert not footprint.contains(-0.1, 0.5)  # west of the square
+
+
+# -- collection cutout --------------------------------------------------------
+
+
+def test_extract_cutout_gates_by_footprint_native(monkeypatch):
+    _patch_fake_cutout(monkeypatch)
+    covering = _exposure_book("2a", "cal", exposure="00001", footprint=_footprint(0.0))
+    far = _exposure_book("2a", "cal", exposure="00002", footprint=_footprint(5.0))
+    _patch_book_pixels(monkeypatch, wcs_by_id={covering.id: object(), far.id: object()})
+
+    result = _box(covering, far).extract.cutout(
+        0.5, 0.5, half=2, reproject=False, probe=False, progress=False
+    )
+
+    assert result.books == [covering]  # the far footprint is excluded
+    assert not result.reprojected
+    assert result.grid is None
+    np.testing.assert_array_equal(result[covering], np.full((5, 5), 10.0))
+
+
+def test_extract_cutout_reproject_prefers_stage3_grid(monkeypatch):
+    _patch_fake_cutout(monkeypatch)
+    exposure = _exposure_book("2a", "cal", exposure="00001", footprint=_footprint(0.0))
+    mosaic = _exposure_book("3a", "i2d", exposure="00001", footprint=_footprint(0.0))
+    wcs_exposure, wcs_mosaic = object(), object()
+    _patch_book_pixels(
+        monkeypatch, wcs_by_id={exposure.id: wcs_exposure, mosaic.id: wcs_mosaic}
+    )
+
+    result = _box(exposure, mosaic).extract.cutout(
+        0.5, 0.5, half=2, probe=False, progress=False
+    )
+
+    assert result.reprojected
+    assert result.grid.wcs is wcs_mosaic  # grid anchored on the stage-3 mosaic
+    assert set(result.books) == {exposure, mosaic}
+
+
+def test_extract_cutout_no_coverage_raises(monkeypatch):
+    _patch_fake_cutout(monkeypatch)
+    far = _exposure_book("2a", "cal", footprint=_footprint(5.0))
+    _patch_book_pixels(monkeypatch, wcs_by_id={far.id: object()})
+
+    with pytest.raises(ValueError, match="no book in the box covers"):
+        _box(far).extract.cutout(0.5, 0.5, half=2, probe=False, progress=False)
+
+
+def test_extract_cutout_coadd_weighted_mean(monkeypatch):
+    _patch_fake_cutout(monkeypatch)
+    book_a = _exposure_book("2a", "cal", exposure="00001", footprint=_footprint(0.0))
+    book_b = _exposure_book("2a", "cal", exposure="00002", footprint=_footprint(0.0))
+    _patch_book_pixels(
+        monkeypatch, wcs_by_id={book_a.id: object(), book_b.id: object()}
+    )
+
+    result = _box(book_a, book_b).extract.cutout(
+        0.5, 0.5, half=2, probe=False, progress=False
+    )
+
+    # book_a stamps to 1.0, book_b to 2.0, equal weights -> coadd is 1.5.
+    np.testing.assert_allclose(result.coadd(), np.full((5, 5), 1.5))
 
 
 # -- merge: lineage resolution ------------------------------------------------
