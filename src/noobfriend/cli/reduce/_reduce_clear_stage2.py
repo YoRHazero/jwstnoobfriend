@@ -12,6 +12,10 @@ INPUT_STAGE: str = "2a"
 
 #: The fixed, ordered NIRCam imaging chain (rate -> cal).
 CHAIN: tuple[StepSpec, ...] = (
+    StepSpec(
+        "fixed_pattern",
+        "per-detector fixed-pattern (crosshatch) subtraction (custom, two-pass)",
+    ),
     StepSpec("oneoverf", "1/f striping removal (custom)", custom="subtract_oneoverf"),
     StepSpec(
         "outlier_flag",
@@ -53,6 +57,10 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         '# output_noobox = "data/reduced_noobox.json"  '
         "# omit to update NOOBOX_PATH in place",
         "# mute_jwst = true  # silence jwst / CRDS / stpipe INFO+WARNING logging",
+        "",
+        "# [clear]  # CLEAR fixed-pattern (crosshatch) step options",
+        '# template_dir = "clear_templates"  '
+        "# where per-detector templates are built / cached",
         "",
         "[select]",
         f'stage = "{stage}"',

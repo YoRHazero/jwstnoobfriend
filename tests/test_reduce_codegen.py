@@ -71,6 +71,40 @@ def test_mute_jwst_renders_logging_disable() -> None:
     assert "logging.disable" not in render_clear(_clear())
 
 
+def test_clear_fixed_pattern_runs_two_pass_before_oneoverf() -> None:
+    source = render_clear(_clear())
+    ast.parse(source)
+    # pass 0: per-detector template build helper + call
+    assert "def _build_fixed_pattern_templates(box)" in source
+    assert "templates = _build_fixed_pattern_templates(box)" in source
+    assert "fixed_pattern_residual(model.data, model.dq)" in source
+    assert "combine_fixed_pattern(" in source
+    assert "FIXED_PATTERN_DIR = Path('clear_templates')" in source
+    # per-frame subtract uses the detector's template, and runs before 1/f
+    assert (
+        "subtract_fixed_pattern(model.data, model.err, model.dq, templates[book.detector])"
+        in source
+    )
+    assert source.index("subtract_fixed_pattern(") < source.index("subtract_oneoverf(")
+
+
+def test_clear_fixed_pattern_template_dir_is_configurable() -> None:
+    recipe = _clear()
+    recipe.clear.template_dir = "scratch/fp"
+    assert "FIXED_PATTERN_DIR = Path('scratch/fp')" in render_clear(recipe)
+
+
+def test_clear_skip_fixed_pattern_omits_the_pass() -> None:
+    recipe = _clear()
+    recipe.steps["fixed_pattern"] = StepConfig(skip=True)
+    source = render_clear(recipe)
+    ast.parse(source)
+    assert "subtract_fixed_pattern" not in source
+    assert "_build_fixed_pattern_templates" not in source
+    assert "FIXED_PATTERN_DIR" not in source
+    assert "subtract_oneoverf(" in source  # the rest of the chain still renders
+
+
 # -- GRISM (WFSS) renderer ----------------------------------------------------
 
 

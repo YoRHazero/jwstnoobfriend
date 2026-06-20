@@ -23,6 +23,12 @@ from noobfriend.reduction._astrometry import (
 )
 from noobfriend.reduction._background import subtract_background
 from noobfriend.reduction._badpixel import flag_outlier_pixels
+from noobfriend.reduction._fixed_pattern import (
+    combine_fixed_pattern,
+    fit_pattern_amplitude,
+    fixed_pattern_residual,
+    subtract_fixed_pattern,
+)
 from noobfriend.reduction._oneoverf import subtract_oneoverf
 from noobfriend.reduction._sky_template import (
     combine_sky_template,
@@ -47,15 +53,19 @@ __all__ = [
     "TileSpec",
     "build_reference",
     "clean_gaia",
+    "combine_fixed_pattern",
     "combine_sky_template",
     "field_grid",
+    "fit_pattern_amplitude",
     "fit_template_scalar",
+    "fixed_pattern_residual",
     "flag_outlier_pixels",
     "grism_trace_mask",
     "query_gaia",
     "select_point_sources",
     "sky_residual_grid",
     "subtract_background",
+    "subtract_fixed_pattern",
     "subtract_oneoverf",
     "subtract_sky_template",
     "tile_grid",
