@@ -213,5 +213,63 @@ def test_collapse_rebin_returns_target_length():
     assert error_1d.shape == (4,)
 
 
+# --------------------------------------------------------------------------- #
+# collapse: aperture window + correlated-noise boost
+# --------------------------------------------------------------------------- #
+
+
+def _spec(flux: np.ndarray, error: np.ndarray, *, half: float) -> GrismSpectrum:
+    """GrismSpectrum with spatial offsets at integer pixels in ``[-half, +half]``."""
+    flux = np.asarray(flux, dtype=float)
+    error = np.asarray(error, dtype=float)
+    n_spatial, n_wave = flux.shape
+    return GrismSpectrum(
+        flux_2d=flux,
+        error_2d=error,
+        weight_2d=np.ones_like(flux),
+        wavelength=Grid.linspace(4.0, 5.0, max(2, n_wave), kind="centers"),
+        spatial_offset=Grid.linspace(-half, half, n_spatial, kind="centers"),
+        n_frames=1,
+    )
+
+
+def test_collapse_aperture_narrows_the_window():
+    spec = _spec(np.ones((5, 3)), np.ones((5, 3)), half=2)  # offsets [-2,-1,0,1,2]
+    full, _ = spec.collapse()
+    narrow, _ = spec.collapse(aperture=(-1.0, 1.0))  # rows at -1, 0, 1
+
+    np.testing.assert_allclose(full, [5.0, 5.0, 5.0])
+    np.testing.assert_allclose(narrow, [3.0, 3.0, 3.0])
+
+
+def test_collapse_aperture_empty_raises():
+    spec = _spec(np.ones((3, 2)), np.ones((3, 2)), half=2)  # offsets [-2, 0, 2]
+    with pytest.raises(ValueError, match="selects no spatial rows"):
+        spec.collapse(aperture=(0.4, 0.6))
+
+
+def test_collapse_correlated_noise_cross_scales_error(monkeypatch):
+    import noobfriend.extraction.grism._core as core
+
+    monkeypatch.setattr(core, "cross_dispersion_boost", lambda *a, **k: 2.0)
+    spec = _spec(np.ones((5, 3)), np.ones((5, 3)), half=2)
+    _, naive = spec.collapse(aperture=(-1.0, 1.0))
+    flux, boosted = spec.collapse(aperture=(-1.0, 1.0), correlated_noise="cross")
+
+    np.testing.assert_allclose(boosted, naive * 2.0)
+    np.testing.assert_allclose(flux, [3.0, 3.0, 3.0])  # boost touches only the error
+
+
+def test_collapse_correlated_noise_continuum_scales_error(monkeypatch):
+    import noobfriend.extraction.grism._core as core
+
+    monkeypatch.setattr(core, "continuum_boost", lambda *a, **k: 1.5)
+    spec = _spec(np.ones((5, 3)), np.ones((5, 3)), half=2)
+    _, naive = spec.collapse()
+    _, boosted = spec.collapse(correlated_noise="continuum")
+
+    np.testing.assert_allclose(boosted, naive * 1.5)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

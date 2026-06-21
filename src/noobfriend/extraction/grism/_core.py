@@ -20,13 +20,18 @@ re-exported from ``noobfriend.extraction.grism``.
 
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Self
+from typing import Literal, Self
 
 import numpy as np
 from noobase.axis import Grid
 from noobase.image import reproject_exact
 from noobase.spectroscopy import Spectrum
 
+from noobfriend.core.specutils import (
+    collapse as _collapse_window,
+    continuum_boost,
+    cross_dispersion_boost,
+)
 from noobfriend.extraction._wcs import grism_trace_transform
 from noobfriend.extraction.grism._array import _native
 from noobfriend.extraction.grism._coverage import FrameCoverage
@@ -132,23 +137,63 @@ class GrismSpectrum:
         """
         return self.collapse()[1]
 
-    def collapse(
-        self, *, wavelength: Grid | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Collapse the 2-D spectrum to 1-D along the spatial axis.
+    def _aperture_rows(self, aperture: tuple[float, float] | None) -> tuple[int, int]:
+        """Resolve a spatial-offset ``aperture`` to a half-open ``(lo, hi)`` row window.
 
-        The default collapse is a boxcar sum over the full spatial extent, with
-        ``contam_2d`` subtracted first when present, error propagated in
-        quadrature over valid (finite, non-zero-weight) cells, and output bins
-        with no valid contribution set to ``NaN``. (Profile-weighted / optimal
+        ``None`` is the full spatial extent; otherwise ``(lo, hi)`` in
+        :attr:`spatial_offset` pixels selects the contiguous rows inside it.
+        """
+        offsets = np.asarray(self.spatial_offset.values)
+        if aperture is None:
+            return (0, offsets.size)
+        lo, hi = min(aperture), max(aperture)
+        rows = np.flatnonzero((offsets >= lo) & (offsets <= hi))
+        if rows.size == 0:
+            raise ValueError(
+                f"aperture {aperture} selects no spatial rows "
+                f"(offsets span {offsets[0]:.1f}..{offsets[-1]:.1f})."
+            )
+        return (int(rows[0]), int(rows[-1]) + 1)
+
+    def collapse(
+        self,
+        *,
+        aperture: tuple[float, float] | None = None,
+        correlated_noise: Literal["cross", "continuum"] | None = None,
+        wavelength: Grid | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Collapse the 2-D spectrum to 1-D along the cross-dispersion axis.
+
+        A boxcar sum over a cross-dispersion ``aperture``, with ``contam_2d``
+        subtracted first when present, error propagated in quadrature over valid
+        (finite, ``error > 0``, ``weight > 0``) cells, and output bins with no
+        valid contribution set to ``NaN``. The sum / quadrature mechanism is
+        :func:`noobfriend.core.specutils.collapse`. (Profile-weighted / optimal
         extraction is a separate concern and may be layered on later.)
 
         Parameters
         ----------
+        aperture : tuple of float, optional
+            ``(lo, hi)`` cross-dispersion window to sum, in :attr:`spatial_offset`
+            pixels (the trace centre is ``0``). ``None`` (default) sums the full
+            spatial extent. A window narrower than the full extent leaves sky rows for
+            ``correlated_noise="cross"``.
+        correlated_noise : {"cross", "continuum"} or None, optional
+            Opt-in error correction for correlated noise -- rectification
+            correlates neighbouring pixels, so the naive quadrature error is
+            optimistic. ``None`` (default) applies no correction. ``"cross"`` uses
+            :func:`noobfriend.core.specutils.cross_dispersion_boost` (model; from
+            the cross-dispersion autocovariance of the sky rows *outside* the
+            aperture -- so give some spatial margin via ``spatial_half``, else it
+            cannot estimate and returns ``1.0``). ``"continuum"`` uses
+            :func:`noobfriend.core.specutils.continuum_boost` (empirical; from the
+            line-free scatter of the collapsed 1-D, so it needs a continuum). The
+            scalar boost multiplies the 1-D error.
         wavelength : noobase.axis.Grid | None, optional
-            Target wavelength axis. ``None`` (default) returns the 1-D spectrum
-            on this object's native :attr:`wavelength`. When given, the collapsed
-            spectrum is flux-conservingly rebinned onto it via ``noobase``.
+            Target wavelength axis. ``None`` (default) returns the 1-D spectrum on
+            this object's native :attr:`wavelength`. When given, the collapsed
+            spectrum is flux-conservingly rebinned onto it via ``noobase`` (after
+            any ``correlated_noise`` correction).
 
         Returns
         -------
@@ -163,12 +208,28 @@ class GrismSpectrum:
             & (self.error_2d > 0)
             & (self.weight_2d > 0)
         )
-        n_valid = valid.sum(axis=0)
-        flux_1d = np.where(valid, base, 0.0).sum(axis=0)
-        var_1d = np.where(valid, self.error_2d**2, 0.0).sum(axis=0)
-        with np.errstate(invalid="ignore"):
-            flux_1d = np.where(n_valid > 0, flux_1d, np.nan)
-            error_1d = np.where(n_valid > 0, np.sqrt(var_1d), np.nan)
+        lo, hi = self._aperture_rows(aperture)
+        flux_1d, error_1d = _collapse_window(
+            np.where(valid, base, np.nan),
+            np.where(valid, self.error_2d, np.nan),
+            window=(lo, hi),
+            dispersion_axis=1,
+        )
+        empty = valid[lo:hi].sum(axis=0) == 0
+        flux_1d = np.where(empty, np.nan, flux_1d)
+        error_1d = np.where(empty, np.nan, error_1d)
+
+        if correlated_noise == "cross":
+            boost = cross_dispersion_boost(
+                base, self.error_2d, window=(lo, hi), dispersion_axis=1
+            )
+            error_1d = error_1d * boost
+        elif correlated_noise == "continuum":
+            boost = continuum_boost(
+                np.asarray(self.wavelength.values), flux_1d, error_1d
+            )
+            error_1d = error_1d * boost
+
         if wavelength is None:
             return (flux_1d, error_1d)
         spec = Spectrum(wavelength=self.wavelength, flux=flux_1d, error=error_1d)
