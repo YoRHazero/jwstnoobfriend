@@ -1,10 +1,11 @@
-"""Assemble the ``env`` command group (init / add-stage / check)."""
+"""Assemble the ``env`` command group (init / add-stage / check / mount)."""
 
 import typer
 
 from noobfriend.cli.env.add_stage import cli_add_stage
 from noobfriend.cli.env.check import cli_check
 from noobfriend.cli.env.init import cli_init
+from noobfriend.cli.env.mount import cli_mount, cli_unmount
 
 env_app = typer.Typer(
     rich_markup_mode="rich",
@@ -15,3 +16,5 @@ env_app = typer.Typer(
 env_app.command("init")(cli_init)
 env_app.command("add-stage")(cli_add_stage)
 env_app.command("check")(cli_check)
+env_app.command("mount")(cli_mount)
+env_app.command("unmount")(cli_unmount)
