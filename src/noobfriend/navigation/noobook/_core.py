@@ -20,7 +20,7 @@ from noobfriend.core.io import (
 )
 from noobfriend.navigation._footprint import Footprint
 from noobfriend.navigation._store import ByteStore
-from noobfriend.navigation.noobook._extract import BookExtract
+from noobfriend.navigation.noobook.extract import BookExtract
 from noobfriend.navigation.noobook._naming import (
     parse_exposure_name,
     parse_program_id,

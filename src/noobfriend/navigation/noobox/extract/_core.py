@@ -16,7 +16,7 @@ the work to a sibling module:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from noobfriend.navigation.noobox.extract._sources import (
     DEFAULT_PSF_CUTOUT_SIZE,
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from noobfriend.navigation.noobox._core import NooBox
     from noobfriend.navigation.noobox.extract._cutout import BoxCutout
     from noobfriend.navigation.noobox.extract._grism import BoxGrism
+    from noobfriend.navigation.noobox.extract._linefinder import BoxLineFinder
 
 
 class BoxExtract:
@@ -239,6 +240,64 @@ class BoxExtract:
             skip_missing_wcs=skip_missing_wcs,
             probe=probe,
             progress=progress,
+        )
+
+    def linefinder(
+        self,
+        *,
+        group_by: Any = None,
+        skip_missing_wcs: bool = True,
+        probe: bool = True,
+        **config: Any,
+    ) -> "BoxLineFinder":
+        """Blind emission-line search across this box's grism exposures.
+
+        The box-level entry to
+        :class:`~noobfriend.extraction.grism.linefind.GrismLineFinder`: it groups
+        the grism frames (resident ``pupil`` matching ``GRISM*``) into same-field
+        dither sets and, per group, deep-combines the raw frames (reproject +
+        median in data space) into one union-footprint line heatmap. For one
+        exposure's heatmap use ``book.extract.linefinder`` instead.
+
+        Curate the box first (e.g. ``box.select(pupil="GRISMR")``) to bound the
+        work. The returned
+        :class:`~noobfriend.navigation.noobox.extract._linefinder.BoxLineFinder`
+        computes heatmaps lazily.
+
+        Parameters
+        ----------
+        group_by : str or callable, optional
+            Grouping-key selector for the dither sets: a :class:`NooBook`
+            attribute name or a callable ``book -> key``. ``None`` (default) uses
+            ``(observation, visit, detector, pupil)`` -- one pointing at one roll.
+            A group must share position angle (the combine reprojects raw data
+            onto the sky), so do not group across rolls / observations.
+        skip_missing_wcs : bool, default True
+            Skip grism books with no footprint (no WCS); when ``False``, raise.
+        probe : bool, default True
+            Probe thin books so their pupil and footprint are available.
+        **config
+            Detection parameters forwarded to
+            :meth:`~noobfriend.extraction.grism.linefind.GrismLineFinder.configure`
+            (e.g. ``line_sigmas``, ``threshold``).
+
+        Returns
+        -------
+        BoxLineFinder
+
+        Raises
+        ------
+        ValueError
+            If the box has no grism frames.
+        """
+        from noobfriend.navigation.noobox.extract._linefinder import _build
+
+        return _build(
+            self._box,
+            group_by=group_by,
+            skip_missing_wcs=skip_missing_wcs,
+            probe=probe,
+            **config,
         )
 
     def sources(

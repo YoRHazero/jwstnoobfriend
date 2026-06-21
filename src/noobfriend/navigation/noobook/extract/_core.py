@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from noobfriend.extraction.cutout import Cutout
     from noobfriend.navigation.noobook._core import NooBook
+    from noobfriend.navigation.noobook.extract._linefinder import FrameLineFinder
 
 
 class BookExtract:
@@ -55,3 +56,33 @@ class BookExtract:
                 f"{self._book.id} has no assigned WCS to build a cutout from."
             )
         return Cutout.from_world(wcs, ra, dec, **kwargs)
+
+    def linefinder(self, **config: Any) -> "FrameLineFinder":
+        """Blind emission-line heatmap for this one grism exposure.
+
+        The single-frame entry to
+        :class:`~noobfriend.extraction.grism.linefind.GrismLineFinder`: it
+        configures a finder for this book (dispersion from its ``pupil``) and
+        exposes the per-exposure band-pass SNR heatmap, its peak catalog, and a
+        plot. For the deep, dither-combined heatmap use ``box.extract.linefinder``
+        instead.
+
+        Parameters
+        ----------
+        **config
+            Detection parameters forwarded to
+            :meth:`~noobfriend.extraction.grism.linefind.GrismLineFinder.configure`
+            (e.g. ``line_sigmas``, ``threshold``).
+
+        Returns
+        -------
+        FrameLineFinder
+
+        Raises
+        ------
+        ValueError
+            If this book is not a grism frame (pupil is not ``GRISM*``).
+        """
+        from noobfriend.navigation.noobook.extract._linefinder import _build
+
+        return _build(self._book, **config)
