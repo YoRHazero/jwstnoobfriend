@@ -50,7 +50,7 @@ def _trace_centerline(
     1-D ``wavelength`` keeps the dispersion model's evaluation element-wise (a
     clean 1-D result), avoiding the quadratic outer product it produces when all
     three inputs are arrays. The spatial (cross-dispersion) axis of a rectified
-    beam is then reconstructed analytically from this centerline, exploiting
+    spectrum is then reconstructed analytically from this centerline, exploiting
     grism separability — see :meth:`GrismExtractor.rectify`.
 
     Parameters
@@ -350,7 +350,7 @@ class GrismExtractor:
         resampling with :func:`noobase.image.reproject_exact` (carrying the
         error through). Useful for QA and display before combining, including
         per-exposure or per-module inspection (the ``id`` keys identify each).
-        Each beam carries its ``group`` (from ``FrameMeta.group``) for
+        Each spectrum carries its ``group`` (from ``FrameMeta.group``) for
         :meth:`combine`.
 
         Parameters
@@ -403,11 +403,11 @@ class GrismExtractor:
         return spectra
 
     def combine(self, spec_map: Mapping[str, GrismSpectrum]) -> list[GrismSpectrum]:
-        """Combine rectified per-exposure beams into one spectrum per group.
+        """Combine rectified per-exposure spectra into one spectrum per group.
 
         The downstream of :meth:`rectify`: it does no loading and no resampling,
-        only stacks the already-rectified, co-gridded beams onto this
-        extractor's grid by inverse-variance weighting. Beams are partitioned
+        only stacks the already-rectified, co-gridded spectra onto this
+        extractor's grid by inverse-variance weighting. Spectra are partitioned
         solely by their ``group`` (from ``FrameMeta.group``); nothing else is
         imposed — exposures of different dispersion (GRISMR + GRISMC) are
         combined too when they share a group, so keeping them apart is the
@@ -422,7 +422,7 @@ class GrismExtractor:
         -------
         list[GrismSpectrum]
             One combined :class:`GrismSpectrum` per distinct ``group`` present —
-            a single element when all beams share one group (the default).
+            a single element when all spectra share one group (the default).
         """
         groups: dict[Hashable | None, list[GrismSpectrum]] = {}
         for spec in spec_map.values():

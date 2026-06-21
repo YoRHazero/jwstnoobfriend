@@ -451,7 +451,7 @@ class BoxGrism:
 
         Each value is a single-exposure
         :class:`~noobfriend.extraction.grism.GrismSpectrum` (``n_frames == 1``) on
-        the common grid -- the per-exposure beams to inspect (contamination, bad
+        the common grid -- the per-exposure spectra to inspect (contamination, bad
         pixels) before combining. Accessing this **reads every covering
         exposure's pixels** through the shared cache on first call; the result is
         then cached on the handle.

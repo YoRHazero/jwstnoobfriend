@@ -185,7 +185,7 @@ class BoxExtract:
 
             g = box.extract.grism(ra, dec, spatial_half=8)
             g.coverage                  # which exposures, wavelength ranges (no pixels)
-            beams = g.spectra           # per-exposure 2-D spectra (reads pixels)
+            g.spectra                   # per-exposure 2-D spectra (reads pixels)
             spectrum = g.combine(group_by=None)   # one co-added 2-D spectrum
 
         Parameters

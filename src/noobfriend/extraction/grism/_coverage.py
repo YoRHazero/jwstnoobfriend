@@ -51,7 +51,7 @@ class FrameMeta:
         range resolution (see :func:`find_coverage`). ``None`` defers to the
         shared range or to automatic extraction.
     group : collections.abc.Hashable | None, optional
-        Optional grouping key. Beams are combined only within the same ``group``,
+        Optional grouping key. Spectra are combined only within the same ``group``,
         so set it to keep apart frames that should not be co-added — e.g. NIRCam
         modules A/B, or GRISMR vs GRISMC if you want them separate (see
         :attr:`FrameCoverage.dispersion`). ``None`` (default) combines everything

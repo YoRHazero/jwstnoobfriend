@@ -13,8 +13,8 @@ it, load only those, then rectify and combine them into 2-D spectra::
     coverage = find_coverage(ra, dec, metas, wavelength_range=wrange)
     covered = [c for c in coverage if c.covered]
     extractor = GrismExtractor.from_world(ra, dec, covered, spatial_half=8)
-    beams = extractor.rectify(load)           # load(id) -> (data, error), per exposure
-    products = extractor.combine(beams)       # stack by group -> one per group
+    spectra = extractor.rectify(load)         # load(id) -> (data, error), per exposure
+    products = extractor.combine(spectra)     # stack by group -> one per group
 
 Going the other way -- from a feature seen at one dispersed pixel back to the
 source positions that could have produced it -- use :func:`source_locus`::
