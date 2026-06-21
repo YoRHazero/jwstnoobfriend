@@ -30,6 +30,29 @@ _CONNECT_TIMEOUT: int = 10
 _CONTROL_PERSIST: int = 600
 
 
+#: Per-host record of whether ranged reads (``dd`` / ``tail``) work on a host.
+#: Optimistically assumed ``True`` (a GNU/Linux remote, as the ``find``-based
+#: helpers already assume). A caller that finds a ranged read fails where a
+#: whole-file read succeeds marks the host ``False`` via :func:`set_range_capable`
+#: so it stops paying for a doomed ranged attempt on every later file.
+_RANGE_CAPABLE: dict[str, bool] = {}
+
+
+def range_capable(host: str) -> bool:
+    """Whether ``host`` is (still) believed to support ranged ``dd`` / ``tail``."""
+    return _RANGE_CAPABLE.get(host, True)
+
+
+def set_range_capable(host: str, value: bool) -> None:
+    """Record whether ``host`` supports ranged reads (see :data:`_RANGE_CAPABLE`)."""
+    _RANGE_CAPABLE[host] = value
+
+
+def _reset_range_capability() -> None:
+    """Forget all recorded host capabilities (for tests)."""
+    _RANGE_CAPABLE.clear()
+
+
 class RemoteReadError(RuntimeError):
     """A remote ``ssh`` read failed (unreachable host, missing file, ...)."""
 
@@ -110,14 +133,13 @@ def fetch_bytes(spec: str | Path) -> bytes:
 
     A local spec is read directly off disk. A remote ``[user@]host:path`` spec
     is streamed into memory with ``ssh <host> cat`` — the bytes never touch the
-    local disk. The result is suitable for handing to the
-    :mod:`noobfriend.core.io.fits` readers via :class:`io.BytesIO`::
+    local disk. This pulls the *whole* file; to read only part of a FITS product
+    (its metadata tail or a single extension) prefer the byte-frugal readers in
+    :mod:`noobfriend.core.io.fits` driven by an accessor::
 
-        from io import BytesIO
+        from noobfriend.core.io import open_accessor, read_meta
 
-        from noobfriend.core.io import fetch_bytes, read_data
-
-        data = read_data(BytesIO(fetch_bytes("icrhome08:/data/x_cal.fits")))
+        meta = read_meta(open_accessor("icrhome08:/data/x_cal.fits"))
 
     Parameters
     ----------
@@ -154,6 +176,134 @@ def fetch_bytes(spec: str | Path) -> bytes:
         detail = proc.stderr.decode(errors="replace").strip()
         raise RemoteReadError(
             detail or f"ssh cat {host}:{path} exited with status {proc.returncode}"
+        )
+    return proc.stdout
+
+
+def fetch_range(spec: str | Path, offset: int, length: int) -> bytes:
+    """Return ``length`` bytes of a file starting at ``offset``.
+
+    The partial-read counterpart of :func:`fetch_bytes`: only the requested byte
+    range crosses the network (or is read off the local disk), so a caller that
+    knows a FITS extension's position can pull just that extension instead of the
+    whole file. A local spec is served with ``seek`` + ``read``; a remote
+    ``[user@]host:path`` spec is served with ``dd ... iflag=skip_bytes,count_bytes``
+    so ``offset`` and ``length`` are interpreted in bytes regardless of block size.
+
+    Parameters
+    ----------
+    spec : str or Path
+        A local path, or an ``[user@]host:path`` string (see :func:`_parse_spec`
+        for the local-versus-remote rule).
+    offset : int
+        Byte offset of the first byte to read (``0``-based).
+    length : int
+        Number of bytes to read. A range that runs past end-of-file yields the
+        bytes that exist (a short read), never an error.
+
+    Returns
+    -------
+    bytes
+        The requested range, possibly shorter than ``length`` at end-of-file.
+
+    Raises
+    ------
+    ValueError
+        ``spec`` is malformed, or ``offset`` / ``length`` is negative.
+    FileNotFoundError
+        A local ``spec`` does not exist.
+    RemoteReadError
+        The remote ``ssh``/``dd`` failed (unreachable host, missing file,
+        authentication declined under ``BatchMode``, ...).
+
+    Notes
+    -----
+    Assumes a GNU/Linux remote: it relies on ``dd``'s ``iflag=skip_bytes,count_bytes``
+    (as the other remote helpers rely on GNU ``find``/``tail``).
+    """
+    if offset < 0 or length < 0:
+        raise ValueError(
+            f"offset and length must be non-negative, got {offset=}, {length=}."
+        )
+    host, path = _parse_spec(spec)
+    if host is None:
+        with Path(path).open("rb") as handle:
+            handle.seek(offset)
+            return handle.read(length)
+
+    remote_cmd = (
+        f"dd if={shlex.quote(path)} bs=4M skip={offset} count={length} "
+        "iflag=skip_bytes,count_bytes status=none"
+    )
+    proc = subprocess.run(  # noqa: S603
+        ["ssh", *_ssh_opts(), host, remote_cmd],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip()
+        raise RemoteReadError(
+            detail or f"ssh dd {host}:{path} exited with status {proc.returncode}"
+        )
+    return proc.stdout
+
+
+def fetch_tail(spec: str | Path, length: int) -> bytes:
+    """Return the last ``length`` bytes of a file.
+
+    The trailing-range counterpart of :func:`fetch_bytes`: useful for a format
+    whose index lives at the end of the file (a JWST product's ASDF metadata HDU
+    is the last HDU), so the metadata can be pulled without reading the file's
+    large leading data extensions. A local spec seeks from end-of-file; a remote
+    ``[user@]host:path`` spec is served with ``tail -c``.
+
+    Parameters
+    ----------
+    spec : str or Path
+        A local path, or an ``[user@]host:path`` string (see :func:`_parse_spec`
+        for the local-versus-remote rule).
+    length : int
+        Number of trailing bytes to read. A file shorter than ``length`` yields
+        its whole content, never an error.
+
+    Returns
+    -------
+    bytes
+        The file's last ``length`` bytes (or the whole file if it is shorter).
+
+    Raises
+    ------
+    ValueError
+        ``spec`` is malformed, or ``length`` is negative.
+    FileNotFoundError
+        A local ``spec`` does not exist.
+    RemoteReadError
+        The remote ``ssh``/``tail`` failed (unreachable host, missing file,
+        authentication declined under ``BatchMode``, ...).
+
+    Notes
+    -----
+    Assumes a GNU/Linux remote: it relies on ``tail -c`` (as the other remote
+    helpers rely on GNU ``find``/``dd``).
+    """
+    if length < 0:
+        raise ValueError(f"length must be non-negative, got {length=}.")
+    host, path = _parse_spec(spec)
+    if host is None:
+        target = Path(path)
+        with target.open("rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(0, size - length))
+            return handle.read()
+
+    remote_cmd = f"tail -c {length} -- {shlex.quote(path)}"
+    proc = subprocess.run(  # noqa: S603
+        ["ssh", *_ssh_opts(), host, remote_cmd],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip()
+        raise RemoteReadError(
+            detail or f"ssh tail {host}:{path} exited with status {proc.returncode}"
         )
     return proc.stdout
 

@@ -1,25 +1,29 @@
 """The user-facing :class:`NooBook`: one JWST product file as a rich object."""
 
 from collections.abc import Iterable
-from io import BytesIO
 from typing import Any, Self
 
 import numpy as np
-from astropy.io import fits
 from gwcs import WCS
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from noobfriend.core.display import AttrView
 from noobfriend.core.io import (
+    ByteAccessor,
+    BytesAccessor,
     fetch_bytes,
+    open_accessor,
     read_data,
     read_dq,
     read_err,
     read_gwcs,
+    read_layout,
     read_meta,
+    read_meta_and_gwcs,
 )
+from noobfriend.core.io._layout import FitsLayout
 from noobfriend.navigation._footprint import Footprint
-from noobfriend.navigation._store import ByteStore
+from noobfriend.navigation._store import ByteStore, StoreAccessor
 from noobfriend.navigation.noobook.extract import BookExtract
 from noobfriend.navigation.noobook._naming import (
     parse_exposure_name,
@@ -44,23 +48,25 @@ def _instrument_field(meta: AttrView, name: str) -> str | None:
     return None if value is None else str(value)
 
 
-def _read_sci_shape(source: BytesIO) -> tuple[int, ...] | None:
-    """Return the ``SCI`` array shape from the header without loading pixels."""
-    with fits.open(source) as hdul:
-        try:
-            hdu = hdul["SCI"]
-        except KeyError:
-            return None
-        return tuple(int(n) for n in hdu.shape)
+def _make_accessor(
+    store: "ByteStore | None", book_id: str, location: str
+) -> ByteAccessor:
+    """Return the accessor a book reads through: store-backed when bound, else direct."""
+    if store is not None:
+        return StoreAccessor(store, book_id, location)
+    return open_accessor(location)
 
 
-def _read_header_fields(raw: bytes) -> dict[str, Any]:
-    """Extract the header-derived fields (pupil, filter, shape, footprint).
+def _read_header_fields(acc: ByteAccessor) -> tuple[dict[str, Any], FitsLayout]:
+    """Extract the header-derived fields and the SCI byte layout from a file.
+
+    Reads only the file's leading header block (for the ``SCI`` shape and offset)
+    and its trailing ASDF metadata -- never the large pixel extensions.
 
     Parameters
     ----------
-    raw : bytes
-        The complete bytes of a JWST FITS product.
+    acc : ByteAccessor
+        Accessor for a JWST FITS product.
 
     Returns
     -------
@@ -68,24 +74,24 @@ def _read_header_fields(raw: bytes) -> dict[str, Any]:
         ``pupil``, ``filter``, ``shape`` and ``footprint``, suitable for
         constructing or updating a :class:`NooBook`. ``footprint`` is ``None``
         when the file has no assigned WCS.
+    FitsLayout
+        The product's ``SCI`` byte layout, to cache on the book for later pixel
+        reads.
     """
-    meta = read_meta(BytesIO(raw))
-    shape = _read_sci_shape(BytesIO(raw))
-    try:
-        wcs: WCS | None = read_gwcs(BytesIO(raw))
-    except KeyError:
-        wcs = None
+    layout = read_layout(acc)
+    meta, wcs = read_meta_and_gwcs(acc)
     footprint = (
-        Footprint.from_wcs(wcs, shape)
-        if wcs is not None and shape is not None
+        Footprint.from_wcs(wcs, layout.shape)
+        if wcs is not None and layout.shape is not None
         else None
     )
-    return {
+    fields = {
         "pupil": _instrument_field(meta, "pupil"),
         "filter": _instrument_field(meta, "filter"),
-        "shape": shape,
+        "shape": layout.shape,
         "footprint": footprint,
     }
+    return fields, layout
 
 
 def _parent_ids_of(parents: "Iterable[NooBook | str] | None") -> tuple[str, ...]:
@@ -158,6 +164,7 @@ class NooBook(BaseModel):
     footprint: Footprint | None = None
 
     _store: ByteStore | None = PrivateAttr(default=None)
+    _layout: FitsLayout | None = PrivateAttr(default=None)
 
     def __eq__(self, other: object) -> bool:
         """Two NooBooks are equal when they share an :attr:`id`."""
@@ -254,20 +261,21 @@ class NooBook(BaseModel):
         """
         filename = _basename(location)
         book_id = f"{strip_fits_suffix(filename)}@{stage}"
-        if raw is None:
-            raw = (
-                store.fetch(book_id, location)
-                if store is not None
-                else fetch_bytes(location)
-            )
+        acc = (
+            BytesAccessor(raw)
+            if raw is not None
+            else _make_accessor(store, book_id, location)
+        )
+        fields, layout = _read_header_fields(acc)
         book = cls(
             id=book_id,
             location=location,
             stage=stage,
             parent_ids=_parent_ids_of(parents),
-            **_read_header_fields(raw),
+            **fields,
             **cls._name_identifiers(filename),
         )
+        book._layout = layout
         if store is not None:
             book._bind_store(store)
         return book
@@ -292,12 +300,10 @@ class NooBook(BaseModel):
             A populated copy, bound to ``store`` (or the existing store).
         """
         active = store if store is not None else self._store
-        raw = (
-            active.fetch(self.id, self.location)
-            if active is not None
-            else fetch_bytes(self.location)
-        )
-        book = self.model_copy(update=_read_header_fields(raw))
+        acc = _make_accessor(active, self.id, self.location)
+        fields, layout = _read_header_fields(acc)
+        book = self.model_copy(update=fields)
+        book._layout = layout
         if active is not None:
             book._bind_store(active)
         return book
@@ -383,29 +389,39 @@ class NooBook(BaseModel):
             return self._store.fetch(self.id, self.location)
         return fetch_bytes(self.location)
 
+    def _accessor(self) -> ByteAccessor:
+        """Return the accessor for on-demand reads (store-backed when bound)."""
+        return _make_accessor(self._store, self.id, self.location)
+
+    def _ensure_layout(self) -> FitsLayout:
+        """Return the cached ``SCI`` byte layout, reading it once on first need."""
+        if self._layout is None:
+            self._layout = read_layout(self._accessor())
+        return self._layout
+
     @property
     def meta(self) -> AttrView:
         """The ASDF ``meta`` tree as an :class:`AttrView` (read on access)."""
-        return read_meta(BytesIO(self.read_bytes()))
+        return read_meta(self._accessor())
 
     @property
     def wcs(self) -> WCS | None:
         """The GWCS, or ``None`` if the file has no assigned WCS yet."""
         try:
-            return read_gwcs(BytesIO(self.read_bytes()))
+            return read_gwcs(self._accessor())
         except KeyError:
             return None
 
     @property
     def data(self) -> np.ndarray:
         """The ``SCI`` array, read fresh on each access (not cached)."""
-        return read_data(BytesIO(self.read_bytes()))
+        return read_data(self._accessor(), self._ensure_layout())
 
     @property
     def err(self) -> np.ndarray | None:
         """The ``ERR`` array, or ``None`` if the product has no ``ERR``."""
         try:
-            return read_err(BytesIO(self.read_bytes()))
+            return read_err(self._accessor(), self._ensure_layout())
         except KeyError:
             return None
 
@@ -413,6 +429,6 @@ class NooBook(BaseModel):
     def dq(self) -> np.ndarray | None:
         """The ``DQ`` array, or ``None`` if the product has no ``DQ``."""
         try:
-            return read_dq(BytesIO(self.read_bytes()))
+            return read_dq(self._accessor(), self._ensure_layout())
         except KeyError:
             return None

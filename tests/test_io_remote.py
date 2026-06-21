@@ -10,6 +10,8 @@ from noobfriend.core.io.remote import (
     RemoteWriteError,
     _parse_spec,
     fetch_bytes,
+    fetch_range,
+    fetch_tail,
     list_remote_dir,
     write_bytes,
 )
@@ -69,6 +71,84 @@ class TestFetchBytesLocal:
     def test_missing_local_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             fetch_bytes(tmp_path / "does-not-exist.fits")
+
+
+class TestFetchRangeLocal:
+    """Local ranged reads seek + read; remote ranged reads run ``dd`` over SSH."""
+
+    def test_reads_byte_range(self, tmp_path: Path) -> None:
+        target = tmp_path / "blob.bin"
+        target.write_bytes(b"0123456789abcdef")
+        assert fetch_range(target, 3, 4) == b"3456"
+
+    def test_range_past_eof_is_short(self, tmp_path: Path) -> None:
+        target = tmp_path / "blob.bin"
+        target.write_bytes(b"012")
+        assert fetch_range(target, 1, 100) == b"12"
+
+    def test_negative_arguments_raise(self, tmp_path: Path) -> None:
+        target = tmp_path / "blob.bin"
+        target.write_bytes(b"012")
+        with pytest.raises(ValueError, match="non-negative"):
+            fetch_range(target, -1, 4)
+
+    def test_remote_runs_dd(self, monkeypatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout=b"ranged", stderr=b"")
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+
+        assert fetch_range("icrhome08:/data/x.fits", 100, 50) == b"ranged"
+        cmd = captured["cmd"]
+        assert cmd[0] == "ssh"
+        assert "icrhome08" in cmd
+        assert any("dd if=" in part and "skip=100" in part and "count=50" in part
+                   for part in cmd)
+
+    def test_remote_failure_raises(self, monkeypatch) -> None:
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"no such file")
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+        with pytest.raises(RemoteReadError, match="no such file"):
+            fetch_range("icrhome08:/missing", 0, 10)
+
+
+class TestFetchTailLocal:
+    """Local tail reads seek from EOF; remote tail reads run ``tail -c`` over SSH."""
+
+    def test_reads_trailing_bytes(self, tmp_path: Path) -> None:
+        target = tmp_path / "blob.bin"
+        target.write_bytes(b"0123456789abcdef")
+        assert fetch_tail(target, 5) == b"bcdef"
+
+    def test_tail_longer_than_file_returns_all(self, tmp_path: Path) -> None:
+        target = tmp_path / "blob.bin"
+        target.write_bytes(b"012")
+        assert fetch_tail(target, 100) == b"012"
+
+    def test_negative_length_raises(self, tmp_path: Path) -> None:
+        target = tmp_path / "blob.bin"
+        target.write_bytes(b"012")
+        with pytest.raises(ValueError, match="non-negative"):
+            fetch_tail(target, -1)
+
+    def test_remote_runs_tail(self, monkeypatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout=b"tailbytes", stderr=b"")
+
+        monkeypatch.setattr("noobfriend.core.io.remote.subprocess.run", fake_run)
+
+        assert fetch_tail("icrhome08:/data/x.fits", 256) == b"tailbytes"
+        cmd = captured["cmd"]
+        assert cmd[0] == "ssh"
+        assert any("tail -c 256" in part for part in cmd)
 
 
 class TestListRemoteDir:
