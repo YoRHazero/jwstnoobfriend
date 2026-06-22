@@ -33,8 +33,12 @@ noobfriend = "noobfriend.cli.app:main"
 [project.optional-dependencies]
 mcmc = [
     "arviz>=1.1.0",
+    "jax>=0.10.1",
     "numpyro>=0.21.0",
     "pymc>=6.0.1",
+]
+psf = [
+    "stpsf>=2.1.0",
 ]
 
 [build-system]
