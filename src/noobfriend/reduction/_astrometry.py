@@ -25,6 +25,9 @@ The GAIA query is the only impure step; :mod:`astroquery` is imported lazily
 inside :func:`query_gaia` so importing this module never requires it.
 """
 
+import http.client
+import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -34,6 +37,19 @@ if TYPE_CHECKING:
     from astropy.table import Table
 
     from noobfriend.core.imgutils import SourceCatalog
+
+logger = logging.getLogger(__name__)
+
+#: GAIA TAP failures treated as transient and retried by :func:`query_gaia`.
+#: Covers reset/timeout/socket errors (``OSError`` and its
+#: :class:`ConnectionResetError` / :class:`TimeoutError` subclasses) and
+#: truncated or malformed HTTP responses (:class:`http.client.HTTPException`),
+#: which is the failure mode the ESA archive exhibits while it is "in evolution"
+#: for DR4 and warns may be unstable.
+_GAIA_TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
+    OSError,
+    http.client.HTTPException,
+)
 
 #: GAIA DR3 columns pulled for quality filtering and PM propagation.
 _GAIA_COLUMNS: tuple[str, ...] = (
@@ -49,8 +65,21 @@ _GAIA_COLUMNS: tuple[str, ...] = (
 )
 
 
-def query_gaia(ra: float, dec: float, radius: float, *, row_limit: int = -1) -> "Table":
+def query_gaia(
+    ra: float,
+    dec: float,
+    radius: float,
+    *,
+    row_limit: int = -1,
+    retries: int = 5,
+    backoff: float = 1.0,
+) -> "Table":
     """Query GAIA DR3 over a cone (lazy :mod:`astroquery` import).
+
+    The query is retried with exponential backoff on transient network failures
+    (see :data:`_GAIA_TRANSIENT_ERRORS`): the ESA archive is "in evolution" for
+    DR4 and intermittently resets connections or times out, which would
+    otherwise abort a whole stage-3 run at the absolute-reference step.
 
     Parameters
     ----------
@@ -60,12 +89,28 @@ def query_gaia(ra: float, dec: float, radius: float, *, row_limit: int = -1) -> 
         Cone radius in degrees.
     row_limit : int, optional
         Maximum rows; ``-1`` (default) for no limit.
+    retries : int, optional
+        Total number of attempts before giving up, by default ``5``. Must be at
+        least ``1``.
+    backoff : float, optional
+        Base delay in seconds; attempt ``n`` (0-indexed) sleeps
+        ``backoff * 2 ** n`` before retrying, by default ``1.0`` (1, 2, 4, 8 s).
 
     Returns
     -------
     astropy.table.Table
         The columns in :data:`_GAIA_COLUMNS` for sources in the cone.
+
+    Raises
+    ------
+    ValueError
+        If ``retries`` is less than ``1``.
+    OSError or http.client.HTTPException
+        The last transient error, re-raised after all attempts are exhausted.
     """
+    if retries < 1:
+        raise ValueError(f"retries must be at least 1, got {retries}")
+
     from astroquery.gaia import Gaia
 
     Gaia.ROW_LIMIT = row_limit
@@ -74,7 +119,25 @@ def query_gaia(ra: float, dec: float, radius: float, *, row_limit: int = -1) -> 
         f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), "
         f"CIRCLE('ICRS', {ra}, {dec}, {radius}))"
     )
-    return Gaia.launch_job_async(adql).get_results()
+
+    for attempt in range(retries):
+        try:
+            return Gaia.launch_job_async(adql).get_results()
+        except _GAIA_TRANSIENT_ERRORS as exc:
+            if attempt == retries - 1:
+                raise
+            delay = backoff * 2**attempt
+            logger.warning(
+                "GAIA query failed (attempt %d/%d): %s: %s; retrying in %.0fs",
+                attempt + 1,
+                retries,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+
+    raise AssertionError("unreachable: loop returns or raises")  # pragma: no cover
 
 
 def _col(table: "Table", name: str, fill: float) -> np.ndarray:

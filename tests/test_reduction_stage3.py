@@ -5,6 +5,10 @@ and a hand-built grid; astrometry on a synthetic GAIA table, a synthetic source
 catalogue and a fake reference provider.
 """
 
+import sys
+import time
+import types
+
 import numpy as np
 import pytest
 from astropy.table import Table
@@ -15,6 +19,7 @@ from noobfriend.reduction import (
     build_reference,
     clean_gaia,
     field_grid,
+    query_gaia,
     select_point_sources,
     tile_grid,
     tile_members,
@@ -283,3 +288,83 @@ def test_build_reference_trims_to_footprints() -> None:
     out = build_reference(0.0, 0.0, 1.0, 2023.0, providers=(fake,), footprints=fp)
     assert len(out) == 1
     assert out["RA"][0] == 0.5
+
+
+# -- query_gaia retry on transient failures (fake astroquery, no network) -----
+
+
+def _install_fake_gaia(
+    monkeypatch: pytest.MonkeyPatch, side_effects: list[object]
+) -> list[str]:
+    """Stub ``astroquery.gaia`` so ``query_gaia`` never touches the network.
+
+    Each entry of ``side_effects`` is consumed by one ``launch_job_async`` call:
+    an :class:`Exception` is raised, anything else is returned as the job's
+    ``get_results()``. Returns the list of ADQL strings seen, one per call.
+    """
+    seq = list(side_effects)
+    calls: list[str] = []
+
+    class _FakeJob:
+        def __init__(self, result: object) -> None:
+            self._result = result
+
+        def get_results(self) -> object:
+            return self._result
+
+    class _FakeGaia:
+        ROW_LIMIT: int = -1
+
+        @staticmethod
+        def launch_job_async(adql: str) -> "_FakeJob":
+            calls.append(adql)
+            effect = seq.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
+            return _FakeJob(effect)
+
+    astroquery_mod = types.ModuleType("astroquery")
+    gaia_mod = types.ModuleType("astroquery.gaia")
+    gaia_mod.Gaia = _FakeGaia  # type: ignore[attr-defined]
+    astroquery_mod.gaia = gaia_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "astroquery", astroquery_mod)
+    monkeypatch.setitem(sys.modules, "astroquery.gaia", gaia_mod)
+    return calls
+
+
+def test_query_gaia_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = Table({"ra": [1.0], "dec": [2.0]})
+    calls = _install_fake_gaia(
+        monkeypatch,
+        [
+            ConnectionResetError(104, "reset"),
+            ConnectionResetError(104, "reset"),
+            sentinel,
+        ],
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    out = query_gaia(53.1, -27.8, 0.1, retries=5, backoff=1.0)
+
+    assert out is sentinel
+    assert len(calls) == 3  # two failures, then success
+    assert sleeps == [1.0, 2.0]  # exponential backoff between attempts
+
+
+def test_query_gaia_reraises_after_exhausting(monkeypatch: pytest.MonkeyPatch) -> None:
+    err = ConnectionResetError(104, "reset")
+    calls = _install_fake_gaia(monkeypatch, [err, err, err])
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    with pytest.raises(ConnectionResetError):
+        query_gaia(53.1, -27.8, 0.1, retries=3, backoff=1.0)
+
+    assert len(calls) == 3  # all attempts used
+    assert sleeps == [1.0, 2.0]  # no sleep after the final failure
+
+
+def test_query_gaia_rejects_nonpositive_retries() -> None:
+    with pytest.raises(ValueError):
+        query_gaia(53.1, -27.8, 0.1, retries=0)
