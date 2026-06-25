@@ -108,6 +108,15 @@ class LineFitResult:
         """Velocity offset (km/s) ``(low, median, high)`` for a component."""
         return self.interval(f"{component_id}__dv")
 
+    def center(self, component_id: str) -> tuple[float, float, float]:
+        """Fitted line-centre wavelength ``(low, median, high)`` for a component.
+
+        In the spectrum's ``wave_unit``: the key blind-search output for an
+        observed-frame line (its measured observed centre), and the systemic
+        centre shifted by the fitted velocity for a rest-frame one.
+        """
+        return self.interval(f"{component_id}__mu")
+
     def _model_draws(
         self, grid: np.ndarray, max_draws: int = 400
     ) -> tuple[np.ndarray, np.ndarray]:

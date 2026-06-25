@@ -499,3 +499,290 @@ def test_compute_auto_mask_flags_outliers():
     assert mask[(wl >= 6597.0) & (wl <= 6603.0)].sum() >= 3  # unrelated line
     assert not mask[(wl >= 6560.0) & (wl <= 6566.0)].any()  # Halpha core spared
     assert not mask[int(np.argmin(np.abs(wl - 6540.0)))]  # clean continuum spared
+
+
+# --- observed-frame (blind-search) lines -----------------------------------
+
+
+def _zless_spec() -> NoobSpectrum:
+    wl = np.linspace(6500.0, 6800.0, 60)
+    return NoobSpectrum.from_1d(
+        wl, np.ones_like(wl), np.full_like(wl, 0.1), wave_unit="A", R=3000.0
+    )
+
+
+def test_observed_line_auto_names_and_centre_without_z():
+    # An unnamed observed line gets a centre-derived id, has no rest wavelength,
+    # and places its centre directly (no redshift) -- all on a z=None spectrum.
+    line = NoobLine.observed(6712.3, unit="A", component="narrow")
+    assert line.linename is None and line.custom_id == "Line_obs_6712_narrow"
+    assert line.frame == "observed" and line.center == 6712.3
+
+    comp = _zless_spec().setup([line]).components[0]
+    assert comp.id == "Line_obs_6712_narrow"
+    assert comp.rest_wavelength is None
+    assert comp.centre_wavelength == pytest.approx(6712.3)
+    # free centre by default (blind-search wants the centre to float).
+    assert comp.centre.kind == "free" and comp.centre.base_id is None
+
+
+def test_observed_line_converts_centre_into_spectrum_frame():
+    # micron spectrum, Angstrom observed centre -> centre converts into the frame.
+    wl_um = np.linspace(0.64, 0.70, 60)
+    spec = NoobSpectrum.from_1d(
+        wl_um, np.ones_like(wl_um), np.full_like(wl_um, 0.1), wave_unit="um"
+    )
+    line = NoobLine.observed(6712.3, unit="A", component="narrow")
+    comp = spec.setup([line]).components[0]
+    assert comp.centre_wavelength == pytest.approx(0.67123)  # 6712.3 A -> 0.67123 um
+
+
+def test_observed_lines_tie_like_rest_lines():
+    # Two observed lines bind exactly like two rest lines: a derived companion
+    # co-moves in velocity (centre tied to the parent) and ties its flux ratio.
+    a = NoobLine.observed(6712.0, unit="A", component="narrow", linename="featA")
+    b = a.derive(linename="featB", observed_center=6731.0, flux_ratio=(0.3, 3.0))
+    comps = _by_id(_zless_spec().setup([a, b]))
+
+    assert comps["featA"].centre_wavelength == pytest.approx(6712.0)
+    assert comps["featB"].centre_wavelength == pytest.approx(6731.0)
+    # shared velocity tie (co-moving) -- the thing a rest doublet relies on.
+    child = comps["featB"].centre
+    assert child.kind == "fixed" and child.value == 0.0 and child.base_id == "featA"
+    flux = comps["featB"].flux
+    assert flux.base_id == "featA" and flux.relation == "ratio" and flux.kind == "free"
+
+
+def test_rest_line_requires_z():
+    spec = _zless_spec()
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    with pytest.raises(ValueError, match="needs the spectrum's redshift"):
+        spec.setup([ha])
+
+
+def test_derive_cannot_cross_frames():
+    rest = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    obs = NoobLine.observed(6560.0, unit="A", component="narrow")
+    with pytest.raises(ValueError, match="across frames"):
+        NoobLine(
+            "Y",
+            frame="observed",
+            observed_center=5000.0,
+            unit="A",
+            component="narrow",
+            parent=rest,
+        )
+    with pytest.raises(ValueError, match="across frames"):
+        NoobLine(
+            "Z",
+            rest_wavelength=5000.0,
+            unit="A",
+            component="narrow",
+            parent=obs,
+        )
+
+
+def test_observed_line_field_validation():
+    with pytest.raises(ValueError, match="observed_center must be a positive"):
+        NoobLine.observed(-5.0, unit="A", component="narrow")
+    with pytest.raises(ValueError, match="rest_wavelength is only for"):
+        NoobLine(
+            "X",
+            frame="observed",
+            observed_center=5000.0,
+            rest_wavelength=5000.0,
+            unit="A",
+            component="narrow",
+        )
+    with pytest.raises(ValueError, match="observed_center is only for"):
+        NoobLine(
+            "X",
+            rest_wavelength=5000.0,
+            observed_center=5000.0,
+            unit="A",
+            component="narrow",
+        )
+
+
+# --- manual initvals (start-only) ------------------------------------------
+
+
+def test_resolve_initvals_inverts_physical_to_free_rvs():
+    from noobfriend.inference.spectrum._initvals import normalize_init, resolve_initvals
+
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    broad = ha.derive(component="broad")
+    comps = _spec().setup([ha, broad]).components  # R=2700
+    ids = {c.template.name: c.id for c in comps}
+    init = {
+        "continuum": {"c0": 1.5, "c1": -0.001},
+        ids["narrow"]: {"flux": 20.0, "fwhm_kms": 250.0, "dv_kms": 30.0},
+        ids["broad"]: {"flux": 5.0, "fwhm_kms": 2500.0},
+    }
+    norm = normalize_init(init, [c.id for c in comps])
+    out = resolve_initvals(
+        comps, norm, fwhm_inst=299792.458 / 2700.0, continuum_degree=1
+    )
+
+    # the free RVs *are* the physical quantities -> identity (within clipping).
+    assert out["continuum__c0"] == 1.5 and out["continuum__c1"] == -0.001
+    assert out[f"{ids['narrow']}__flux_raw"] == 20.0
+    assert out[f"{ids['narrow']}__fwhm_free"] == pytest.approx(250.0)
+    assert out[f"{ids['narrow']}__dv_off"] == pytest.approx(30.0)
+    assert out[f"{ids['broad']}__flux_raw"] == 5.0
+    assert out[f"{ids['broad']}__fwhm_free"] == pytest.approx(2500.0)
+
+
+def test_resolve_initvals_clips_to_lsf_floored_bounds():
+    from noobfriend.inference.spectrum._initvals import normalize_init, resolve_initvals
+
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    comps = _spec().setup([ha]).components  # R=2700 -> LSF FWHM ~111 km/s
+    norm = normalize_init({"Halpha": {"fwhm_kms": 5.0}}, [c.id for c in comps])
+    out = resolve_initvals(
+        comps, norm, fwhm_inst=299792.458 / 2700.0, continuum_degree=1
+    )
+    # 5 km/s is below the instrumental floor -> clipped up to it, not used raw.
+    assert 111.0 < out["Halpha__fwhm_free"] < 112.0
+
+
+def test_resolve_initvals_skips_non_free_axes_and_degree0_c1():
+    from noobfriend.inference.spectrum._initvals import normalize_init, resolve_initvals
+
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    nii = ha.derive("NII_6583", rest_wavelength=6583.0)  # width tied, centre fixed
+    comps = _spec().setup([ha, nii]).components
+    ids = [c.id for c in comps]
+
+    with pytest.warns(UserWarning):
+        out = resolve_initvals(
+            comps,
+            normalize_init({"NII_6583": {"fwhm_kms": 300.0, "dv_kms": 10.0}}, ids),
+            fwhm_inst=None,
+            continuum_degree=1,
+        )
+    assert "NII_6583__fwhm_free" not in out and "NII_6583__dv_off" not in out
+
+    with pytest.warns(UserWarning, match="degree 0"):
+        out2 = resolve_initvals(
+            comps,
+            normalize_init({"continuum": {"c0": 1.0, "c1": 0.5}}, ids),
+            fwhm_inst=None,
+            continuum_degree=0,
+        )
+    assert out2 == {"continuum__c0": 1.0}
+
+
+def test_normalize_init_rejects_unknown_keys():
+    from noobfriend.inference.spectrum._initvals import normalize_init
+
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    ids = [c.id for c in _spec().setup([ha]).components]
+    with pytest.raises(ValueError, match="unknown component id"):
+        normalize_init({"Hbeta": {"flux": 1.0}}, ids)
+    with pytest.raises(ValueError, match="unknown quantity"):
+        normalize_init({"Halpha": {"width": 1.0}}, ids)
+
+
+def test_run_recovers_observed_free_centre_gaussian():
+    """End-to-end: an observed-frame fit recovers a synthetic free-centre line.
+
+    The blind-search path -- no redshift, no line identity -- recovers the
+    observed centre, width, and flux of a lone Gaussian. Skipped without ``mcmc``.
+    """
+    pytest.importorskip("pymc")
+
+    c = 299792.458
+    fw2sig = 1.0 / 2.3548200450309493
+    rng = np.random.default_rng(0)
+    wl = np.linspace(6500.0, 6620.0, 240)
+
+    def gauss(center: float, fwhm_kms: float, flux: float) -> np.ndarray:
+        sw = center * (fwhm_kms / c) * fw2sig
+        return (
+            flux / (sw * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((wl - center) / sw) ** 2)
+        )
+
+    center_true, fwhm_true, flux_true = 6562.0, 350.0, 15.0
+    truth = 1.0 + gauss(center_true, fwhm_true, flux_true)
+    err = np.full_like(wl, 0.08)
+    spec = NoobSpectrum.from_1d(  # no z -- a pure observed-frame fit
+        wl, truth + rng.normal(0, 0.08, wl.size), err, wave_unit="A", R=3000.0
+    )
+
+    line = NoobLine.observed(
+        6560.0, unit="A", component="narrow", delta_wavelength=(-15.0, 15.0)
+    )
+    setup = spec.setup([line])
+    cid = setup.components[0].id
+    res = setup.run(draws=300, tune=300, chains=2, random_seed=1, progressbar=False)
+
+    assert res.center(cid)[1] == pytest.approx(center_true, abs=2.0)
+    assert res.fwhm_kms(cid)[1] == pytest.approx(fwhm_true, rel=0.25)
+    assert res.flux(cid)[1] == pytest.approx(flux_true, rel=0.2)
+
+
+def test_initvals_improve_convergence_under_short_warmup():
+    """A good manual start mixes far better than a bad one under short warmup.
+
+    Same model, data, and seed -- only the NUTS start differs (via ``init_guess``,
+    a start-only knob that leaves the priors untouched). With deliberately short
+    tuning, a start at the truth converges (R-hat near 1) while a start far in the
+    tails is left badly mixed: the good start has not just travelled less but
+    landed on the answer. Skipped without ``mcmc``.
+    """
+    pytest.importorskip("pymc")
+
+    c = 299792.458
+    fw2sig = 1.0 / 2.3548200450309493
+    rng = np.random.default_rng(0)
+    wl = np.linspace(6500.0, 6620.0, 240)
+
+    def gauss(center: float, fwhm_kms: float, flux: float) -> np.ndarray:
+        sw = center * (fwhm_kms / c) * fw2sig
+        return (
+            flux / (sw * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((wl - center) / sw) ** 2)
+        )
+
+    truth = (
+        1.0
+        + gauss(6562.8, 300.0, 20.0)
+        + gauss(6583.4, 300.0, 9.0)
+        + gauss(6548.0, 300.0, 3.0)
+    )
+    err = np.full_like(wl, 0.08)
+    spec = NoobSpectrum.from_1d(
+        wl, truth + rng.normal(0, 0.08, wl.size), err, z=0.0, wave_unit="A", R=3000.0
+    )
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    nii_b = ha.derive("NII_6583", rest_wavelength=6583.4)
+    nii_a = nii_b.derive("NII_6548", rest_wavelength=6548.0, flux_ratio=1 / 3)
+    setup = spec.setup([ha, nii_b, nii_a])
+
+    # NII width/velocity are tied to Halpha (not free), so only its flux is seeded.
+    good = {
+        "Halpha": {"flux": 20.0, "fwhm_kms": 300.0, "dv_kms": 0.0},
+        "NII_6583": {"flux": 9.0},
+        "continuum": {"c0": 1.0, "c1": 0.0},
+    }
+    bad = {
+        "Halpha": {"flux": 0.5, "fwhm_kms": 950.0, "dv_kms": 250.0},
+        "NII_6583": {"flux": 0.5},
+    }
+    common = {
+        "draws": 200,
+        "tune": 80,
+        "chains": 2,
+        "random_seed": 0,
+        "progressbar": False,
+    }
+    diag_bad = setup.run(init_guess=bad, **common).diagnostics()
+    res_good = setup.run(init_guess=good, **common)
+    diag_good = res_good.diagnostics()
+
+    # The good start has converged; the bad start, on the same budget, has not.
+    assert diag_good["max_rhat"] < 1.2
+    assert diag_bad["max_rhat"] > diag_good["max_rhat"] + 0.3
+    # ... and the good start lands on the truth.
+    assert res_good.flux("Halpha")[1] == pytest.approx(20.0, rel=0.2)
+    assert res_good.flux("NII_6583")[1] == pytest.approx(9.0, rel=0.3)

@@ -21,11 +21,9 @@ if TYPE_CHECKING:
 C_KMS: float = 299792.458
 
 
-def component_centres(
-    spectrum: NoobSpectrum, components: tuple[ResolvedComponent, ...]
-) -> list[float]:
-    """Return each component's systemic observed centre ``(1 + z) * rest``."""
-    return [(1.0 + spectrum.z) * c.rest_wavelength for c in components]
+def component_centres(components: tuple[ResolvedComponent, ...]) -> list[float]:
+    """Return each component's systemic observed centre in the spectrum frame."""
+    return [c.centre_wavelength for c in components]
 
 
 def select_window(
@@ -73,7 +71,7 @@ def select_window(
     ValueError
         If fewer than ``min_points`` finite pixels fall in the window.
     """
-    centres = component_centres(spectrum, components)
+    centres = component_centres(components)
     if window is not None:
         lo, hi = float(window[0]), float(window[1])
     else:

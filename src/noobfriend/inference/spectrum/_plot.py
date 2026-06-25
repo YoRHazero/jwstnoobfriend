@@ -52,7 +52,7 @@ def _initial_params(setup: LineFitSetup, init: Any) -> dict[str, dict[str, float
     """
     from noobfriend.inference.spectrum._init import component_geometry
 
-    geometry = component_geometry(setup.components, setup.spectrum.z)
+    geometry = component_geometry(setup.components)
     return {
         cid: {
             **g,
@@ -148,7 +148,7 @@ def preview_setup(
     wl_w = spectrum.wavelength[mask].astype(float)
     fl_w = spectrum.flux[mask].astype(float)
     degree = continuum_degree if wl_w.size >= 4 else 0
-    init = initial_estimates(spectrum, comps, wl_w, fl_w, degree=degree)
+    init = initial_estimates(comps, wl_w, fl_w, degree=degree)
     params = _initial_params(setup, init)
 
     def init_model(grid: np.ndarray) -> np.ndarray:

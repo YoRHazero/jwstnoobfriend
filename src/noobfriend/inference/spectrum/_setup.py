@@ -32,7 +32,7 @@ from noobfriend.inference.spectrum._template import ComponentTemplate, get_templ
 from noobfriend.inference.spectrum._units import convert
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from matplotlib.figure import Figure
 
@@ -112,9 +112,15 @@ class ResolvedComponent:
         The generated (or custom) component id.
     line : NoobLine
         The source declaration.
-    rest_wavelength : float
+    rest_wavelength : float or None
         The line's rest wavelength converted into the spectrum's ``wave_unit``
-        (so all downstream code works in one frame).
+        (so all downstream code works in one frame); ``None`` for an
+        observed-frame line, which has no rest wavelength.
+    centre_wavelength : float
+        The systemic observed centre in the spectrum's ``wave_unit``: ``(1 + z) *
+        rest_wavelength`` for a rest line, or the observed centre itself for an
+        observed line. The single frame-agnostic centre the model curve is built
+        around (so ``z`` is consumed only here, at setup).
     template : ComponentTemplate
         The component's shape template.
     centre, width, flux : ResolvedAxis
@@ -123,7 +129,8 @@ class ResolvedComponent:
 
     id: str
     line: NoobLine
-    rest_wavelength: float
+    rest_wavelength: float | None
+    centre_wavelength: float
     template: ComponentTemplate
     centre: ResolvedAxis
     width: ResolvedAxis
@@ -274,6 +281,7 @@ class LineFitSetup:
         pad_kms: float = 5000.0,
         continuum_degree: int = 1,
         jitter: bool = False,
+        init_guess: Mapping[str, Mapping[str, float]] | None = None,
         random_seed: int | None = None,
         progressbar: bool = False,
         compute_log_likelihood: bool = True,
@@ -304,6 +312,16 @@ class LineFitSetup:
             Local continuum polynomial degree.
         jitter : bool, default False
             Add a fractional error-inflation term to the likelihood.
+        init_guess : mapping, optional
+            Manual NUTS *start* values (not priors), to help a stubborn fit
+            converge. A mapping ``{component_id: {quantity: value}}`` of physical
+            quantities -- ``flux`` / ``fwhm_kms`` / ``dv_kms`` per component, plus
+            a reserved ``"continuum"`` key with ``c0`` / ``c1`` -- keyed by the
+            ids from :meth:`summary`. Inverted to the sampler's free parameters
+            and passed to ``pm.sample(initvals=...)``; the data-driven priors are
+            untouched, so it cannot bias the result. Values on a tied / fixed /
+            ratio axis are ignored with a warning; ``None`` is the default
+            automatic start.
         random_seed : int, optional
             Seed for reproducibility.
         progressbar : bool, default False
@@ -324,6 +342,15 @@ class LineFitSetup:
         ImportError
             If the optional ``mcmc`` extra (PyMC) is not installed.
         """
+        # Validate init_guess up front (cheap, no PyMC) so a typo'd id fails fast.
+        from noobfriend.inference.spectrum._initvals import normalize_init
+
+        normalized_init = (
+            normalize_init(init_guess, [c.id for c in self.components])
+            if init_guess
+            else None
+        )
+
         try:
             import pymc as pm
         except (
@@ -343,11 +370,15 @@ class LineFitSetup:
             pad_kms=pad_kms,
             continuum_degree=continuum_degree,
             jitter=jitter,
+            init_guess=normalized_init,
         )
         # Only the default PyMC backend forks Python workers; pick a safe start
         # method there. JAX-based backends manage their own chains.
         if mp_ctx is not None and nuts_sampler == "pymc":
             sample_kwargs.setdefault("mp_ctx", mp_ctx)
+        # Manual start values (inverted from init_guess); user-passed initvals win.
+        if bundle.initvals:
+            sample_kwargs.setdefault("initvals", bundle.initvals)
         with bundle.model:
             idata = pm.sample(
                 draws=draws,
@@ -387,9 +418,41 @@ class LineFitSetup:
 
 def _default_model_name(lines: list[NoobLine]) -> str:
     """Auto-name a model by its first line and that line's component count."""
-    first = lines[0].linename
-    n = sum(1 for line in lines if line.linename == first)
-    return f"{first} {n}-component model"
+    first = lines[0]
+    label = first.linename or first.custom_id or "line"
+    if first.linename is not None:
+        n = sum(1 for line in lines if line.linename == first.linename)
+    else:
+        n = len(lines)
+    return f"{label} {n}-component model"
+
+
+def _centre_wavelengths(
+    line: NoobLine, spectrum: NoobSpectrum
+) -> tuple[float | None, float]:
+    """Return ``(rest_wavelength, centre_wavelength)`` in the spectrum frame.
+
+    For a rest line the rest wavelength is converted into the spectrum's
+    ``wave_unit`` and the systemic centre is ``(1 + z) * rest`` (requiring the
+    spectrum's redshift). For an observed line there is no rest wavelength and the
+    centre is the observed centre converted into the frame -- ``z`` is unused.
+
+    Raises
+    ------
+    ValueError
+        If a rest-frame line is used on a spectrum with no redshift
+        (``z is None``).
+    """
+    if line.frame == "observed":
+        return None, convert(line.observed_center, line.unit, spectrum.wave_unit)
+    if spectrum.z is None:
+        raise ValueError(
+            f"rest-frame line {line.linename!r} needs the spectrum's redshift; "
+            "pass z=... to NoobSpectrum.from_1d/from_2d, or declare the line in "
+            "the observed frame with NoobLine.observed(...)."
+        )
+    rest = convert(line.rest_wavelength, line.unit, spectrum.wave_unit)
+    return rest, (1.0 + spectrum.z) * rest
 
 
 def build_setup(
@@ -433,13 +496,13 @@ def build_setup(
         template = get_template(line.component)
         parent = line.parent
         parent_id = None if parent is None else id_by_obj[id(parent)]
+        rest_wl, centre_wl = _centre_wavelengths(line, spectrum)
         resolved.append(
             ResolvedComponent(
                 id=id_by_obj[id(line)],
                 line=line,
-                rest_wavelength=convert(
-                    line.rest_wavelength, line.unit, spectrum.wave_unit
-                ),
+                rest_wavelength=rest_wl,
+                centre_wavelength=centre_wl,
                 template=template,
                 centre=_resolve_centre(line, parent_id, spectrum.wave_unit),
                 width=_resolve_width(line, parent, parent_id, template),

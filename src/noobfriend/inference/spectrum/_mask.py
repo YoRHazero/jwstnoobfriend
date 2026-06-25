@@ -181,8 +181,8 @@ def compute_auto_mask(
     n = wl.size
     degree = int(continuum_degree) if n >= 4 else 0
 
-    geom = component_geometry(comps, spectrum.z)
-    init = initial_estimates(spectrum, comps, wl, fl, degree=degree)
+    geom = component_geometry(comps)
+    init = initial_estimates(comps, wl, fl, degree=degree)
 
     # Initial-guess line model (lines only) and continuum, for the core region.
     line = np.zeros_like(wl)

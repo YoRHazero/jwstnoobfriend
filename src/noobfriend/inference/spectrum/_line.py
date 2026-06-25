@@ -1,6 +1,6 @@
 """``NoobLine``: one emission/absorption line at one kinematic component.
 
-A :class:`NoobLine` is a *declaration*, independent of any spectrum: a rest
+A :class:`NoobLine` is a *declaration*, independent of any spectrum: a centre
 wavelength, a ``component`` (line-shape type; see
 :mod:`noobfriend.inference.spectrum._template`), and how this line's three
 parameter axes -- centre velocity, velocity FWHM, and flux -- relate to a
@@ -8,6 +8,13 @@ parameter axes -- centre velocity, velocity FWHM, and flux -- relate to a
 which returns a new (frozen) line inheriting the parent's identity fields and
 tying the requested axes to it. Assembling a list of :class:`NoobLine` and
 handing it to :meth:`NoobSpectrum.setup` compiles the tie graph.
+
+A line is either rest-frame (``frame="rest"``, the default: a
+``rest_wavelength`` placed at ``(1 + z) * rest`` using the spectrum's redshift)
+or observed-frame (built with :meth:`NoobLine.observed`: an ``observed_center``
+placed directly, for blind-search features of unknown identity and redshift).
+The two frames are otherwise identical -- every tie, including a shared velocity,
+works the same -- but a derive chain may not cross frames.
 
 Each axis is specified the same way -- ``None`` / a number / a ``(lo, hi)``
 tuple -- with an optional absolute override for FWHM and flux:
@@ -93,16 +100,29 @@ class NoobLine:
 
     Parameters
     ----------
-    linename : str
+    linename : str, optional
         Line name (e.g. ``"Halpha"``); lines sharing a name are grouped when ids
-        are generated.
+        are generated. Required for a ``frame="rest"`` line; optional for an
+        ``frame="observed"`` one (an unnamed observed line is auto-assigned a
+        ``custom_id`` built from its centre and component).
+    frame : {"rest", "observed"}, default "rest"
+        Whether the line centre is given as a rest wavelength (``"rest"``, the
+        systemic observed centre is ``(1 + z) * rest_wavelength``) or directly as
+        an observed wavelength (``"observed"``, no redshift involved -- the
+        blind-search case). An observed line is identical to a rest line in every
+        other respect (every tie, including a shared velocity, still applies).
     rest_wavelength : float
-        Rest-frame wavelength in ``unit``. Required for a root line; inherited by
-        :meth:`derive` when omitted.
+        Rest-frame wavelength in ``unit``. Required for a ``frame="rest"`` root
+        line; inherited by :meth:`derive` when omitted; must be ``None`` for an
+        observed line.
+    observed_center : float
+        Observed-frame centre wavelength in ``unit`` (e.g. a linefinder feature
+        position). Required for a ``frame="observed"`` root line; must be ``None``
+        for a rest line. Build observed lines with :meth:`observed`.
     unit : WaveUnit
-        Wavelength unit of ``rest_wavelength`` (``"A"``, ``"nm"``, or ``"um"``);
-        converted into the spectrum's ``wave_unit`` at setup. Required for a root
-        line.
+        Wavelength unit of ``rest_wavelength`` / ``observed_center`` (``"A"``,
+        ``"nm"``, or ``"um"``); converted into the spectrum's ``wave_unit`` at
+        setup. Required for a root line.
     component : str
         Line-shape type; one of the registered templates (``narrow`` / ``broad``
         / ``absorption`` by default). Sets the sign and default width prior, and
@@ -130,9 +150,11 @@ class NoobLine:
         build a root line.
     """
 
-    linename: str
+    linename: str | None = None
     _: KW_ONLY
+    frame: Literal["rest", "observed"] = "rest"
     rest_wavelength: float | None = None
+    observed_center: float | None = None
     unit: WaveUnit | None = None
     component: str | None = None
     custom_id: str | None = None
@@ -150,71 +172,177 @@ class NoobLine:
         Raises
         ------
         ValueError
-            On a missing/invalid identity field, an unknown ``component``, a
-            malformed axis spec, a per-axis conflict (both centre specs, a forced
-            FWHM lock with ``abs_fwhm``, or ``flux_ratio`` with ``abs_flux``), or a
-            parent-only option (``lock_fwhm=True`` / ``flux_ratio``) on a root line.
+            On an invalid ``frame``, a missing/invalid identity field for that
+            frame, an unknown ``component``, a malformed axis spec, a per-axis
+            conflict (both centre specs, a forced FWHM lock with ``abs_fwhm``, or
+            ``flux_ratio`` with ``abs_flux``), a parent-only option
+            (``lock_fwhm=True`` / ``flux_ratio``) on a root line, or a derive
+            chain that crosses frames.
         """
-        if not self.linename:
-            raise ValueError("linename must be a non-empty string.")
-        if self.rest_wavelength is None or self.rest_wavelength <= 0:
-            raise ValueError(
-                f"{self.linename}: rest_wavelength must be a positive number."
-            )
+        if self.frame not in ("rest", "observed"):
+            raise ValueError(f"frame must be 'rest' or 'observed', got {self.frame!r}.")
+        if self.frame == "rest":
+            if not self.linename:
+                raise ValueError("linename must be a non-empty string.")
+            if self.observed_center is not None:
+                raise ValueError(
+                    f"{self.linename}: observed_center is only for frame='observed'."
+                )
+            if self.rest_wavelength is None or self.rest_wavelength <= 0:
+                raise ValueError(
+                    f"{self.linename}: rest_wavelength must be a positive number."
+                )
+        else:  # observed
+            if self.rest_wavelength is not None:
+                raise ValueError(
+                    "rest_wavelength is only for frame='rest'; an observed line "
+                    "takes observed_center."
+                )
+            if self.observed_center is None or self.observed_center <= 0:
+                raise ValueError(
+                    "observed_center must be a positive number for frame='observed'."
+                )
+
+        label = self.linename or f"obs@{self.observed_center:g}"
         if self.unit is None:
-            raise ValueError(
-                f"{self.linename}: unit is required (one of {WAVE_UNITS})."
-            )
-        check_unit(self.unit, self.linename)
+            raise ValueError(f"{label}: unit is required (one of {WAVE_UNITS}).")
+        check_unit(self.unit, label)
         if self.component is None:
-            raise ValueError(f"{self.linename}: component is required.")
+            raise ValueError(f"{label}: component is required.")
         get_template(self.component)  # validates the component name
 
-        if self.lock_fwhm is not None and not isinstance(self.lock_fwhm, bool):
-            raise ValueError(
-                f"{self.linename}: lock_fwhm must be True, False, or None."
+        # An unnamed observed line gets an auto component id from its centre and
+        # component (a final id, hence it carries the component); a named one
+        # (linename or custom_id given) is left to the normal id scheme.
+        if (
+            self.frame == "observed"
+            and self.linename is None
+            and self.custom_id is None
+        ):
+            object.__setattr__(
+                self,
+                "custom_id",
+                _observed_id(self.observed_center, self.unit, self.component),
             )
 
-        classify_spec(self.delta_v_kms, f"{self.linename}.delta_v_kms")
-        classify_spec(self.delta_wavelength, f"{self.linename}.delta_wavelength")
-        classify_spec(self.abs_fwhm, f"{self.linename}.abs_fwhm")
-        classify_spec(self.flux_ratio, f"{self.linename}.flux_ratio")
-        classify_spec(self.abs_flux, f"{self.linename}.abs_flux")
+        if self.lock_fwhm is not None and not isinstance(self.lock_fwhm, bool):
+            raise ValueError(f"{label}: lock_fwhm must be True, False, or None.")
+
+        classify_spec(self.delta_v_kms, f"{label}.delta_v_kms")
+        classify_spec(self.delta_wavelength, f"{label}.delta_wavelength")
+        classify_spec(self.abs_fwhm, f"{label}.abs_fwhm")
+        classify_spec(self.flux_ratio, f"{label}.flux_ratio")
+        classify_spec(self.abs_flux, f"{label}.abs_flux")
 
         if self.delta_v_kms is not None and self.delta_wavelength is not None:
             raise ValueError(
-                f"{self.linename}: give delta_v_kms or delta_wavelength, not both."
+                f"{label}: give delta_v_kms or delta_wavelength, not both."
             )
         if self.lock_fwhm is True and self.abs_fwhm is not None:
             raise ValueError(
-                f"{self.linename}: lock_fwhm=True conflicts with abs_fwhm "
+                f"{label}: lock_fwhm=True conflicts with abs_fwhm "
                 "(absolute override vs lock to parent)."
             )
         if self.flux_ratio is not None and self.abs_flux is not None:
-            raise ValueError(f"{self.linename}: give flux_ratio or abs_flux, not both.")
+            raise ValueError(f"{label}: give flux_ratio or abs_flux, not both.")
 
         if self.parent is None:
             if self.lock_fwhm is True:
                 raise ValueError(
-                    f"{self.linename}: lock_fwhm=True needs a parent; this is a "
-                    "root line. Derive it with .derive() to tie a width."
+                    f"{label}: lock_fwhm=True needs a parent; this is a root line. "
+                    "Derive it with .derive() to tie a width."
                 )
             if self.flux_ratio is not None:
                 raise ValueError(
-                    f"{self.linename}: flux_ratio needs a parent; this is a root "
-                    "line. Use abs_flux for an absolute prior."
+                    f"{label}: flux_ratio needs a parent; this is a root line. Use "
+                    "abs_flux for an absolute prior."
                 )
+        elif self.parent.frame != self.frame:
+            raise ValueError(
+                f"{label}: a derived line must share its parent's frame "
+                f"({self.parent.frame!r}); rest and observed lines cannot tie "
+                "across frames."
+            )
 
     @property
     def is_root(self) -> bool:
         """Whether this line was built directly (no derive parent)."""
         return self.parent is None
 
+    @property
+    def center(self) -> float | None:
+        """The line's centre wavelength in ``unit`` (rest or observed by frame)."""
+        return (
+            self.observed_center if self.frame == "observed" else self.rest_wavelength
+        )
+
+    @classmethod
+    def observed(
+        cls,
+        center: float,
+        *,
+        unit: WaveUnit,
+        component: str,
+        linename: str | None = None,
+        custom_id: str | None = None,
+        delta_v_kms: Spec = None,
+        delta_wavelength: Spec = None,
+        lock_fwhm: bool | None = None,
+        abs_fwhm: Spec = None,
+        flux_ratio: Spec = None,
+        abs_flux: Spec = None,
+    ) -> NoobLine:
+        """Build an observed-frame (blind-search) line at a known observed centre.
+
+        The centre is given directly in the observed frame (no redshift); the line
+        behaves exactly like a rest line otherwise -- ``delta_v_kms`` /
+        ``delta_wavelength`` are the centre's float around ``center``, and width
+        (km/s, intrinsic) and flux are unchanged. Tie companions with
+        :meth:`derive` (an observed line ties velocity / width / flux to another
+        observed line just like rest lines, but cannot tie across frames).
+
+        Parameters
+        ----------
+        center : float
+            Observed-frame centre wavelength in ``unit``.
+        unit : WaveUnit
+            Wavelength unit of ``center``.
+        component : str
+            Line-shape type (a registered template name).
+        linename : str, optional
+            A label; when omitted the line is auto-assigned a ``custom_id`` built
+            from ``center`` and ``component`` (e.g. ``"Line_obs_6712_narrow"``).
+            Pass a ``linename`` to group several observed components under one
+            name (``"<name>.<component>"`` ids), like a rest line.
+        custom_id, delta_v_kms, delta_wavelength, lock_fwhm, abs_fwhm, flux_ratio, abs_flux
+            As on :class:`NoobLine`.
+
+        Returns
+        -------
+        NoobLine
+            A root observed-frame line.
+        """
+        return cls(
+            linename=linename,
+            frame="observed",
+            observed_center=center,
+            unit=unit,
+            component=component,
+            custom_id=custom_id,
+            delta_v_kms=delta_v_kms,
+            delta_wavelength=delta_wavelength,
+            lock_fwhm=lock_fwhm,
+            abs_fwhm=abs_fwhm,
+            flux_ratio=flux_ratio,
+            abs_flux=abs_flux,
+        )
+
     def derive(
         self,
         linename: str | None = None,
         *,
         rest_wavelength: float | None = None,
+        observed_center: float | None = None,
         unit: WaveUnit | None = None,
         component: str | None = None,
         custom_id: str | None = None,
@@ -236,8 +364,9 @@ class NoobLine:
         Parameters
         ----------
         linename : str, optional
-            New line name; defaults to the parent's.
-        rest_wavelength, unit, component : optional
+            New line name; defaults to the parent's. The derived line keeps the
+            parent's ``frame``.
+        rest_wavelength, observed_center, unit, component : optional
             Inherited from the parent when omitted.
         custom_id : str, optional
             Id override for the derived line.
@@ -251,8 +380,12 @@ class NoobLine:
         """
         return NoobLine(
             linename=self.linename if linename is None else linename,
+            frame=self.frame,
             rest_wavelength=(
                 self.rest_wavelength if rest_wavelength is None else rest_wavelength
+            ),
+            observed_center=(
+                self.observed_center if observed_center is None else observed_center
             ),
             unit=self.unit if unit is None else unit,
             component=self.component if component is None else component,
@@ -268,13 +401,26 @@ class NoobLine:
 
     def __repr__(self) -> str:
         """Concise representation that does not recurse into ``parent``."""
-        bits = [
-            repr(self.linename),
-            f"rest={self.rest_wavelength}{self.unit or ''}",
-            f"component={self.component!r}",
-        ]
-        if self.custom_id is not None:
+        name = self.linename if self.linename is not None else self.custom_id
+        if self.frame == "observed":
+            centre = f"obs={self.observed_center}{self.unit or ''}"
+        else:
+            centre = f"rest={self.rest_wavelength}{self.unit or ''}"
+        bits = [repr(name), centre, f"component={self.component!r}"]
+        if self.custom_id is not None and self.linename is not None:
             bits.append(f"custom_id={self.custom_id!r}")
         if self.parent is not None:
-            bits.append(f"from={self.parent.linename}.{self.parent.component}")
+            pname = self.parent.linename or self.parent.custom_id
+            bits.append(f"from={pname}.{self.parent.component}")
         return f"NoobLine({', '.join(bits)})"
+
+
+def _observed_id(center: float, unit: str, component: str) -> str:
+    """Synthesize a component id for an unnamed observed line from its centre.
+
+    Uses a clean integer tag for Angstrom/nm-scale centres and a short
+    dot-sanitized form for sub-unit (micron) centres, so the id stays readable
+    (e.g. ``"Line_obs_6712_narrow"``).
+    """
+    tag = str(int(center)) if center >= 10 else format(center, ".4g").replace(".", "p")
+    return f"Line_obs_{tag}_{component}"

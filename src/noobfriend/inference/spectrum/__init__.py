@@ -4,12 +4,16 @@ Build a :class:`NoobSpectrum` from a 1-D (or collapsed 2-D) spectrum, declare
 the lines as :class:`NoobLine` objects -- deriving related lines with
 :meth:`NoobLine.derive` to tie their velocity, width, and flux -- then call
 :meth:`NoobSpectrum.setup` to compile and inspect the model
-(:class:`LineFitSetup`) before sampling. Component shapes (``narrow`` / ``broad``
-/ ``absorption``) come from :class:`ComponentTemplate`; add custom ones with
+(:class:`LineFitSetup`), and :meth:`LineFitSetup.run` to sample it into a
+:class:`LineFitResult`. Component shapes (``narrow`` / ``broad`` /
+``absorption``) come from :class:`ComponentTemplate`; add custom ones with
 :func:`register_template`.
 
-The PyMC sampling layer and its :class:`LineFitResult` are wired in a later
-step; today's surface compiles, validates, and previews the model graph.
+Lines are rest-frame by default; for blind-search features of unknown identity
+and redshift, build observed-frame lines with :meth:`NoobLine.observed` (the
+spectrum's ``z`` may then be ``None``). For a stubborn fit, hand
+:meth:`LineFitSetup.run` an ``init_guess`` of physical start values -- a
+sampling start only, which never changes the data-driven priors.
 """
 
 from noobfriend.inference.spectrum._line import NoobLine

@@ -22,7 +22,6 @@ from noobfriend.inference.spectrum._window import C_KMS
 
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum._setup import ResolvedAxis, ResolvedComponent
-    from noobfriend.inference.spectrum._spectrum import NoobSpectrum
 
 _FWHM_TO_SIGMA: float = 1.0 / 2.3548200450309493
 _SQRT_2PI: float = float(np.sqrt(2.0 * np.pi))
@@ -76,24 +75,24 @@ def _offset_init_kms(axis: ResolvedAxis, centre_sys: float) -> float:
 
 
 def component_geometry(
-    components: tuple[ResolvedComponent, ...], z: float
+    components: tuple[ResolvedComponent, ...],
 ) -> dict[str, dict[str, float]]:
     """Per-component ``{sign, dv, fwhm, mu, sigma_w}`` at the initial guess.
 
     Centres use the initial velocity offset (0 unless the centre is fixed/bounded
-    off systemic); widths use the resolved FWHM init (template default, an
-    absolute override, or the parent's when tied). Shared by the flux solve and
-    the pre-fit preview.
+    off systemic) applied to each component's ``centre_wavelength``; widths use
+    the resolved FWHM init (template default, an absolute override, or the
+    parent's when tied). Shared by the flux solve and the pre-fit preview.
     """
     from noobfriend.inference.spectrum._pymc_model import _topo_order
 
     out: dict[str, dict[str, float]] = {}
     for comp in _topo_order(components):
-        centre_sys = (1.0 + z) * comp.rest_wavelength
+        centre_sys = comp.centre_wavelength
         base = comp.centre.base_id
         base_dv = out[base]["dv"] if base is not None else 0.0
         dv = base_dv + _offset_init_kms(comp.centre, centre_sys)
-        mu = (1.0 + z) * comp.rest_wavelength * (1.0 + dv / C_KMS)
+        mu = comp.centre_wavelength * (1.0 + dv / C_KMS)
         wax = comp.width
         if wax.kind == "tied":
             fwhm = out[wax.base_id]["fwhm"]
@@ -192,7 +191,6 @@ def _solve_amplitudes(
 
 
 def initial_estimates(
-    spectrum: NoobSpectrum,
     components: tuple[ResolvedComponent, ...],
     wl: np.ndarray,
     flux: np.ndarray,
@@ -203,8 +201,6 @@ def initial_estimates(
 
     Parameters
     ----------
-    spectrum : NoobSpectrum
-        The spectrum (for the redshift).
     components : tuple of ResolvedComponent
         The compiled components.
     wl, flux : numpy.ndarray
@@ -219,7 +215,7 @@ def initial_estimates(
     wl = np.asarray(wl, dtype=float)
     flux = np.asarray(flux, dtype=float)
     lambda0 = float(np.mean(wl))
-    geometry = component_geometry(components, spectrum.z)
+    geometry = component_geometry(components)
     c0, c1, fluxes, model = _solve_amplitudes(
         components, geometry, wl, flux, lambda0, degree
     )

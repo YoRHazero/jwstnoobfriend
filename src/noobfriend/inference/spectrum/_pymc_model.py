@@ -23,9 +23,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from noobfriend.inference.spectrum._init import initial_estimates
+from noobfriend.inference.spectrum._initvals import resolve_initvals
 from noobfriend.inference.spectrum._window import C_KMS, select_window
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from noobfriend.inference.spectrum._setup import (
         LineFitSetup,
         ResolvedAxis,
@@ -88,6 +91,10 @@ class ModelBundle:
         Continuum reference wavelength.
     window_wl, window_flux, window_error : numpy.ndarray
         The in-window data the model was conditioned on.
+    initvals : dict
+        Manual sampling start values (free RV name -> value), inverted from the
+        physical ``init_guess`` and clipped into each RV's realised support.
+        Empty when no ``init_guess`` was given; passed verbatim to ``pm.sample``.
     """
 
     model: Any
@@ -98,6 +105,7 @@ class ModelBundle:
     window_wl: np.ndarray
     window_flux: np.ndarray
     window_error: np.ndarray
+    initvals: dict[str, float]
 
 
 def _topo_order(
@@ -214,6 +222,7 @@ def build_model(
     pad_kms: float = 5000.0,
     continuum_degree: int = 1,
     jitter: bool = False,
+    init_guess: Mapping[str, Mapping[str, float]] | None = None,
 ) -> ModelBundle:
     """Compile ``setup`` into a PyMC model over the fitting window.
 
@@ -229,6 +238,11 @@ def build_model(
         Local continuum polynomial degree (forced to 0 for tiny windows).
     jitter : bool, default False
         Add a fractional error-inflation term to the likelihood.
+    init_guess : mapping, optional
+        Validated physical start values (see
+        :func:`~noobfriend.inference.spectrum._initvals.normalize_init`); inverted
+        into free-RV start values for ``ModelBundle.initvals`` without touching any
+        prior. ``None`` leaves ``initvals`` empty.
 
     Returns
     -------
@@ -246,9 +260,15 @@ def build_model(
     fl = spectrum.flux[mask].astype(float)
     er = spectrum.error[mask].astype(float)
     degree = int(continuum_degree) if wl.size >= 4 else 0
-    init = initial_estimates(spectrum, comps, wl, fl, degree=degree)
-    z = spectrum.z
+    init = initial_estimates(comps, wl, fl, degree=degree)
     fwhm_inst = None if spectrum.R is None else C_KMS / spectrum.R
+    initvals = (
+        resolve_initvals(
+            comps, init_guess, fwhm_inst=fwhm_inst, continuum_degree=degree
+        )
+        if init_guess
+        else {}
+    )
 
     exprs: dict[str, dict[str, Any]] = {}
     metas: list[ComponentMeta] = []
@@ -265,7 +285,7 @@ def build_model(
 
         for comp in _topo_order(comps):
             cid = comp.id
-            centre_sys = (1.0 + z) * comp.rest_wavelength
+            centre_sys = comp.centre_wavelength
             base_dv = (
                 exprs[comp.centre.base_id]["dv"]
                 if comp.centre.base_id is not None
@@ -276,7 +296,7 @@ def build_model(
                 base_dv + _build_offset(pm, pt, comp.centre, centre_sys, cid, bounded),
             )
             mu = pm.Deterministic(
-                f"{cid}__mu", (1.0 + z) * comp.rest_wavelength * (1.0 + dv / C_KMS)
+                f"{cid}__mu", comp.centre_wavelength * (1.0 + dv / C_KMS)
             )
             fwhm = pm.Deterministic(
                 f"{cid}__fwhm_kms",
@@ -328,4 +348,5 @@ def build_model(
         window_wl=wl,
         window_flux=fl,
         window_error=er,
+        initvals=initvals,
     )

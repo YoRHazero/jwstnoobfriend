@@ -45,8 +45,11 @@ class NoobSpectrum:
     wavelength, flux, error : numpy.ndarray
         Equal-length 1-D arrays. ``wavelength`` is in ``wave_unit``; ``error`` is
         the 1-sigma uncertainty on ``flux``.
-    z : float
-        Systemic redshift; line centres default to ``(1 + z) * rest_wavelength``.
+    z : float or None
+        Systemic redshift; rest-frame line centres default to
+        ``(1 + z) * rest_wavelength``. ``None`` for a blind / observed-frame fit
+        with no redshift -- then every line must be observed-frame (a rest-frame
+        line on a ``z is None`` spectrum is rejected at setup).
     wave_unit : WaveUnit
         Wavelength unit (``"A"``, ``"nm"``, or ``"um"``); a line's rest wavelength
         is converted into this frame at setup, and all fitted quantities come out
@@ -64,7 +67,7 @@ class NoobSpectrum:
     wavelength: np.ndarray
     flux: np.ndarray
     error: np.ndarray
-    z: float
+    z: float | None
     wave_unit: WaveUnit
     R: float | None = None
     mask_excluded: np.ndarray | None = None
@@ -76,7 +79,7 @@ class NoobSpectrum:
         flux: ArrayLike,
         error: ArrayLike,
         *,
-        z: float,
+        z: float | None = None,
         wave_unit: WaveUnit,
         R: float | None = None,
         mask_excluded: ArrayLike | None = None,
@@ -87,8 +90,9 @@ class NoobSpectrum:
         ----------
         wavelength, flux, error : array_like
             Equal-length 1-D arrays.
-        z : float
-            Systemic redshift (``> -1``).
+        z : float or None, optional
+            Systemic redshift (``> -1``). ``None`` (the default) for a blind /
+            observed-frame fit; rest-frame lines then require it at setup.
         wave_unit : WaveUnit
             Wavelength unit of ``wavelength`` (``"A"``, ``"nm"``, or ``"um"``).
         R : float or None, optional
@@ -129,7 +133,7 @@ class NoobSpectrum:
         *,
         collapse_window: tuple[int, int],
         dispersion: Literal["row", "column"] = "row",
-        z: float,
+        z: float | None = None,
         wave_unit: WaveUnit,
         R: float | None = None,
         mask_excluded: ArrayLike | None = None,
@@ -299,8 +303,9 @@ class NoobSpectrum:
         lo = float(np.nanmin(self.wavelength)) if n else float("nan")
         hi = float(np.nanmax(self.wavelength)) if n else float("nan")
         r = "None" if self.R is None else f"{self.R:g}"
+        z = "None" if self.z is None else f"{self.z:g}"
         return (
-            f"NoobSpectrum(n={n}, z={self.z:g}, unit={self.wave_unit!r}, "
+            f"NoobSpectrum(n={n}, z={z}, unit={self.wave_unit!r}, "
             f"range=[{lo:g}, {hi:g}], R={r})"
         )
 
@@ -309,24 +314,31 @@ def _validated(
     wl: np.ndarray,
     fl: np.ndarray,
     er: np.ndarray,
-    z: float,
+    z: float | None,
     wave_unit: WaveUnit,
     R: float | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, WaveUnit, float | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float | None, WaveUnit, float | None]:
     """Validate the shared scalar metadata and return the constructor tuple.
 
     Raises
     ------
     ValueError
-        If ``z <= -1``, ``wave_unit`` is not a valid unit, or ``R`` is
-        non-positive.
+        If ``z <= -1`` (when given), ``wave_unit`` is not a valid unit, or ``R``
+        is non-positive.
     """
-    if z <= -1:
+    if z is not None and z <= -1:
         raise ValueError(f"z must be > -1, got {z}.")
     check_unit(wave_unit, "wave_unit")
     if R is not None and R <= 0:
         raise ValueError(f"R must be positive, got {R}.")
-    return wl, fl, er, float(z), wave_unit, (None if R is None else float(R))
+    return (
+        wl,
+        fl,
+        er,
+        (None if z is None else float(z)),
+        wave_unit,
+        (None if R is None else float(R)),
+    )
 
 
 def _validated_mask(mask: ArrayLike | None, wl: np.ndarray) -> np.ndarray | None:
