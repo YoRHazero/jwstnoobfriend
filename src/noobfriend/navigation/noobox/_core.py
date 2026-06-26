@@ -12,7 +12,7 @@ import os
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from noobfriend.core.display import track
 from noobfriend.core.env import get_settings, stage_path_var
@@ -185,9 +185,9 @@ class NooBox:
     A box is assembled from single-stage boxes (:meth:`from_directory`) stitched
     together with :meth:`merge`, which resolves the cross-stage lineage as it
     goes. Subsetting (:meth:`filter`, :meth:`select`), grouping
-    (:meth:`group_by`, :meth:`distinct`) and the lineage boundary
-    (:meth:`leaves`, :meth:`roots`) all return lightweight views sharing this
-    box's cache.
+    (:meth:`group_by`, :meth:`distinct`), family retrieval (:meth:`family`) and
+    the lineage boundary (:meth:`leaves`, :meth:`roots`) all return lightweight
+    views sharing this box's cache.
 
     Parameters
     ----------
@@ -465,6 +465,157 @@ class NooBox:
             for book in self._books.values()
             if not any(pid in self._books for pid in book.parent_ids)
         )
+
+    @overload
+    def family(
+        self,
+        book: NooBook | str,
+        *,
+        split_parents: Literal[False] = False,
+        copy: bool = False,
+    ) -> "NooBox": ...
+    @overload
+    def family(
+        self,
+        book: NooBook | str,
+        *,
+        split_parents: Literal[True],
+        copy: bool = False,
+    ) -> list["NooBox"]: ...
+    def family(
+        self,
+        book: NooBook | str,
+        *,
+        split_parents: bool = False,
+        copy: bool = False,
+    ) -> "NooBox | list[NooBox]":
+        """Return the pipeline products that pass through ``book``.
+
+        The default result is a lightweight view containing ``book``, every
+        upstream product reachable through :attr:`NooBook.parent_ids`, and every
+        downstream product that lists any visited product as a parent. Sibling
+        branches that share an ancestor but do not pass through ``book`` are not
+        included. This makes ``box.family(book)`` the notebook-facing way to
+        inspect one product's stage ladder without reading any FITS bytes.
+
+        For stage-3 aggregates, pass ``split_parents=True`` to get one branch
+        per immediate parent present in this box. Each returned branch contains
+        the requested product plus that parent's upstream products.
+
+        Parent coverage is enforced from the manifest lineage: a product with
+        one parent id must have that parent in the box, while a product with
+        multiple parent ids must have at least one present parent. Missing
+        parents on a multi-parent product are allowed, so a partially loaded
+        stage-3 family can still be inspected.
+
+        Parameters
+        ----------
+        book : NooBook or str
+            Product, or product id, whose family to retrieve. It must already be
+            a member of this box.
+        split_parents : bool, default False
+            Return one branch per immediate parent instead of one merged family.
+            Mainly useful for multi-parent stage-3 products.
+        copy : bool, default False
+            When ``False`` (default), return view boxes sharing this box's
+            :class:`NooBook` instances and byte cache. When ``True``, return
+            independent copies over fresh byte caches.
+
+        Returns
+        -------
+        NooBox or list of NooBox
+            One family view by default, or one branch per present parent when
+            ``split_parents=True``.
+
+        Raises
+        ------
+        KeyError
+            If ``book`` is not present in this box.
+        ValueError
+            If required parent coverage is missing, or ``split_parents=True`` is
+            requested for a product with no parent ids.
+        """
+        seed = self._member(book)
+        if split_parents:
+            if not seed.parent_ids:
+                raise ValueError(
+                    f"cannot split family for {seed.id!r}: product has no parent_ids."
+                )
+            return [
+                self._family_box(self._ancestor_ids(parent) | {seed.id}, copy=copy)
+                for parent in self._present_parent_books(seed)
+            ]
+
+        ids = self._ancestor_ids(seed) | self._descendant_ids(seed)
+        return self._family_box(ids, copy=copy)
+
+    def _member(self, book: NooBook | str) -> NooBook:
+        """Return the in-box member represented by ``book``."""
+        book_id = book if isinstance(book, str) else book.id
+        try:
+            return self._books[book_id]
+        except KeyError as exc:
+            raise KeyError(f"book {book_id!r} is not in this NooBox.") from exc
+
+    def _present_parent_books(self, book: NooBook) -> list[NooBook]:
+        """Return present parents, enforcing the family parent-coverage rule."""
+        if not book.parent_ids:
+            return []
+
+        parents = [self._books[pid] for pid in book.parent_ids if pid in self._books]
+        if parents:
+            return parents
+
+        if len(book.parent_ids) == 1:
+            raise ValueError(
+                f"cannot build family for {book.id!r}: parent_id "
+                f"{book.parent_ids[0]!r} is not present in this NooBox."
+            )
+        raise ValueError(
+            f"cannot build family for {book.id!r}: none of its parent_ids are "
+            "present in this NooBox."
+        )
+
+    def _children_index(self) -> dict[str, list[NooBook]]:
+        """Return present parent id -> child books."""
+        index: dict[str, list[NooBook]] = {}
+        for child in self._books.values():
+            for parent_id in child.parent_ids:
+                if parent_id in self._books:
+                    index.setdefault(parent_id, []).append(child)
+        return index
+
+    def _ancestor_ids(self, seed: NooBook) -> set[str]:
+        """Return ``seed`` and its reachable upstream products."""
+        seen: set[str] = set()
+        stack = [seed]
+        while stack:
+            book = stack.pop()
+            if book.id in seen:
+                continue
+            seen.add(book.id)
+            stack.extend(self._present_parent_books(book))
+        return seen
+
+    def _descendant_ids(self, seed: NooBook) -> set[str]:
+        """Return ``seed`` and products downstream of it."""
+        children = self._children_index()
+        seen: set[str] = set()
+        stack = [seed]
+        while stack:
+            book = stack.pop()
+            if book.id in seen:
+                continue
+            seen.add(book.id)
+            stack.extend(children.get(book.id, ()))
+        return seen
+
+    def _family_box(self, book_ids: set[str], *, copy: bool) -> "NooBox":
+        """Return a family view or independent copy over ``book_ids``."""
+        family = self._view(
+            book for book in self._books.values() if book.id in book_ids
+        )
+        return family.copy() if copy else family
 
     def copy(self) -> "NooBox":
         """Return an independent deep copy: fresh books over a fresh byte cache.

@@ -48,6 +48,28 @@ def _exposure_book(
     )
 
 
+def _stage3_book(
+    parent_ids: tuple[str, ...],
+    *,
+    exposure: tuple[str, ...] = ("00001", "00002"),
+    program: str = "01345",
+) -> NooBook:
+    """Build an aggregate stage-3 NooBook with explicit parent ids."""
+    stem = f"jw{program}_tile_i2d"
+    return NooBook(
+        id=f"{stem}@3a",
+        location=f"/{stem}.fits",
+        stage="3a",
+        program_id=program,
+        observation=("001",),
+        visit=("001",),
+        ggsaa=("02201",),
+        exposure=exposure,
+        detector=None,
+        parent_ids=parent_ids,
+    )
+
+
 def _footprint(offset: float = 0.0) -> Footprint:
     return Footprint.from_corners(
         [
@@ -560,6 +582,97 @@ def test_leaves_and_roots():
     assert {b.id for b in box.roots()} == {rate.id}
     assert isinstance(box.leaves(), NooBox)
     assert box.leaves()._store is box._store
+
+
+def test_family_returns_view_over_products_through_book():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    two_b = _exposure_book("2b", "cal")
+    two_bi = _exposure_book("2bi", "cali")
+    box = _box(rate).merge(_box(cal)).merge(_box(two_b)).merge(_box(two_bi))
+
+    family = box.family(cal.id)
+
+    assert {book.id for book in family} == {rate.id, cal.id, two_b.id, two_bi.id}
+    assert family._store is box._store
+    assert family[cal.id] is box[cal.id]
+
+
+def test_family_keeps_sibling_branches_outside_seed_path():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    two_b = _exposure_book("2b", "cal")
+    two_bi = _exposure_book("2bi", "cali")
+    two_bii = _exposure_book("2bii", "calii")
+    box = _box(rate).merge(_box(cal)).merge(_box(two_b))
+    box.merge(_box(two_bi))
+    box.merge(_box(two_bii), parent="2b")
+
+    family = box.family(two_bi)
+
+    assert {book.id for book in family} == {rate.id, cal.id, two_b.id, two_bi.id}
+    assert two_bii.id not in family
+
+
+def test_family_split_parents_returns_stage3_parent_branches():
+    rate_a = _exposure_book("1b", "rate", exposure="00001")
+    cal_a = _exposure_book("2a", "cal", exposure="00001", parent_ids=(rate_a.id,))
+    two_bi_a = _exposure_book("2bi", "cali", exposure="00001", parent_ids=(cal_a.id,))
+    rate_b = _exposure_book("1b", "rate", exposure="00002")
+    cal_b = _exposure_book("2a", "cal", exposure="00002", parent_ids=(rate_b.id,))
+    two_bi_b = _exposure_book("2bi", "cali", exposure="00002", parent_ids=(cal_b.id,))
+    mosaic = _stage3_book((two_bi_a.id, two_bi_b.id))
+    box = _box(rate_a, cal_a, two_bi_a, rate_b, cal_b, two_bi_b, mosaic)
+
+    merged = box.family(mosaic)
+    branches = box.family(mosaic, split_parents=True)
+
+    assert {book.id for book in merged} == {
+        rate_a.id,
+        cal_a.id,
+        two_bi_a.id,
+        rate_b.id,
+        cal_b.id,
+        two_bi_b.id,
+        mosaic.id,
+    }
+    assert len(branches) == 2
+    assert [{book.id for book in branch} for branch in branches] == [
+        {rate_a.id, cal_a.id, two_bi_a.id, mosaic.id},
+        {rate_b.id, cal_b.id, two_bi_b.id, mosaic.id},
+    ]
+    assert all(branch._store is box._store for branch in branches)
+
+
+def test_family_requires_parent_coverage():
+    orphan = _exposure_book("2a", "cal", parent_ids=("missing@1b",))
+    with pytest.raises(ValueError, match="parent_id .* is not present"):
+        _box(orphan).family(orphan)
+
+    present = _exposure_book("2bi", "cali")
+    partial_mosaic = _stage3_book((present.id, "missing@2bi"))
+    assert {
+        book.id for book in _box(present, partial_mosaic).family(partial_mosaic)
+    } == {
+        present.id,
+        partial_mosaic.id,
+    }
+
+    missing_mosaic = _stage3_book(("missing-a@2bi", "missing-b@2bi"))
+    with pytest.raises(ValueError, match="none of its parent_ids"):
+        _box(missing_mosaic).family(missing_mosaic)
+
+
+def test_family_copy_returns_independent_box():
+    rate = _exposure_book("1b", "rate")
+    cal = _exposure_book("2a", "cal")
+    box = _box(rate).merge(_box(cal))
+
+    family = box.family(cal, copy=True)
+
+    assert {book.id for book in family} == {rate.id, cal.id}
+    assert family._store is not box._store
+    assert family[cal.id] is not box[cal.id]
 
 
 # -- introspection & persistence ----------------------------------------------
