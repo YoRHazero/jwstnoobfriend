@@ -786,3 +786,73 @@ def test_initvals_improve_convergence_under_short_warmup():
     # ... and the good start lands on the truth.
     assert res_good.flux("Halpha")[1] == pytest.approx(20.0, rel=0.2)
     assert res_good.flux("NII_6583")[1] == pytest.approx(9.0, rel=0.3)
+
+
+# --- per-fit narrow/broad FWHM discriminator --------------------------------
+
+
+def test_apply_narrow_broad_bound_moves_template_default_only():
+    from noobfriend.inference.spectrum._setup import apply_narrow_broad_bound
+    from noobfriend.inference.spectrum._template import get_template
+
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    broad = ha.derive(component="broad")
+    pinned = ha.derive(component="broad", abs_fwhm=(1500.0, 4000.0), custom_id="pinned")
+    absb = ha.derive(component="absorption")
+    comps = _spec().setup([ha, broad, pinned, absb]).components
+
+    # None -> unchanged (the same object, no copy).
+    assert apply_narrow_broad_bound(comps, None) is comps
+
+    out = {c.id: c for c in apply_narrow_broad_bound(comps, 600.0)}
+    assert out["Halpha.narrow"].width.bounds == (30.0, 600.0)  # narrow upper capped
+    assert out["Halpha.broad"].width.bounds == (600.0, 10000.0)  # broad lower raised
+    assert out["pinned"].width.bounds == (1500.0, 4000.0)  # explicit abs_fwhm kept
+    assert out["Halpha.absorption"].width.bounds == (50.0, 3000.0)  # absorption left
+
+    # the global registry is never mutated.
+    assert get_template("narrow").fwhm_kms_bounds == (30.0, 1000.0)
+    assert get_template("broad").fwhm_kms_bounds == (1000.0, 10000.0)
+
+    # non-positive and bound-collapsing values raise.
+    with pytest.raises(ValueError, match="must be positive"):
+        apply_narrow_broad_bound(comps, 0.0)
+    with pytest.raises(ValueError, match="collapses"):
+        apply_narrow_broad_bound(comps, 20.0)  # below the narrow floor (30)
+
+
+def test_narrow_broad_kms_threads_into_model_fwhm_bounds():
+    """The per-fit discriminator moves the narrow/broad fwhm prior support.
+
+    Checks the model's recorded truncation bounds (which the posterior support
+    nests inside) rather than sampling, so it is fast and deterministic. Skipped
+    without ``mcmc``.
+    """
+    pytest.importorskip("pymc")
+
+    from noobfriend.inference.spectrum._pymc_model import build_model
+
+    wl = np.linspace(6500.0, 6620.0, 240)
+    spec = NoobSpectrum.from_1d(
+        wl, np.ones_like(wl), np.full_like(wl, 0.1), z=0.0, wave_unit="A", R=3000.0
+    )
+    ha = NoobLine("Halpha", rest_wavelength=6562.8, unit="A", component="narrow")
+    broad = ha.derive(component="broad")
+    setup = spec.setup([ha, broad])
+
+    def fwhm_bounds(narrow_broad_kms):
+        bundle = build_model(setup, narrow_broad_kms=narrow_broad_kms)
+        bp = {(b.component_id, b.quantity): b for b in bundle.bounded}
+        return bp[("Halpha.narrow", "fwhm")], bp[("Halpha.broad", "fwhm")]
+
+    narrow6, broad6 = fwhm_bounds(600.0)
+    assert narrow6.upper == pytest.approx(600.0)  # narrow upper = the discriminator
+    assert broad6.lower == pytest.approx(600.0)  # broad lower = the discriminator
+
+    narrow4, broad4 = fwhm_bounds(400.0)
+    assert narrow4.upper == pytest.approx(400.0)  # support tracks the value
+    assert broad4.lower == pytest.approx(400.0)
+
+    narrow_d, broad_d = fwhm_bounds(None)  # default -> template bounds
+    assert narrow_d.upper == pytest.approx(1000.0)
+    assert broad_d.lower == pytest.approx(1000.0)

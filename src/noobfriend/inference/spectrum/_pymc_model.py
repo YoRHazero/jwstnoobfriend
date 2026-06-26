@@ -221,6 +221,7 @@ def build_model(
     window: tuple[float, float] | None = None,
     pad_kms: float = 5000.0,
     continuum_degree: int = 1,
+    narrow_broad_kms: float | None = None,
     jitter: bool = False,
     init_guess: Mapping[str, Mapping[str, float]] | None = None,
 ) -> ModelBundle:
@@ -236,6 +237,11 @@ def build_model(
         Velocity padding for the automatic window.
     continuum_degree : int, default 1
         Local continuum polynomial degree (forced to 0 for tiny windows).
+    narrow_broad_kms : float or None, optional
+        Per-fit narrow/broad FWHM discriminator (km/s); moves the ``narrow``
+        upper / ``broad`` lower template-default width bounds for this fit only
+        (see :func:`~noobfriend.inference.spectrum._setup.apply_narrow_broad_bound`).
+        ``None`` uses the template defaults.
     jitter : bool, default False
         Add a fractional error-inflation term to the likelihood.
     init_guess : mapping, optional
@@ -251,8 +257,10 @@ def build_model(
     import pymc as pm
     import pytensor.tensor as pt
 
+    from noobfriend.inference.spectrum._setup import apply_narrow_broad_bound
+
     spectrum = setup.spectrum
-    comps = setup.components
+    comps = apply_narrow_broad_bound(setup.components, narrow_broad_kms)
     mask, _ = select_window(
         spectrum, comps, window=window, pad_kms=pad_kms, exclude=setup.mask_excluded
     )

@@ -40,7 +40,13 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum._result import LineFitResult
     from noobfriend.inference.spectrum._spectrum import NoobSpectrum
 
-__all__ = ["LineFitSetup", "ResolvedAxis", "ResolvedComponent", "build_setup"]
+__all__ = [
+    "LineFitSetup",
+    "ResolvedAxis",
+    "ResolvedComponent",
+    "apply_narrow_broad_bound",
+    "build_setup",
+]
 
 #: Default free centre-velocity prior support (km/s) for a floating root line.
 DEFAULT_DV_BOUNDS: tuple[float, float] = (-300.0, 300.0)
@@ -280,6 +286,7 @@ class LineFitSetup:
         window: tuple[float, float] | None = None,
         pad_kms: float = 5000.0,
         continuum_degree: int = 1,
+        narrow_broad_kms: float | None = None,
         jitter: bool = False,
         init_guess: Mapping[str, Mapping[str, float]] | None = None,
         random_seed: int | None = None,
@@ -310,6 +317,12 @@ class LineFitSetup:
             Velocity padding for the automatic window.
         continuum_degree : int, default 1
             Local continuum polynomial degree.
+        narrow_broad_kms : float or None, optional
+            Per-fit narrow/broad FWHM discriminator (km/s): caps the ``narrow``
+            template's upper FWHM bound and raises the ``broad`` template's lower
+            bound to this value, for this fit only -- the global templates are not
+            mutated. An explicit per-line ``abs_fwhm`` keeps precedence;
+            ``absorption`` is unaffected. ``None`` uses the template defaults.
         jitter : bool, default False
             Add a fractional error-inflation term to the likelihood.
         init_guess : mapping, optional
@@ -369,6 +382,7 @@ class LineFitSetup:
             window=window,
             pad_kms=pad_kms,
             continuum_degree=continuum_degree,
+            narrow_broad_kms=narrow_broad_kms,
             jitter=jitter,
             init_guess=normalized_init,
         )
@@ -667,3 +681,67 @@ def _resolve_flux(line: NoobLine, parent_id: str | None) -> ResolvedAxis:
         assert isinstance(payload, tuple)  # noqa: S101
         return ResolvedAxis("free", bounds=payload, base_id=parent_id, relation="ratio")
     return ResolvedAxis("free", bounds=None)
+
+
+def apply_narrow_broad_bound(
+    components: tuple[ResolvedComponent, ...], narrow_broad_kms: float | None
+) -> tuple[ResolvedComponent, ...]:
+    """Locally move the narrow/broad FWHM discriminator for a single fit.
+
+    Returns a copy of ``components`` in which every *free, template-default*
+    ``narrow`` width has its upper FWHM bound set to ``narrow_broad_kms`` and every
+    such ``broad`` width its lower bound set to it -- the per-fit equivalent of
+    editing the ``narrow`` / ``broad`` templates, but without mutating the global
+    registry (it rewrites the resolved bounds via :func:`dataclasses.replace`).
+
+    A width is template-default exactly when it is free and its line set no
+    explicit ``abs_fwhm`` (the only other free case in :func:`_resolve_width`), so
+    an explicit per-line ``abs_fwhm`` keeps precedence and is left untouched;
+    ``absorption`` and any custom-named template are unaffected.
+
+    Parameters
+    ----------
+    components : tuple of ResolvedComponent
+        The compiled components.
+    narrow_broad_kms : float or None
+        The shared narrow-upper / broad-lower FWHM bound (km/s). ``None`` returns
+        ``components`` unchanged (the same object).
+
+    Returns
+    -------
+    tuple of ResolvedComponent
+
+    Raises
+    ------
+    ValueError
+        If ``narrow_broad_kms`` is non-positive, or moving a bound would collapse
+        it (``lower >= upper``) -- i.e. it falls outside the template's opposite
+        bound.
+    """
+    if narrow_broad_kms is None:
+        return components
+    if narrow_broad_kms <= 0:
+        raise ValueError(f"narrow_broad_kms must be positive, got {narrow_broad_kms}.")
+    out: list[ResolvedComponent] = []
+    for comp in components:
+        width = comp.width
+        if (
+            width.kind == "free"
+            and comp.line.abs_fwhm is None
+            and comp.template.name in ("narrow", "broad")
+        ):
+            assert width.bounds is not None  # noqa: S101  (a free axis is bounded)
+            lo, hi = width.bounds
+            if comp.template.name == "narrow":
+                new_bounds = (lo, narrow_broad_kms)
+            else:
+                new_bounds = (narrow_broad_kms, hi)
+            if not new_bounds[0] < new_bounds[1]:
+                raise ValueError(
+                    f"narrow_broad_kms={narrow_broad_kms} collapses the "
+                    f"{comp.template.name!r} FWHM bounds {(lo, hi)} to {new_bounds}; "
+                    "choose a value inside the template's opposite bound."
+                )
+            comp = replace(comp, width=replace(width, bounds=new_bounds))
+        out.append(comp)
+    return tuple(out)
