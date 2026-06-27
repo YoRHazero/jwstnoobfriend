@@ -29,13 +29,16 @@ class StepSpec:
     ``(data, err, dq)``; ``jwst`` is a dotted ``jwst`` ``Step`` class path called
     via ``.call(model)``. A step may set neither when its rendering is bespoke
     (e.g. the grism master-sky and template-background steps), in which case the
-    pipeline's own renderer emits its code.
+    pipeline's own renderer emits its code. ``skippable`` / ``saveable`` define
+    which generic recipe controls the renderer actually supports.
     """
 
     name: str
     title: str
     custom: str | None = None
     jwst: str | None = None
+    skippable: bool = True
+    saveable: bool = True
 
 
 class Selection(BaseModel):
@@ -131,15 +134,23 @@ class Recipe(BaseModel):
 
     @model_validator(mode="after")
     def _known_steps(self) -> "Recipe":
-        from noobfriend.cli.reduce._registry import step_names_for
+        from noobfriend.cli.reduce._registry import step_specs_for
 
-        valid = step_names_for(self.pipeline, self.select.stage)
-        unknown = set(self.steps) - valid
+        specs = step_specs_for(self.pipeline, self.select.stage)
+        unknown = set(self.steps) - set(specs)
         if unknown:
             raise ValueError(
                 f"unknown step(s) {sorted(unknown)} for pipeline {self.pipeline!r}; "
-                f"valid steps are {sorted(valid)}."
+                f"valid steps are {sorted(specs)}."
             )
+        for name, cfg in self.steps.items():
+            spec = specs[name]
+            if cfg.skip and not spec.skippable:
+                raise ValueError(f"step {name!r} cannot be skipped in this pipeline.")
+            if cfg.save_as is not None and not spec.saveable:
+                raise ValueError(
+                    f"step {name!r} cannot define save_as in this pipeline."
+                )
         return self
 
 

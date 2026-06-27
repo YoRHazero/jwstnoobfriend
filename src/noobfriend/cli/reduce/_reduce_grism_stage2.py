@@ -22,11 +22,19 @@ CHAIN: tuple[StepSpec, ...] = (
         "flag_outlier",
         "hot / cosmic-ray outlier-pixel flagging (custom)",
         custom="flag_outlier_pixels",
+        saveable=False,
     ),
     StepSpec(
-        "assign_wcs", "grism WCS assignment", jwst="jwst.assign_wcs.AssignWcsStep"
+        "assign_wcs",
+        "grism WCS assignment",
+        jwst="jwst.assign_wcs.AssignWcsStep",
+        saveable=False,
     ),
-    StepSpec("master_sky", "WFSS master-sky subtraction (per-module WFSSBKG)"),
+    StepSpec(
+        "master_sky",
+        "WFSS master-sky subtraction (per-module WFSSBKG)",
+        saveable=False,
+    ),
     StepSpec("flat", "flat fielding", jwst="jwst.flatfield.FlatFieldStep"),
     StepSpec(
         "template_bkg", "per-(module,direction) sky-residual template subtraction"

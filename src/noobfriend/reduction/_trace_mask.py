@@ -16,6 +16,7 @@ onto the textured sky gradient, not the traces -- so flatten-then-detect is used
 """
 
 import warnings
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -37,15 +38,17 @@ def grism_trace_mask(
     min_size: int = 6,
     grow_x: int = 9,
     grow_y: int = 2,
+    dispersion_axis: Literal["x", "y"] = "x",
     dq_bad_bits: int = 1,
 ) -> _Bool:
     """Return the boolean exclusion mask of dispersed traces, sources and bad pixels.
 
     The dispersed-sky gradient is removed with a source-excluded coarse block
     median (refined for ``iters`` passes), detections are made at ``nsigma`` over
-    a MAD noise on the flat residual, then grown ``grow_x`` along the dispersion
-    (horizontal, GRISMR) and ``grow_y`` across it before small components are
-    dropped. Non-finite and ``dq``-flagged pixels are always excluded.
+    a MAD noise on the flat residual, then grown along the dispersion axis before
+    small components are dropped. ``dispersion_axis="x"`` is the horizontal GRISMR
+    case; ``"y"`` is the vertical GRISMC case. Non-finite and ``dq``-flagged
+    pixels are always excluded.
 
     Parameters
     ----------
@@ -65,8 +68,13 @@ def grism_trace_mask(
     min_size : int, default 6
         Minimum connected-component size (pixels) kept after growing.
     grow_x, grow_y : int, default 9, 2
-        Half-widths of the rectangular growth footprint along (``x``, dispersion)
-        and across (``y``) the traces.
+        Historical half-widths of the rectangular growth footprint. With
+        ``dispersion_axis="x"``, ``grow_x`` is along the trace and ``grow_y`` is
+        across it. With ``dispersion_axis="y"``, the long and short axes are
+        swapped so the same parameters follow vertical GRISMC traces.
+    dispersion_axis : {"x", "y"}, default "x"
+        Detector axis along which dispersed traces run: ``"x"`` for GRISMR,
+        ``"y"`` for GRISMC.
     dq_bad_bits : int, default 1
         Bitmask of ``dq`` flags marking pixels to exclude (``1`` = ``DO_NOT_USE``).
 
@@ -78,7 +86,7 @@ def grism_trace_mask(
     Raises
     ------
     ValueError
-        If ``data`` is not 2-D.
+        If ``data`` is not 2-D, or ``dispersion_axis`` is invalid.
     """
     image = np.asarray(data, dtype=float)
     if image.ndim != 2:
@@ -95,8 +103,23 @@ def grism_trace_mask(
         sigma = _robust_sigma(np.where(bad | detected, np.nan, flattened))
         detected = np.isfinite(flattened) & (flattened > nsigma * sigma)
 
-    grown = dilation(detected, footprint_rectangle((2 * grow_y + 1, 2 * grow_x + 1)))
+    grown = dilation(detected, _growth_footprint(dispersion_axis, grow_x, grow_y))
     return _drop_small(grown, min_size) | bad
+
+
+def _growth_footprint(
+    dispersion_axis: Literal["x", "y"], grow_x: int, grow_y: int
+) -> NDArray[np.bool_]:
+    """Return a rectangular footprint with its long axis along the dispersion."""
+    if dispersion_axis == "x":
+        shape = (2 * grow_y + 1, 2 * grow_x + 1)
+    elif dispersion_axis == "y":
+        shape = (2 * grow_x + 1, 2 * grow_y + 1)
+    else:
+        raise ValueError(
+            f"dispersion_axis must be 'x' or 'y'; got {dispersion_axis!r}."
+        )
+    return footprint_rectangle(shape)
 
 
 def _robust_sigma(values: _Floats) -> float:

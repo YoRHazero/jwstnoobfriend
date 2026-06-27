@@ -22,10 +22,13 @@ CHAIN: tuple[StepSpec, ...] = (
     StepSpec(
         "align",
         "absolute astrometric alignment (tweakreg + cleaned image catalogs & GAIA)",
+        saveable=False,
     ),
-    StepSpec("skymatch", "cross-exposure background matching"),
-    StepSpec("outlier", "cross-exposure outlier / cosmic-ray flagging"),
-    StepSpec("resample", "drizzle onto the unified, tiled output grid"),
+    StepSpec("skymatch", "cross-exposure background matching", saveable=False),
+    StepSpec("outlier", "cross-exposure outlier / cosmic-ray flagging", saveable=False),
+    StepSpec(
+        "resample", "drizzle onto the unified, tiled output grid", skippable=False
+    ),
 )
 
 #: Default ``save_as`` save-points for the starter recipe.
@@ -76,7 +79,9 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         "",
     ]
     for spec in CHAIN:
-        lines += [f"# {spec.title}", f"[steps.{spec.name}]", "skip = false"]
+        lines += [f"# {spec.title}", f"[steps.{spec.name}]"]
+        if spec.skippable:
+            lines.append("skip = false")
         if spec.name in SAVE_POINTS:
             lines.append(f'save_as = "{SAVE_POINTS[spec.name]}"')
         lines.append("")

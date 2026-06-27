@@ -122,5 +122,10 @@ def select_pipelines(pupil: str | None, stage: str | None) -> list[Pipeline]:
 
 def step_names_for(pupil: str, input_stage: str) -> frozenset[str]:
     """Return the valid step names for a pipeline, or empty if it is unknown."""
+    return frozenset(step_specs_for(pupil, input_stage))
+
+
+def step_specs_for(pupil: str, input_stage: str) -> dict[str, StepSpec]:
+    """Return step specs keyed by name for a pipeline, or empty if unknown."""
     pipeline = PIPELINES.get((pupil, input_stage))
-    return frozenset(spec.name for spec in pipeline.chain) if pipeline else frozenset()
+    return {spec.name: spec for spec in pipeline.chain} if pipeline else {}

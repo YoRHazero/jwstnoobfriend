@@ -115,7 +115,12 @@ def test_grism_render_is_valid_two_pass_python() -> None:
     assert "AssignWcsStep.call(model)" in source
     assert "subtract_wfss_bkg(" in source
     assert "FlatFieldStep.call(model)" in source
-    assert "grism_trace_mask(model.data, model.dq)" in source
+    assert "def _dispersion_axis(book)" in source
+    assert 'pupil == "GRISMR"' in source
+    assert 'pupil == "GRISMC"' in source
+    assert "Unsupported grism pupil" in source
+    assert "dispersion_axis=_dispersion_axis(book)" in source
+    assert "dispersion_axis=_dispersion_axis(b2)" in source
     # template build + pass 2
     assert "combine_sky_template(" in source
     assert "sky_residual_grid(model.data" in source
@@ -139,6 +144,20 @@ def test_grism_skip_master_sky_omits_it() -> None:
     source = render_grism(recipe)
     assert "subtract_wfss_bkg" not in source
     assert "grism_trace_mask" in source  # still needed for the template
+
+
+def test_grism_skip_jwst_steps_omits_them() -> None:
+    recipe = _grism()
+    recipe.steps["assign_wcs"] = StepConfig(skip=True)
+    recipe.steps["flat"] = StepConfig(skip=True)
+
+    source = render_grism(recipe)
+
+    assert "AssignWcsStep.call(model)" not in source
+    assert "FlatFieldStep.call(model)" not in source
+    assert "from jwst.assign_wcs import AssignWcsStep" not in source
+    assert "from jwst.flatfield import FlatFieldStep" not in source
+    ast.parse(source)
 
 
 def test_grism_skip_template_disables_second_pass() -> None:
@@ -223,6 +242,25 @@ def test_clear3_names_carry_scale_token_and_clean_work_gated() -> None:
 def test_unknown_step_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown step"):
         Recipe.model_validate({"select": {"stage": "2a"}, "steps": {"bogus": {}}})
+
+
+def test_unsupported_step_save_as_is_rejected() -> None:
+    grism = tomllib.loads(scaffold_grism("2a"))
+    grism["steps"]["assign_wcs"]["save_as"] = "2wcs"
+    with pytest.raises(ValueError, match="cannot define save_as"):
+        Recipe.model_validate(grism)
+
+    clear3 = tomllib.loads(scaffold_clear3("2bi"))
+    clear3["steps"]["align"]["save_as"] = "3pre"
+    with pytest.raises(ValueError, match="cannot define save_as"):
+        Recipe.model_validate(clear3)
+
+
+def test_required_step_skip_is_rejected() -> None:
+    data = tomllib.loads(scaffold_clear3("2bi"))
+    data["steps"]["resample"]["skip"] = True
+    with pytest.raises(ValueError, match="cannot be skipped"):
+        Recipe.model_validate(data)
 
 
 def test_grism_recipe_accepts_grism_steps() -> None:

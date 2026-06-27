@@ -12,10 +12,13 @@ with :func:`ast.parse`.
 
 import ast
 
-from noobfriend.cli.reduce._recipe import Recipe
+from noobfriend.cli.reduce._recipe import Recipe, ordered
+from noobfriend.cli.reduce._reduce_grism_stage2 import CHAIN
 
 _MASTER_SKY: tuple[str, ...] = (
-    "_mask = grism_trace_mask(model.data, model.dq)",
+    "_mask = grism_trace_mask("
+    "model.data, model.dq, dispersion_axis=_dispersion_axis(book)"
+    ")",
     "_bs = BackgroundStep()",
     '_bkg = _bs.get_reference_file(model, "bkg")',
     '_wl = _bs.get_reference_file(model, "wavelengthrange")',
@@ -121,6 +124,16 @@ def _group_key(book) -> tuple[str, str]:
     return module, direction
 
 
+def _dispersion_axis(book) -> str:
+    """Return the detector-axis direction used by the grism trace mask."""
+    pupil = (book.pupil or "").upper()
+    if pupil == "GRISMR":
+        return "x"
+    if pupil == "GRISMC":
+        return "y"
+    raise ValueError(f"Unsupported grism pupil for trace masking: {book.pupil!r}.")
+
+
 def _save_template(group: tuple[str, str], template, nframes: int) -> None:
     """Write a per-group sky-residual template as a sidecar FITS."""
     module, direction = group
@@ -154,7 +167,9 @@ __PASS1_BODY__
         b2 = NooBook.from_file(_loc, STAGE_2B, parents=[parent], raw=_raw)
         out_box.add(b2)
         if DO_TEMPLATE:
-            gmask = grism_trace_mask(model.data, model.dq)
+            gmask = grism_trace_mask(
+                model.data, model.dq, dispersion_axis=_dispersion_axis(b2)
+            )
             grids.setdefault(_group_key(b2), []).append(
                 sky_residual_grid(model.data, gmask, factor=DOWNSAMPLE)
             )
@@ -171,7 +186,9 @@ __PASS1_BODY__
         for book_id, group in track(produced, f"Grism pass 2 {STAGE_2B}->{STAGE_2BII}"):
             b2 = out_box.get(book_id)
             model = _dm.open(fits.open(BytesIO(b2.read_bytes())))
-            tmask = grism_trace_mask(model.data, model.dq)
+            tmask = grism_trace_mask(
+                model.data, model.dq, dispersion_axis=_dispersion_axis(b2)
+            )
             model.data, model.err, model.dq = subtract_sky_template(
                 model.data, model.err, model.dq, templates[group], mask=tmask, scalar=SCALAR
             )
@@ -191,10 +208,9 @@ if __name__ == "__main__":
 
 def render(recipe: Recipe) -> str:
     """Return the two-pass grism runner-script source (validated by ``ast.parse``)."""
-    skipped = {name for name, cfg in recipe.steps.items() if cfg.skip}
-    use_flag = "flag_outlier" not in skipped
-    use_master = "master_sky" not in skipped
-    do_template = "template_bkg" not in skipped
+    steps = ordered(CHAIN, recipe.steps)
+    pass1_steps = [(spec, cfg) for spec, cfg in steps if spec.name != "template_bkg"]
+    do_template = any(spec.name == "template_bkg" for spec, _ in steps)
 
     save = {name: cfg.save_as for name, cfg in recipe.steps.items() if cfg.save_as}
     stage_2b = save.get("flat", "2b")
@@ -209,32 +225,38 @@ def render(recipe: Recipe) -> str:
         "sky_residual_grid",
         "subtract_sky_template",
     ]
-    if use_flag:
-        reduction_names.append("flag_outlier_pixels")
+    reduction_names.extend(spec.custom for spec, _ in pass1_steps if spec.custom)
     reduction_import = (
         f"from noobfriend.reduction import {', '.join(sorted(reduction_names))}"
     )
 
     jwst_imports = [
-        "from jwst.assign_wcs import AssignWcsStep",
-        "from jwst.flatfield import FlatFieldStep",
+        f"from {spec.jwst.rsplit('.', 1)[0]} import {spec.jwst.rsplit('.', 1)[1]}"
+        for spec, _ in pass1_steps
+        if spec.jwst
     ]
-    if use_master:
+    if any(spec.name == "master_sky" for spec, _ in pass1_steps):
         jwst_imports += [
             "from jwst.background import BackgroundStep",
             "from jwst.background.background_step import subtract_wfss_bkg",
         ]
 
     pass1: list[str] = []
-    if use_flag:
+    for spec, _ in pass1_steps:
+        if spec.custom:
+            pass1.append(
+                f"model.data, model.err, model.dq = "
+                f"{spec.custom}(model.data, model.err, model.dq)"
+            )
+        elif spec.name == "master_sky":
+            pass1 += list(_MASTER_SKY)
+        else:
+            cls = spec.jwst.rsplit(".", 1)[1]
+            pass1.append(f"model = {cls}.call(model)")
+    if not pass1:
         pass1.append(
-            "model.data, model.err, model.dq = "
-            "flag_outlier_pixels(model.data, model.err, model.dq)"
+            "# all pass-1 processing steps are skipped; the input model is saved as-is"
         )
-    pass1.append("model = AssignWcsStep.call(model)")
-    if use_master:
-        pass1 += list(_MASTER_SKY)
-    pass1.append("model = FlatFieldStep.call(model)")
 
     select = {
         field: value

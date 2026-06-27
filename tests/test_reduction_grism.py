@@ -7,6 +7,7 @@ outliers, and recover a known per-frame scale.
 """
 
 import numpy as np
+import pytest
 
 from noobfriend.reduction import (
     combine_sky_template,
@@ -32,6 +33,19 @@ def _grism_frame(seed: int = 0) -> tuple[np.ndarray, np.ndarray, list[int]]:
     return data, dq, trace_rows
 
 
+def _grismc_frame(seed: int = 0) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    """Return ``(data, dq, trace_cols)``: sky gradient + noise + vertical traces."""
+    rng = np.random.default_rng(seed)
+    yy, _ = np.mgrid[0:_SIZE, 0:_SIZE]
+    data = 0.3 + 0.4 * (yy / _SIZE) + rng.normal(0, 0.01, (_SIZE, _SIZE))
+    trace_cols = [60, 130, 200]
+    for c in trace_cols:
+        data[:, c] += 1.0  # bright dispersed trace, far above 4 sigma
+    dq = np.zeros((_SIZE, _SIZE), dtype=np.int32)
+    dq[10, 10] = 1  # a DO_NOT_USE pixel
+    return data, dq, trace_cols
+
+
 def test_trace_mask_covers_traces_and_bad_but_not_background() -> None:
     """Traces and flagged pixels are masked; most background is left clean."""
     data, dq, trace_rows = _grism_frame()
@@ -45,12 +59,33 @@ def test_trace_mask_covers_traces_and_bad_but_not_background() -> None:
     assert mask[100].mean() < 0.1
 
 
+def test_trace_mask_covers_vertical_grismc_traces() -> None:
+    """``dispersion_axis='y'`` follows vertical GRISMC traces."""
+    data, dq, trace_cols = _grismc_frame()
+    mask = grism_trace_mask(data, dq, nsigma=4.0, dispersion_axis="y")
+
+    for c in trace_cols:
+        assert mask[:, c].mean() > 0.95  # each trace column almost fully masked
+    assert mask[10, 10]  # DO_NOT_USE pixel excluded
+    assert mask.mean() < 0.3  # background not swallowed
+    # a column between traces is overwhelmingly background
+    assert mask[:, 100].mean() < 0.1
+
+
 def test_trace_mask_rejects_non_2d() -> None:
     """A non-2-D input raises ``ValueError``."""
-    import pytest
-
     with pytest.raises(ValueError, match="2-D"):
         grism_trace_mask(np.zeros((4, 4, 4)), np.zeros((4, 4, 4), dtype=int))
+
+
+def test_trace_mask_rejects_bad_dispersion_axis() -> None:
+    """Only detector ``x`` or ``y`` can be used as the trace-growth axis."""
+    with pytest.raises(ValueError, match="dispersion_axis"):
+        grism_trace_mask(
+            np.zeros((4, 4)),
+            np.zeros((4, 4), dtype=int),
+            dispersion_axis="z",  # type: ignore[arg-type]
+        )
 
 
 def test_sky_residual_grid_downsamples_and_excludes_mask() -> None:
