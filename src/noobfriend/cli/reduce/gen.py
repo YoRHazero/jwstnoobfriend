@@ -9,8 +9,8 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 
 from noobfriend.cli.reduce._io import validate_stages
-from noobfriend.cli.reduce._recipe import load_recipe
-from noobfriend.cli.reduce._registry import select_pipelines
+from noobfriend.cli.reduce._recipe import Recipe, load_recipe
+from noobfriend.cli.reduce._registry import Pipeline, for_recipe, select_pipelines
 from noobfriend.core.console import console
 from noobfriend.core.env import get_settings
 
@@ -64,6 +64,7 @@ def cli_gen(
         try:
             recipe = load_recipe(recipe_path)
             validate_stages(recipe)
+            _ensure_recipe_matches_pipeline(recipe_path, pipeline, recipe)
             source = pipeline.render(recipe)
         except (ValidationError, ValueError, OSError) as error:
             console.print(
@@ -87,3 +88,18 @@ def cli_gen(
         console.print(
             "[yellow]No recipes found; run `noobfriend reduce init` first.[/yellow]"
         )
+
+
+def _ensure_recipe_matches_pipeline(
+    recipe_path: Path, selected: Pipeline, recipe: Recipe
+) -> None:
+    """Reject recipes whose declared pipeline differs from the selected renderer."""
+    declared = for_recipe(recipe)
+    if declared is selected:
+        return
+    raise ValueError(
+        f"{recipe_path} declares pipeline={recipe.pipeline!r} and "
+        f"select.stage={recipe.select.stage!r}, which maps to "
+        f"{declared.recipe_name}; refusing to render it with "
+        f"{selected.recipe_name}."
+    )

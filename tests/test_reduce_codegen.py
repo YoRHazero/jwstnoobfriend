@@ -6,17 +6,20 @@ Covers the shared :class:`Recipe`, the CLEAR (per-frame) renderer and the GRISM
 
 import ast
 import tomllib
+from pathlib import Path
 
 import pytest
 
 from noobfriend.cli.reduce._codegen_clear_stage2 import render as render_clear
 from noobfriend.cli.reduce._codegen_clear_stage3 import render as render_clear3
 from noobfriend.cli.reduce._codegen_grism_stage2 import render as render_grism
+from noobfriend.cli.reduce.gen import _ensure_recipe_matches_pipeline
 from noobfriend.cli.reduce._io import validate_stages
 from noobfriend.cli.reduce._recipe import Recipe, StepConfig
 from noobfriend.cli.reduce._reduce_clear_stage2 import scaffold as scaffold_clear
 from noobfriend.cli.reduce._reduce_clear_stage3 import scaffold as scaffold_clear3
 from noobfriend.cli.reduce._reduce_grism_stage2 import scaffold as scaffold_grism
+from noobfriend.cli.reduce._registry import select_pipelines
 
 
 def _clear(**select: object) -> Recipe:
@@ -292,6 +295,16 @@ def test_validate_stages_passes_when_all_defined(
     for stage in ("2A", "2B", "2BI"):
         monkeypatch.setenv(f"STAGE_{stage}_PATH", f"/data/{stage.lower()}")
     validate_stages(_clear())  # does not raise
+
+
+def test_gen_rejects_recipe_renderer_mismatch() -> None:
+    recipe = _grism()
+    selected = select_pipelines("clear", "2")[0]
+
+    with pytest.raises(ValueError, match="refusing to render"):
+        _ensure_recipe_matches_pipeline(
+            Path("recipe_clear_stage2.toml"), selected, recipe
+        )
 
 
 def test_validate_stages_grism_needs_2b_and_2bii(
