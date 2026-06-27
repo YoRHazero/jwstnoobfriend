@@ -176,6 +176,8 @@ class MorphModel:
         background: bool = True,
         auto_mask: bool = False,
         mask_nsigma: float = 2.0,
+        joint_mask: bool = True,
+        fit_radius_arcsec: float | None = None,
         correlated_noise: bool = False,
         cosmology: FLRW | None = None,
     ) -> MorphModel:
@@ -196,9 +198,19 @@ class MorphModel:
         background : bool, default True
             Fit a per-band constant background.
         auto_mask : bool, default False
-            Derive and add a neighbour exclude-mask per band.
+            Derive and add neighbour exclude-masks. When enabled, neighbour
+            detections are projected across bands by default and a hard fit radius
+            is applied unless ``fit_radius_arcsec`` is set explicitly.
         mask_nsigma : float, default 2.0
             Detection threshold for the auto-mask.
+        joint_mask : bool, default True
+            If ``auto_mask`` is enabled, project neighbour detections from every
+            band into every other band before taking the union. Set ``False`` for
+            the older per-band-only mask.
+        fit_radius_arcsec : float, optional
+            Hard sky radius for pixels entering the likelihood. If omitted, no
+            radius cut is applied when ``auto_mask=False``; when ``auto_mask=True``,
+            each band uses ``min(0.5 arcsec, 0.4 * stamp_half_size)``.
         correlated_noise : bool, default False
             Calibrate for spatially-correlated (e.g. drizzle) noise from each
             band's source-free sky: rescale the per-pixel error to the true sky
@@ -216,7 +228,8 @@ class MorphModel:
         ------
         ValueError
             If there are no components, names collide, a band is unknown to a flux
-            mapping, or a parameter inside an expression lacks an explicit prior.
+            mapping, ``fit_radius_arcsec <= 0``, a band has no usable pixels after
+            masks, or a parameter inside an expression lacks an explicit prior.
         """
         comps = tuple(components)
         if not comps:
@@ -228,7 +241,14 @@ class MorphModel:
             name: build_geometry(band.wcs, image.center, band.shape, oversample)
             for name, band in image.bands.items()
         }
-        exclude = _exclude_masks(image, geoms, auto_mask, mask_nsigma)
+        exclude = _exclude_masks(
+            image,
+            geoms,
+            auto_mask,
+            mask_nsigma,
+            joint_mask=joint_mask,
+            fit_radius_arcsec=fit_radius_arcsec,
+        )
         seeds = compute_seeds(image.bands, geoms, exclude=exclude)
 
         resolver = _Resolver(image, comps, policy, seeds)
@@ -360,13 +380,16 @@ class MorphModel:
         Parameters
         ----------
         values : mapping of str to float, optional
-            Overrides for individual parameters, keyed by their sampled name.
+            Overrides for individual parameters, keyed by their sampled name. When
+            background fitting is enabled, ``bg_<band>`` is included in the summed
+            model if present; otherwise the preview background is zero.
 
         Returns
         -------
         Preview
         """
-        env = self._point_env(values or {})
+        values_in = values or {}
+        env = self._point_env(values_in)
         data, total, residual, comps_out, masks = {}, {}, {}, {}, {}
         for bs in self._bands:
             band = self.image.bands[bs.name]
@@ -377,6 +400,8 @@ class MorphModel:
                 native = np.asarray(convolve_and_bin(over, bs.psf, bs.oversample))
                 per_comp[cr.name] = native
                 tot = tot + native
+            if self.background:
+                tot = tot + float(values_in.get(f"bg_{bs.name}", 0.0))
             use = np.zeros(band.data.size, dtype=bool)
             use[bs.use_idx] = True
             data[bs.name] = band.data
@@ -555,24 +580,101 @@ class _Resolver:
 
 
 def _exclude_masks(
-    image: NoobImage, geoms: dict[str, Any], auto_mask: bool, mask_nsigma: float
+    image: NoobImage,
+    geoms: dict[str, Any],
+    auto_mask: bool,
+    mask_nsigma: float,
+    *,
+    joint_mask: bool = True,
+    fit_radius_arcsec: float | None = None,
 ) -> dict[str, np.ndarray]:
-    """Per-band exclude masks combining the provided mask and the neighbour auto-mask.
+    """Per-band exclude masks for user masks, radius cuts, and neighbours.
 
     Computed once and shared by the seeding and the likelihood, so the centroid
     seed and the fitted pixels see the same exclusions.
     """
-    from noobfriend.inference.morphology._mask import auto_mask_band
+    from noobfriend.inference.morphology._mask import (
+        neighbour_mask_band,
+        project_mask_to_geometry,
+        radial_exclude_mask,
+        target_protection_mask,
+    )
+
+    radii = {
+        name: _resolved_fit_radius(geom, fit_radius_arcsec, auto_mask)
+        for name, geom in geoms.items()
+    }
+
+    protect: dict[str, np.ndarray] = {}
+    neighbours: dict[str, np.ndarray] = {}
+    if auto_mask:
+        for name, band in image.bands.items():
+            radius = radii[name]
+            protect[name] = target_protection_mask(
+                band.data,
+                band.error,
+                geoms[name],
+                nsigma=mask_nsigma,
+                core_radius_arcsec=_target_core_radius(geoms[name], radius),
+                max_radius_arcsec=radius,
+            )
+            neighbours[name] = neighbour_mask_band(
+                band.data, geoms[name], protect[name], nsigma=mask_nsigma
+            )
 
     out: dict[str, np.ndarray] = {}
     for name, band in image.bands.items():
         ex = np.zeros(band.shape, dtype=bool)
         if band.mask is not None:
             ex |= band.mask
+        radius = radii[name]
+        if radius is not None:
+            ex |= radial_exclude_mask(geoms[name], radius)
         if auto_mask:
-            ex |= auto_mask_band(band.data, geoms[name].pix_center, nsigma=mask_nsigma)
+            if joint_mask:
+                neighbour = np.zeros(band.shape, dtype=bool)
+                for src_name, src_mask in neighbours.items():
+                    neighbour |= project_mask_to_geometry(
+                        src_mask, geoms[src_name], geoms[name]
+                    )
+            else:
+                neighbour = neighbours[name]
+            ex |= neighbour & ~protect[name]
         out[name] = ex
     return out
+
+
+def _resolved_fit_radius(
+    geom: Any, requested: float | None, auto_mask: bool
+) -> float | None:
+    """Return the hard fit radius for one band, or ``None`` when disabled."""
+    if requested is not None:
+        radius = float(requested)
+        if radius <= 0:
+            raise ValueError(f"fit_radius_arcsec must be > 0, got {requested}.")
+        return radius
+    if not auto_mask:
+        return None
+    return min(0.5, 0.4 * _stamp_half_size_arcsec(geom))
+
+
+def _stamp_half_size_arcsec(geom: Any) -> float:
+    """Return half of the smaller native stamp dimension in arcsec."""
+    rows, cols = geom.native_shape
+    return 0.5 * min(rows, cols) * _native_pixscale_arcsec(geom)
+
+
+def _native_pixscale_arcsec(geom: Any) -> float:
+    """Return the representative native pixel scale in arcsec."""
+    return float(np.sqrt(geom.subpixel_area) * geom.oversample)
+
+
+def _target_core_radius(geom: Any, fit_radius: float | None) -> float:
+    """Small geometric target-protection radius used before aperture growth."""
+    radius = min(max(1.5 * _native_pixscale_arcsec(geom), 0.1), 0.2)
+    if fit_radius is not None:
+        radius = min(radius, 0.5 * fit_radius)
+    return max(radius, np.finfo(float).eps)
 
 
 def _build_band_static(
@@ -594,6 +696,11 @@ def _build_band_static(
     valid = np.isfinite(data) & np.isfinite(err) & (err > 0)
     use = valid & ~exclude
     use_idx = np.flatnonzero(use.reshape(-1))
+    if use_idx.size == 0:
+        raise ValueError(
+            f"band {name!r} has no usable pixels after applying finite data/error "
+            "checks and fit masks."
+        )
 
     beta, lik_scale = 1.0, 1.0
     if correlated_noise:
@@ -608,7 +715,7 @@ def _build_band_static(
 
     pixscale = float(np.sqrt(geom.subpixel_area) * o)
     psf = resolve_psf(band.psf, band=name, oversample=oversample, pixscale=pixscale)
-    bg_scale = float(np.median(err[use])) if use_idx.size else 1.0
+    bg_scale = float(np.median(err[use]))
 
     return _BandStatic(
         name=name,

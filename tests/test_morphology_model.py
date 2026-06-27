@@ -76,6 +76,20 @@ class TestBuild:
         assert prev.total["F150W"].shape == (31, 31)
         assert "gal" in prev.components["F150W"]
 
+    def test_preview_includes_supplied_background(self) -> None:
+        model = _synth().model([Sersic("gal")], oversample=OVERSAMPLE)
+        base = model.preview()
+        with_bg = model.preview({"bg_F150W": 3.0})
+        assert np.allclose(with_bg.total["F150W"], base.total["F150W"] + 3.0)
+        assert np.allclose(with_bg.residual["F150W"], base.residual["F150W"] - 3.0)
+        assert np.allclose(with_bg.total["F444W"], base.total["F444W"])
+
+    def test_fully_masked_band_raises(self) -> None:
+        img = _synth().select(["F150W"])
+        mask = np.ones(img.bands["F150W"].shape, dtype=bool)
+        with pytest.raises(ValueError, match="no usable pixels"):
+            img.with_masks({"F150W": mask}).model([Sersic("gal")])
+
     def test_duplicate_component_name_raises(self) -> None:
         with pytest.raises(ValueError, match="duplicate component"):
             _synth().model([Sersic("gal"), Sersic("gal")])

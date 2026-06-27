@@ -274,7 +274,8 @@ class NoobImage:
             The declared components.
         **kwargs
             Forwarded to :meth:`MorphModel.build` (``oversample``, ``policy``,
-            ``nu``, ``background``, ``auto_mask``, ``cosmology``, ...).
+            ``nu``, ``background``, ``auto_mask``, ``joint_mask``,
+            ``fit_radius_arcsec``, ``cosmology``, ...).
 
         Returns
         -------
