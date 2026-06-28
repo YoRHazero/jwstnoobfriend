@@ -114,6 +114,22 @@ def test_clear_skip_fixed_pattern_omits_the_pass() -> None:
 def test_grism_render_is_valid_two_pass_python() -> None:
     source = render_grism(_grism())
     ast.parse(source)
+    # pass 0: rate-stage fixed-pattern template build + cache
+    assert "DO_FIXED_PATTERN = True" in source
+    assert "def _build_fixed_pattern_templates(box)" in source
+    assert "fixed_templates = _build_fixed_pattern_templates(box)" in source
+    assert "fixedpattern_mod{module}_{direction}.npy" in source
+    assert "grism_fixed_pattern_frame(" in source
+    assert "combine_fixed_pattern(" in source
+    assert "TEMPLATE_DIR = Path('grism_templates')" in source
+    # fixed-pattern subtraction is the first pass-1 operation
+    assert "subtract_grism_fixed_pattern(" in source
+    assert source.index("subtract_grism_fixed_pattern(") < source.index(
+        "flag_outlier_pixels("
+    )
+    assert source.index("subtract_grism_fixed_pattern(") < source.index(
+        "AssignWcsStep.call(model)"
+    )
     # pass 1: per-frame chain incl. the WFSS master-sky direct call
     assert "AssignWcsStep.call(model)" in source
     assert "subtract_wfss_bkg(" in source
@@ -131,6 +147,26 @@ def test_grism_render_is_valid_two_pass_python() -> None:
     assert "DO_TEMPLATE = True" in source
     assert "SCALAR = True" in source
     assert "DOWNSAMPLE = 4" in source
+
+
+def test_grism_fixed_pattern_template_dir_is_configurable() -> None:
+    recipe = _grism()
+    recipe.grism.template_dir = "scratch/grism"
+    assert "TEMPLATE_DIR = Path('scratch/grism')" in render_grism(recipe)
+
+
+def test_grism_skip_fixed_pattern_omits_the_pass() -> None:
+    recipe = _grism()
+    recipe.steps["fixed_pattern"] = StepConfig(skip=True)
+    source = render_grism(recipe)
+
+    ast.parse(source)
+    assert "DO_FIXED_PATTERN = False" in source
+    assert "subtract_grism_fixed_pattern" not in source
+    assert "_build_fixed_pattern_templates" not in source
+    assert "grism_fixed_pattern_frame" not in source
+    assert "combine_sky_template(" in source
+    assert "subtract_sky_template(" in source
 
 
 def test_grism_threads_2b_then_2bii_lineage() -> None:
@@ -247,6 +283,11 @@ def test_unknown_step_is_rejected() -> None:
         Recipe.model_validate({"select": {"stage": "2a"}, "steps": {"bogus": {}}})
 
 
+def test_unknown_pipeline_stage_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no reduction pipeline"):
+        Recipe.model_validate({"pipeline": "clear", "select": {"stage": "9z"}})
+
+
 def test_unsupported_step_save_as_is_rejected() -> None:
     grism = tomllib.loads(scaffold_grism("2a"))
     grism["steps"]["assign_wcs"]["save_as"] = "2wcs"
@@ -270,6 +311,8 @@ def test_grism_recipe_accepts_grism_steps() -> None:
     recipe = _grism()
     assert recipe.pipeline == "grism"
     assert recipe.grism.downsample == 4
+    assert recipe.grism.template_dir == "grism_templates"
+    assert "fixed_pattern" in recipe.steps
 
 
 def test_validate_stages_requires_a_save_point(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -277,7 +320,7 @@ def test_validate_stages_requires_a_save_point(monkeypatch: pytest.MonkeyPatch) 
     recipe = _clear()
     for cfg in recipe.steps.values():
         cfg.save_as = None
-    with pytest.raises(ValueError, match="no save_as"):
+    with pytest.raises(ValueError, match="no output stage"):
         validate_stages(recipe)
 
 
@@ -313,3 +356,39 @@ def test_validate_stages_grism_needs_2b_and_2bii(
     for stage in ("2A", "2B", "2BII"):
         monkeypatch.setenv(f"STAGE_{stage}_PATH", f"/data/{stage.lower()}")
     validate_stages(_grism())  # does not raise
+
+
+def test_validate_stages_grism_checks_implicit_pass1_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STAGE_2A_PATH", "/data/2a")
+    monkeypatch.delenv("STAGE_2B_PATH", raising=False)
+    monkeypatch.setenv("STAGE_2BII_PATH", "/data/2bii")
+    recipe = _grism()
+    recipe.steps["flat"].skip = True
+
+    with pytest.raises(ValueError, match="STAGE_<STAGE>_PATH"):
+        validate_stages(recipe)
+
+
+def test_validate_stages_grism_accepts_renderer_default_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for stage in ("2A", "2B", "2BII"):
+        monkeypatch.setenv(f"STAGE_{stage}_PATH", f"/data/{stage.lower()}")
+    recipe = _grism()
+    recipe.steps.pop("flat")
+    recipe.steps.pop("template_bkg")
+
+    validate_stages(recipe)  # renderer defaults to 2b / 2bii
+
+
+def test_validate_stages_clear3_accepts_renderer_default_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STAGE_2BI_PATH", "/data/2bi")
+    monkeypatch.setenv("STAGE_3A_PATH", "/data/3a")
+    recipe = _clear3()
+    recipe.steps.pop("resample")
+
+    validate_stages(recipe)  # renderer defaults to 3a

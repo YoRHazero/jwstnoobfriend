@@ -69,8 +69,14 @@ class ClearOptions(BaseModel):
 
 
 class GrismOptions(BaseModel):
-    """Grism-pipeline knobs for the per-module sky-residual template (ignored by clear)."""
+    """Grism-pipeline knobs for sidecar fixed-pattern and sky templates.
 
+    ``template_dir`` stores both the early detector/pupil fixed-pattern templates
+    (``fixedpattern_modA_R.npy`` etc.) and the later 2b -> 2bii sky-residual
+    templates (``skytemplate_modA_R.fits`` etc.).
+    """
+
+    template_dir: str = "grism_templates"
     scalar: bool = True
     downsample: int = 4
     smooth_sigma: float = 24.0
@@ -137,6 +143,11 @@ class Recipe(BaseModel):
         from noobfriend.cli.reduce._registry import step_specs_for
 
         specs = step_specs_for(self.pipeline, self.select.stage)
+        if not specs:
+            raise ValueError(
+                f"no reduction pipeline for pipeline={self.pipeline!r} and "
+                f"select.stage={self.select.stage!r}."
+            )
         unknown = set(self.steps) - set(specs)
         if unknown:
             raise ValueError(

@@ -26,8 +26,11 @@ from noobfriend.reduction._badpixel import flag_outlier_pixels
 from noobfriend.reduction._fixed_pattern import (
     combine_fixed_pattern,
     fit_pattern_amplitude,
+    fit_pattern_amplitude_offset,
     fixed_pattern_residual,
+    grism_fixed_pattern_frame,
     subtract_fixed_pattern,
+    subtract_grism_fixed_pattern,
 )
 from noobfriend.reduction._oneoverf import subtract_oneoverf
 from noobfriend.reduction._sky_template import (
@@ -57,15 +60,18 @@ __all__ = [
     "combine_sky_template",
     "field_grid",
     "fit_pattern_amplitude",
+    "fit_pattern_amplitude_offset",
     "fit_template_scalar",
     "fixed_pattern_residual",
     "flag_outlier_pixels",
+    "grism_fixed_pattern_frame",
     "grism_trace_mask",
     "query_gaia",
     "select_point_sources",
     "sky_residual_grid",
     "subtract_background",
     "subtract_fixed_pattern",
+    "subtract_grism_fixed_pattern",
     "subtract_oneoverf",
     "subtract_sky_template",
     "tile_grid",

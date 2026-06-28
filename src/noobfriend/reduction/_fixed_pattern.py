@@ -23,6 +23,13 @@ Four pure-array helpers, jwst/navigation-free, used by an imaging runner:
   (pass 2): fit the per-frame amplitude (the pattern reproduces only partially,
   so a fixed-amplitude subtraction over-subtracts) and subtract it. Apply this
   *before* ``subtract_oneoverf`` and before flat-fielding.
+
+The GRISM path reuses the same cross-frame median combiner but builds a different
+per-frame residual: it keeps the full detector-fixed low-frequency gradient plus
+fine pattern, masks traces, and removes only the per-frame scalar median. Its
+subtraction fits ``alpha * template + beta`` over trace-free pixels and subtracts
+only ``alpha * template``; the fitted ``beta`` is a nuisance level, not a detector
+correction.
 """
 
 import warnings
@@ -110,6 +117,53 @@ def fixed_pattern_residual(
     residual = image - background
     residual[excluded] = np.nan
     return residual
+
+
+def grism_fixed_pattern_frame(
+    data: _Floats,
+    dq: _Ints,
+    *,
+    mask: _Bool | None = None,
+    subtract_median: bool = True,
+    dq_bad_bits: int = 1,
+) -> _Floats:
+    """Return one GRISM frame for unified fixed-pattern template building.
+
+    Unlike :func:`fixed_pattern_residual`, this intentionally does *not* remove a
+    mesh/row/column/low-pass background. For GRISM the smooth detector-locked
+    gradient and the fine diagonal pattern are treated as one additive detector
+    template; only trace/source/bad/non-finite pixels are set to ``NaN`` and the
+    frame's global median is removed so pointing-dependent DC sky level does not
+    enter the detector template.
+
+    Parameters
+    ----------
+    data, dq : numpy.ndarray
+        2-D rate frame and matching data-quality array.
+    mask : numpy.ndarray of bool, optional
+        Pixels to exclude from the template (``True`` = exclude), usually from
+        :func:`~noobfriend.reduction.grism_trace_mask`.
+    subtract_median : bool, default True
+        Remove the masked-frame scalar median before combining frames.
+    dq_bad_bits : int, default 1
+        Bitmask of ``dq`` flags marking pixels to exclude (``1`` = ``DO_NOT_USE``).
+
+    Returns
+    -------
+    numpy.ndarray
+        A full-resolution frame with excluded pixels set to ``NaN``.
+    """
+    image = np.asarray(data, dtype=float)
+    if image.ndim != 2:
+        raise ValueError(f"data must be 2-D; got shape {image.shape}.")
+    excluded = _explicit_exclusion(image, dq, mask=mask, dq_bad_bits=dq_bad_bits)
+    frame = image.copy()
+    frame[excluded] = np.nan
+    if subtract_median:
+        finite = np.isfinite(frame)
+        if finite.any():
+            frame -= np.nanmedian(frame)
+    return frame
 
 
 def combine_fixed_pattern(
@@ -243,6 +297,58 @@ def fit_pattern_amplitude(
     return float(d @ t / denom)
 
 
+def fit_pattern_amplitude_offset(
+    data: _Floats,
+    dq: _Ints,
+    template: _Floats,
+    *,
+    mask: _Bool | None = None,
+    dq_bad_bits: int = 1,
+) -> tuple[float, float]:
+    """Fit ``data ~= alpha * template + beta`` over explicitly unmasked pixels.
+
+    This is the GRISM fit used after building a unified low+high-frequency
+    detector template. The scalar ``beta`` absorbs the exposure's sky level so a
+    pointing-dependent DC background does not bias the template amplitude; callers
+    subtract only ``alpha * template``.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(alpha, beta)``. ``alpha`` is ``0`` when too few pixels or no template
+        power are available.
+    """
+    image = np.asarray(data, dtype=float)
+    tmpl = np.asarray(template, dtype=float)
+    if image.ndim != 2:
+        raise ValueError(f"data must be 2-D; got shape {image.shape}.")
+    if image.shape != tmpl.shape:
+        raise ValueError(
+            f"template shape {tmpl.shape} does not match data shape {image.shape}."
+        )
+    excluded = _explicit_exclusion(
+        image, dq, mask=mask, dq_bad_bits=dq_bad_bits
+    ) | ~np.isfinite(tmpl)
+    good = ~excluded
+    if good.sum() < 2:
+        finite = image[np.isfinite(image)]
+        beta = float(np.median(finite)) if finite.size else 0.0
+        return 0.0, beta
+
+    d = image[good]
+    t = tmpl[good]
+    d_mean = float(d.mean())
+    t_mean = float(t.mean())
+    d0 = d - d_mean
+    t0 = t - t_mean
+    denom = float(t0 @ t0)
+    if denom <= 0:
+        return 0.0, d_mean
+    alpha = float(d0 @ t0 / denom)
+    beta = d_mean - alpha * t_mean
+    return alpha, beta
+
+
 def subtract_fixed_pattern(
     data: _Floats,
     err: _Floats,
@@ -318,3 +424,60 @@ def subtract_fixed_pattern(
     else:
         amplitude = float(alpha)
     return image - amplitude * np.nan_to_num(tmpl, nan=0.0), err, dq
+
+
+def subtract_grism_fixed_pattern(
+    data: _Floats,
+    err: _Floats,
+    dq: _Ints,
+    template: _Floats,
+    *,
+    mask: _Bool | None = None,
+    alpha: float | None = None,
+    dq_bad_bits: int = 1,
+) -> tuple[_Floats, _Floats, _Ints]:
+    """Subtract a unified GRISM fixed-pattern template from one frame.
+
+    The amplitude is fit with a nuisance offset over the supplied trace-free mask
+    (or fixed by ``alpha``), then only the scaled detector template is removed.
+    ``err`` and ``dq`` pass through unchanged because the operation subtracts a
+    deterministic additive model.
+    """
+    image = np.asarray(data, dtype=float)
+    tmpl = np.asarray(template, dtype=float)
+    if image.ndim != 2:
+        raise ValueError(f"data must be 2-D; got shape {image.shape}.")
+    if image.shape != tmpl.shape:
+        raise ValueError(
+            f"template shape {tmpl.shape} does not match data shape {image.shape}."
+        )
+    if alpha is None:
+        amplitude, _ = fit_pattern_amplitude_offset(
+            image, dq, tmpl, mask=mask, dq_bad_bits=dq_bad_bits
+        )
+    else:
+        amplitude = float(alpha)
+    return image - amplitude * np.nan_to_num(tmpl, nan=0.0), err, dq
+
+
+def _explicit_exclusion(
+    image: _Floats,
+    dq: _Ints,
+    *,
+    mask: _Bool | None,
+    dq_bad_bits: int,
+) -> _Bool:
+    """Return explicit non-finite / DQ / caller mask exclusions."""
+    if np.asarray(dq).shape != image.shape:
+        raise ValueError(f"dq shape {np.asarray(dq).shape} does not match data shape.")
+    excluded = ~np.isfinite(image)
+    if dq_bad_bits:
+        excluded |= (np.asarray(dq) & dq_bad_bits) != 0
+    if mask is not None:
+        mask_array = np.asarray(mask, dtype=bool)
+        if mask_array.shape != image.shape:
+            raise ValueError(
+                f"mask shape {mask_array.shape} does not match data shape {image.shape}."
+            )
+        excluded |= mask_array
+    return excluded

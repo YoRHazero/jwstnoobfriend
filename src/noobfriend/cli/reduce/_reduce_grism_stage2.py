@@ -1,11 +1,13 @@
 """The GRISM (NIRCam WFSS) stage-2 reduction chain and its starter recipe.
 
-Unlike the per-frame CLEAR chain, this pipeline is two-pass: pass 1 reduces each
-frame rate -> 2b (flag_outlier -> assign_wcs -> WFSS master-sky -> flat) and
-collects a downsampled trace-masked residual; between passes a per-(module,
-direction) sky-residual template is built from those residuals; pass 2 subtracts
-the template (2b -> 2bii). The master-sky and template-background steps are not
-plain ``Step.call`` / ``(data, err, dq)`` ops, so the renderer in
+Unlike the per-frame CLEAR chain, this pipeline has an early fixed-pattern
+template pass plus the existing sky-template pass: first build and subtract a
+rate-stage detector/pupil fixed-pattern template, then pass 1 reduces each frame
+rate -> 2b (flag_outlier -> assign_wcs -> WFSS master-sky -> flat) and collects a
+downsampled trace-masked residual; between passes a per-(module, direction)
+sky-residual template is built from those residuals; pass 2 subtracts the
+template (2b -> 2bii). The fixed-pattern, master-sky and template-background
+steps are not plain ``Step.call`` / ``(data, err, dq)`` ops, so the renderer in
 :mod:`noobfriend.cli.reduce._codegen_grism_stage2` emits their code directly --
 the ``StepSpec`` entries here carry only names, titles and skip/save semantics.
 """
@@ -15,9 +17,15 @@ from noobfriend.cli.reduce._recipe import StepSpec
 #: Input stage this chain reduces from.
 INPUT_STAGE: str = "2a"
 
-#: The fixed, ordered WFSS chain. ``master_sky`` / ``template_bkg`` are rendered
-#: bespoke (no ``custom`` / ``jwst`` mapping); the rest are ordinary ops.
+#: The fixed, ordered WFSS chain. ``fixed_pattern`` / ``master_sky`` /
+#: ``template_bkg`` are rendered bespoke (no ``custom`` / ``jwst`` mapping); the
+#: rest are ordinary ops.
 CHAIN: tuple[StepSpec, ...] = (
+    StepSpec(
+        "fixed_pattern",
+        "detector/pupil fixed-pattern template subtraction",
+        saveable=False,
+    ),
     StepSpec(
         "flag_outlier",
         "hot / cosmic-ray outlier-pixel flagging (custom)",
@@ -52,7 +60,7 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
     """Return a starter GRISM recipe listing every step in order, none skipped."""
     lines = [
         "# noobfriend GRISM (NIRCam WFSS) stage-2 reduction recipe.",
-        "# Two-pass: rate -> 2b (per frame), build per-module sky template, 2b -> 2bii.",
+        "# Builds rate-stage fixed-pattern templates, then rate -> 2b, sky template, 2b -> 2bii.",
         "# Step parameters live in the generated code, not here.",
         "",
         'pipeline = "grism"',
@@ -66,8 +74,9 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         'pupil = ["GRISMR", "GRISMC"]  # dispersed LW frames (the grism images)',
         '# detector = "nrc?long"',
         "",
-        "# Per-(module, direction) sky-residual template options.",
+        "# Per-(module, direction) fixed-pattern and sky-template options.",
         "[grism]",
+        'template_dir = "grism_templates"',
         "scalar = true       # per-frame scalar fit of the template (recommended)",
         "downsample = 4      # residual-grid downsample factor (512^2 grid at 4)",
         "smooth_sigma = 24.0 # Gaussian smoothing of the upsampled template",

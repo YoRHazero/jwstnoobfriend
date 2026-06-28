@@ -12,8 +12,11 @@ import numpy as np
 from noobfriend.reduction import (
     combine_fixed_pattern,
     fit_pattern_amplitude,
+    fit_pattern_amplitude_offset,
     fixed_pattern_residual,
+    grism_fixed_pattern_frame,
     subtract_fixed_pattern,
+    subtract_grism_fixed_pattern,
 )
 
 
@@ -126,3 +129,44 @@ def test_residual_masks_sources_and_keeps_pattern() -> None:
     good = np.isfinite(res)
     good[28:36, 28:36] = False  # avoid the dilated source region
     assert np.corrcoef(res[good], truth[good])[0, 1] > 0.8
+
+
+def test_grism_fixed_pattern_frame_keeps_gradient_and_masks_traces() -> None:
+    truth = _pattern()
+    gradient = 0.03 * np.arange(truth.shape[1])[None, :]
+    data = 20.0 + gradient + 0.4 * truth
+    dq = np.zeros(truth.shape, dtype=np.int32)
+    dq[0, 0] = 1
+    mask = np.zeros(truth.shape, dtype=bool)
+    mask[30:34, :] = True  # dispersed trace
+
+    frame = grism_fixed_pattern_frame(data, dq, mask=mask)
+
+    assert np.isnan(frame[31, 10])
+    assert np.isnan(frame[0, 0])
+    assert abs(np.nanmedian(frame)) < 1e-9
+    expected = gradient + 0.4 * truth
+    expected = expected - np.median(expected[~mask & (dq == 0)])
+    good = np.isfinite(frame)
+    assert np.corrcoef(frame[good].ravel(), expected[good].ravel())[0, 1] > 0.99
+
+
+def test_grism_fit_uses_offset_and_subtracts_only_template() -> None:
+    template = 0.1 * np.arange(64)[None, :] + _pattern()
+    template = template - np.median(template)
+    dq = np.zeros(template.shape, dtype=np.int32)
+    err = np.ones_like(template)
+    data = 100.0 + 0.35 * template
+    mask = np.zeros(template.shape, dtype=bool)
+    mask[:, 0:4] = True
+
+    alpha, beta = fit_pattern_amplitude_offset(data, dq, template, mask=mask)
+    out, out_err, out_dq = subtract_grism_fixed_pattern(
+        data, err, dq, template, mask=mask
+    )
+
+    assert np.isclose(alpha, 0.35, atol=1e-9)
+    assert np.isclose(beta, 100.0, atol=1e-9)
+    assert np.allclose(out, 100.0, atol=1e-9)
+    assert out_err is err
+    assert out_dq is dq
