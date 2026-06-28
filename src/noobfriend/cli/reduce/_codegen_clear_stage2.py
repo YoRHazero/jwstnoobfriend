@@ -46,7 +46,7 @@ _FIXED_PATTERN_HELPER = '''def _build_fixed_pattern_templates(box) -> dict:
             continue
         residual_paths: list = []
         for book in track(books, f"Fixed-pattern residuals {detector}"):
-            model = _dm.open(fits.open(BytesIO(book.read_bytes())))
+            model = _open_model(book.read_bytes())
             residual = fixed_pattern_residual(model.data, model.dq).astype("float32")
             model.close()
             path = FIXED_PATTERN_DIR / f"_residual_{detector}_{len(residual_paths):04d}.npy"
@@ -75,10 +75,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import tempfile
-from io import BytesIO
 from pathlib import Path
-
-from astropy.io import fits
 
 from noobfriend.core.env import get_settings, stage_path_var
 
@@ -129,6 +126,17 @@ def _out_location(book, stage: str) -> str:
     return base.rstrip("/") + "/" + f"{stem}_{stage}.fits"
 
 
+def _open_model(raw: bytes):
+    """Open a JWST datamodel from bytes without passing a deprecated HDUList."""
+    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as handle:
+        tmp = handle.name
+        handle.write(raw)
+    try:
+        return _dm.open(tmp)
+    finally:
+        os.unlink(tmp)
+
+
 def _save_bytes(model, stage: str) -> bytes:
     """Serialise ``model`` to bytes through a temp file (jwst save needs a path)."""
     with tempfile.NamedTemporaryFile(suffix=f"_{stage}.fits", delete=False) as handle:
@@ -151,7 +159,7 @@ __FIXED_PATTERN_BUILD__
         if not _keep(book):
             continue
         # bytes via the NooBox store: remote-capable and reuses the probe fetch.
-        model = _dm.open(fits.open(BytesIO(book.read_bytes())))
+        model = _open_model(book.read_bytes())
         parent = book
 __BODY__
         model.close()

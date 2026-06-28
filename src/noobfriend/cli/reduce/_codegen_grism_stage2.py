@@ -76,7 +76,7 @@ def _build_fixed_pattern_templates(box) -> dict[tuple[str, str], object]:
 
         residual_paths: list[Path] = []
         for book in track(books, f"Fixed-pattern residuals mod{module}_{direction}"):
-            model = _dm.open(fits.open(BytesIO(book.read_bytes())))
+            model = _open_model(book.read_bytes())
             mask = _grism_fixed_pattern_mask(model, book)
             residual = grism_fixed_pattern_frame(
                 model.data, model.dq, mask=mask
@@ -113,7 +113,6 @@ from __future__ import annotations
 import fnmatch
 import os
 import tempfile
-from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -169,6 +168,17 @@ def _out_location(book, stage: str) -> str:
     host = get_settings().server_host()
     base = f"{host}:{directory}" if host else directory
     return base.rstrip("/") + "/" + f"{stem}_{stage}.fits"
+
+
+def _open_model(raw: bytes):
+    """Open a JWST datamodel from bytes without passing a deprecated HDUList."""
+    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as handle:
+        tmp = handle.name
+        handle.write(raw)
+    try:
+        return _dm.open(tmp)
+    finally:
+        os.unlink(tmp)
 
 
 def _save_bytes(model, stage: str) -> bytes:
@@ -227,7 +237,7 @@ __FIXED_PATTERN_BUILD__
             out_box.add(book)
         if not _keep(book):
             continue
-        model = _dm.open(fits.open(BytesIO(book.read_bytes())))
+        model = _open_model(book.read_bytes())
         parent = book
 __PASS1_BODY__
         _loc = _out_location(book, STAGE_2B)
@@ -254,7 +264,7 @@ __PASS1_BODY__
             _save_template(group, templates[group], len(group_grids))
         for book_id, group in track(produced, f"Grism pass 2 {STAGE_2B}->{STAGE_2BII}"):
             b2 = out_box.get(book_id)
-            model = _dm.open(fits.open(BytesIO(b2.read_bytes())))
+            model = _open_model(b2.read_bytes())
             tmask = grism_trace_mask(
                 model.data, model.dq, dispersion_axis=_dispersion_axis(b2)
             )

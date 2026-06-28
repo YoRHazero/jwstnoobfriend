@@ -49,6 +49,8 @@ def test_clear_render_is_valid_python_with_the_chain() -> None:
     assert "BackgroundStep.call(model)" in source  # jwst no-op is included
     assert "from noobfriend.reduction import" in source
     assert "SELECT = {'pupil': 'CLEAR', 'filter': ['F182M', 'F210M']}" in source
+    assert "def _open_model(raw: bytes)" in source
+    assert "_dm.open(fits.open" not in source
 
 
 def test_clear_save_points_thread_explicit_lineage() -> None:
@@ -147,6 +149,8 @@ def test_grism_render_is_valid_two_pass_python() -> None:
     assert "DO_TEMPLATE = True" in source
     assert "SCALAR = True" in source
     assert "DOWNSAMPLE = 4" in source
+    assert "def _open_model(raw: bytes)" in source
+    assert "_dm.open(fits.open" not in source
 
 
 def test_grism_fixed_pattern_template_dir_is_configurable() -> None:
