@@ -1,70 +1,119 @@
-"""MCMC spatial decomposition of high-redshift galaxies.
+"""Composable morphology inference contracts.
 
-Forward-model a galaxy's multi-band imaging as a sum of analytic surface-brightness
-profiles, each convolved with the per-band PSF, and sample the parameters with
-numpyro/JAX NUTS.
-
-Workflow: build a :class:`NoobImage` from one target's per-band cutouts (each a
-plain :class:`BandSpec`-shaped dict); declare profile components (:class:`Sersic`,
-:class:`Exponential`, :class:`PointSource`), giving each parameter nothing (a
-data-driven default), a fixed number, an ``(lo, hi)`` interval, an explicit
-:class:`Prior`, or a shared :class:`Param`, and tie components by reusing a
-:class:`Param` or by an ordering expression such as ``r_eff + gap``; then
-``model = image.model([...])``, inspect with ``model.preview()``, and
-``result = model.sample()``.
-
-``MorphModel`` and ``MorphResult`` are imported lazily (they pull in JAX/numpyro
-from the optional ``mcmc`` extra), so importing this package needs only NumPy.
+The current package is a clean rewrite of the morphology API. New code should
+use explicit image, scene, backend, and result objects rather than
+environment-variable controlled workflows.
 """
 
-from noobfriend.inference.morphology._band import BandSpec
-from noobfriend.inference.morphology._image import NoobImage
-from noobfriend.inference.morphology._param import (
+from noobfriend.inference.morphology.backend import (
+    MissingSamplerBackendError,
+    NumpyroNUTSBackend,
+    choose_jax_platform,
+)
+from noobfriend.inference.morphology.baseline import (
+    BaselineDecision,
+    WingSNRBaselineSelector,
+)
+from noobfriend.inference.morphology.components import (
+    Background,
+    EllipticalOffsetFrom,
+    FixedCenter,
+    FreeCenter,
+    Point,
+    Sersic,
+    SersicShape,
+)
+from noobfriend.inference.morphology.comparison import (
+    LOOComparison,
+    compare_psis_loo,
+    psis_loo,
+)
+from noobfriend.inference.morphology.data import KernelPSF, NoobImage, NoobImageSet
+from noobfriend.inference.morphology.fit import (
+    AnchorSlopeMultiStartConfig,
+    AnchorSlopeMultiStartInitializer,
+    FitConfig,
+    MorphologyFitter,
+    MultiStartPreviewResult,
+    PreviewCandidate,
+)
+from noobfriend.inference.morphology.gate import (
+    PSFGate,
+    PSFGateConfig,
+    PSFGateResult,
+    RadialResidual,
+)
+from noobfriend.inference.morphology.parameters import (
     LogUniform,
     Normal,
-    Param,
+    Parameter,
+    PerBand,
     Prior,
-    Spec,
+    TotalFractionFlux,
     TruncNormal,
     Uniform,
 )
-from noobfriend.inference.morphology._priors import HighzPriorPolicy, PriorPolicy
-from noobfriend.inference.morphology._profile import (
-    Exponential,
-    PointSource,
-    Profile,
-    Sersic,
+from noobfriend.inference.morphology.render import inject_scene, render_scene
+from noobfriend.inference.morphology.result import (
+    FitDiagnostics,
+    FitResult,
+    PredictiveMetric,
+    RenderedScene,
+)
+from noobfriend.inference.morphology.scene import Scene
+from noobfriend.inference.morphology.introspection import scene_parameters
+from noobfriend.inference.morphology.workflow import (
+    MorphologyWorkflow,
+    MorphologyWorkflowConfig,
+    MorphologyWorkflowResult,
 )
 
 __all__ = [
-    "BandSpec",
-    "Exponential",
-    "HighzPriorPolicy",
+    "AnchorSlopeMultiStartConfig",
+    "AnchorSlopeMultiStartInitializer",
+    "Background",
+    "BaselineDecision",
+    "EllipticalOffsetFrom",
+    "FitConfig",
+    "FitDiagnostics",
+    "FitResult",
+    "FixedCenter",
+    "FreeCenter",
+    "KernelPSF",
+    "LOOComparison",
     "LogUniform",
-    "MorphModel",
-    "MorphResult",
+    "MissingSamplerBackendError",
+    "MorphologyFitter",
+    "MorphologyWorkflow",
+    "MorphologyWorkflowConfig",
+    "MorphologyWorkflowResult",
+    "MultiStartPreviewResult",
     "NoobImage",
+    "NoobImageSet",
     "Normal",
-    "Param",
-    "PointSource",
+    "NumpyroNUTSBackend",
+    "PSFGateResult",
+    "PSFGate",
+    "PSFGateConfig",
+    "Parameter",
+    "PerBand",
+    "Point",
+    "PreviewCandidate",
+    "PredictiveMetric",
     "Prior",
-    "PriorPolicy",
-    "Profile",
+    "RadialResidual",
+    "RenderedScene",
+    "Scene",
     "Sersic",
-    "Spec",
+    "SersicShape",
+    "TotalFractionFlux",
     "TruncNormal",
     "Uniform",
+    "WingSNRBaselineSelector",
+    "choose_jax_platform",
+    "compare_psis_loo",
+    "inject_scene",
+    "psis_loo",
+    "render_scene",
+    "scene_parameters",
 ]
-
-
-def __getattr__(name: str) -> object:
-    """Lazily expose the JAX/numpyro-backed model and result classes."""
-    if name == "MorphModel":
-        from noobfriend.inference.morphology._model import MorphModel
-
-        return MorphModel
-    if name == "MorphResult":
-        from noobfriend.inference.morphology._result import MorphResult
-
-        return MorphResult
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
