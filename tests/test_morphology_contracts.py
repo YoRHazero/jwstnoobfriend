@@ -103,9 +103,7 @@ def test_elliptical_offset_center_stays_inside_host_ellipse() -> None:
             phi="host_offset_phi",
         ),
         flux=1.0,
-        shape=SersicShape(
-            r_eff="host_r_eff", n=1.5, q="host_q", theta="host_theta"
-        ),
+        shape=SersicShape(r_eff="host_r_eff", n=1.5, q="host_q", theta="host_theta"),
     )
     scene = Scene([point, host])
     values = {
@@ -176,14 +174,20 @@ def test_baseline_selector_uses_positive_wing_snr() -> None:
     selector = WingSNRBaselineSelector()
 
     point_gate = PSFGateResult(point_params={}, wing_snr_by_band={"f444w": -9.0})
-    assert selector.choose(
-        point_gate, point_scene=point_scene, sersic_scene=sersic_scene
-    ).kind == "point"
+    assert (
+        selector.choose(
+            point_gate, point_scene=point_scene, sersic_scene=sersic_scene
+        ).kind
+        == "point"
+    )
 
     extended_gate = PSFGateResult(point_params={}, wing_snr_by_band={"f444w": 7.0})
-    assert selector.choose(
-        extended_gate, point_scene=point_scene, sersic_scene=sersic_scene
-    ).kind == "sersic"
+    assert (
+        selector.choose(
+            extended_gate, point_scene=point_scene, sersic_scene=sersic_scene
+        ).kind
+        == "sersic"
+    )
 
 
 def test_psf_gate_recovers_point_source_parameters() -> None:
@@ -211,7 +215,9 @@ def test_psf_gate_recovers_point_source_parameters() -> None:
     assert gate.chi2_per_pixel is not None
 
 
-def test_missing_numpyro_backend_message_uses_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_numpyro_backend_message_uses_uv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Lazy backend errors should not suggest pip commands."""
     real_find_spec = importlib.util.find_spec
 
@@ -431,9 +437,9 @@ def test_workflow_runs_gate_initialization_fits_loo_and_timings() -> None:
     assert set(result.comparison.metrics) == {"baseline:point", "full"}
     assert result.full_fit.metadata["workflow_stage"] == "full"
     assert result.baseline_fit.metadata["workflow_stage"] == "baseline:point"
-    assert result.full_fit.metadata["init_params"]["host_fraction_f444w"] == pytest.approx(
-        0.05
-    )
+    assert result.full_fit.metadata["init_params"][
+        "host_fraction_f444w"
+    ] == pytest.approx(0.05)
     assert result.baseline_fit.metadata["init_params"]["point_flux_f444w"] > 0
     for key in [
         "psf_gate_s",
@@ -522,8 +528,12 @@ def _workflow_fixture() -> tuple[NoobImageSet, Scene, Scene, Scene]:
         "sky",
         level=PerBand(
             values={
-                "f356w": Parameter("background_f356w", prior=Uniform(-1.0, 1.0), init=0.02),
-                "f444w": Parameter("background_f444w", prior=Uniform(-1.0, 1.0), init=0.05),
+                "f356w": Parameter(
+                    "background_f356w", prior=Uniform(-1.0, 1.0), init=0.02
+                ),
+                "f444w": Parameter(
+                    "background_f444w", prior=Uniform(-1.0, 1.0), init=0.05
+                ),
             }
         ),
     )
@@ -608,7 +618,9 @@ class _FakeSampler:
         log_likelihood = -0.5 + 0.01 * draw_axis[:, :, None]
         log_likelihood = log_likelihood + 1e-6 * obs_axis[None, None, :]
         return FitResult(
-            posterior={param.name: np.zeros((2, 40)) for param in scene_parameters(scene)},
+            posterior={
+                param.name: np.zeros((2, 40)) for param in scene_parameters(scene)
+            },
             diagnostics=FitDiagnostics(divergences=0),
             log_likelihood=log_likelihood,
             metadata={

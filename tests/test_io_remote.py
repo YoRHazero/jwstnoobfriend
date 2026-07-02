@@ -105,8 +105,10 @@ class TestFetchRangeLocal:
         cmd = captured["cmd"]
         assert cmd[0] == "ssh"
         assert "icrhome08" in cmd
-        assert any("dd if=" in part and "skip=100" in part and "count=50" in part
-                   for part in cmd)
+        assert any(
+            "dd if=" in part and "skip=100" in part and "count=50" in part
+            for part in cmd
+        )
 
     def test_remote_failure_raises(self, monkeypatch) -> None:
         def fake_run(cmd, **kwargs):

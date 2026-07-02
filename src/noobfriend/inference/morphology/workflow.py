@@ -211,7 +211,9 @@ class MorphologyWorkflow:
         )
 
 
-def _baseline_seed(gate: PSFGateResult, full_seed: dict[str, float]) -> dict[str, float]:
+def _baseline_seed(
+    gate: PSFGateResult, full_seed: dict[str, float]
+) -> dict[str, float]:
     """Return a baseline seed from gate output and full-scene initialization."""
     seed = dict(full_seed)
     seed.update(gate.point_params)

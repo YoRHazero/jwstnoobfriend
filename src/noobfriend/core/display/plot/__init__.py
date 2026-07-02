@@ -30,7 +30,11 @@ from noobfriend.core.display.plot._bokeh import set_render_mode
 from noobfriend.core.display.plot._footprint import plot_footprints
 from noobfriend.core.display.plot._image import imshow
 from noobfriend.core.display.plot._blink import imshow_blink
-from noobfriend.core.display.plot._overlay import CatalogOverlay, ImageFrame, ImageOverlay
+from noobfriend.core.display.plot._overlay import (
+    CatalogOverlay,
+    ImageFrame,
+    ImageOverlay,
+)
 from noobfriend.core.display.plot._psf_select import psf_select_panel
 from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
 from noobfriend.core.display.plot._spectrum1d import plot_spectrum1d

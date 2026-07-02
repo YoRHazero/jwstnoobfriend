@@ -166,7 +166,9 @@ class AnchorSlopeMultiStartInitializer:
 
         slope_start = time.perf_counter()
         keep = anchor_candidates[: max(1, self.config.anchor_keep)]
-        slope_candidates = self._score_slope_grid(images, scene, keep, gate, anchor_band)
+        slope_candidates = self._score_slope_grid(
+            images, scene, keep, gate, anchor_band
+        )
         slope_candidates = sorted(slope_candidates, key=lambda item: item.chi2)
         slope_elapsed = time.perf_counter() - slope_start
 
@@ -208,13 +210,19 @@ class AnchorSlopeMultiStartInitializer:
         }
         for image in images:
             band = image.name
-            background = gate.point_params.get(f"{self.config.background_prefix}_{band}")
+            background = gate.point_params.get(
+                f"{self.config.background_prefix}_{band}"
+            )
             if background is None:
-                background = float(image.data[image.mask].mean()) if image.mask.any() else 0.0
+                background = (
+                    float(image.data[image.mask].mean()) if image.mask.any() else 0.0
+                )
             params[f"{self.config.background_prefix}_{band}"] = float(background)
             point_flux = self._point_flux_seed(image, gate)
             params[f"{self.config.total_flux_prefix}_{band}"] = point_flux
-            params[f"{self.config.host_fraction_prefix}_{band}"] = self.config.fraction_floor
+            params[f"{self.config.host_fraction_prefix}_{band}"] = (
+                self.config.fraction_floor
+            )
 
         for param in scene_parameters(scene):
             params.setdefault(param.name, _parameter_start(param))
@@ -238,7 +246,9 @@ class AnchorSlopeMultiStartInitializer:
             )
         )
 
-        def build(combo: tuple[float, float, float, float, float, float]) -> PreviewCandidate:
+        def build(
+            combo: tuple[float, float, float, float, float, float],
+        ) -> PreviewCandidate:
             fraction, r_eff, q, theta, offset_rho, offset_phi = combo
             params = dict(base)
             params[self.config.host_r_eff_name] = float(r_eff)
@@ -320,10 +330,14 @@ class AnchorSlopeMultiStartInitializer:
             params[f"{self.config.total_flux_prefix}_{band}"] = max(total, 1e-12)
 
     def _point_flux_seed(self, image: Any, gate: PSFGateResult) -> float:
-        point_flux = gate.point_params.get(f"{self.config.point_flux_prefix}_{image.name}")
+        point_flux = gate.point_params.get(
+            f"{self.config.point_flux_prefix}_{image.name}"
+        )
         if point_flux is not None:
             return max(float(point_flux), 1e-12)
-        background = gate.point_params.get(f"{self.config.background_prefix}_{image.name}", 0.0)
+        background = gate.point_params.get(
+            f"{self.config.background_prefix}_{image.name}", 0.0
+        )
         positive = (image.data - background)[image.mask]
         return max(float(positive[positive > 0].sum()), 1e-12)
 
@@ -387,7 +401,9 @@ def _fraction_from_slope(
 def _clip_fraction(value: float, *, floor: float, ceiling: float) -> float:
     """Clip a candidate host fraction into the configured interval."""
     if floor < 0 or ceiling > 1 or floor >= ceiling:
-        raise ValueError("fraction floor/ceiling must satisfy 0 <= floor < ceiling <= 1.")
+        raise ValueError(
+            "fraction floor/ceiling must satisfy 0 <= floor < ceiling <= 1."
+        )
     return min(max(float(value), floor), ceiling)
 
 

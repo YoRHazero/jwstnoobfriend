@@ -35,8 +35,14 @@ class WingSNRBaselineSelector:
         """Choose point-only or Sersic-only baseline scenes."""
         combined = gate.combined_positive_wing_snr
         max_band = gate.max_positive_wing_snr
-        metrics = {"combined_positive_wing_snr": combined, "max_positive_wing_snr": max_band}
-        if combined >= self.combined_threshold or max_band >= self.single_band_threshold:
+        metrics = {
+            "combined_positive_wing_snr": combined,
+            "max_positive_wing_snr": max_band,
+        }
+        if (
+            combined >= self.combined_threshold
+            or max_band >= self.single_band_threshold
+        ):
             return BaselineDecision(
                 kind="sersic",
                 scene=sersic_scene,

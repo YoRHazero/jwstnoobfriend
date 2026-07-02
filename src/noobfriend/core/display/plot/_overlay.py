@@ -51,7 +51,9 @@ class ImageFrame:
             try:
                 return cls(n_rows=int(spec["n_rows"]), n_cols=int(spec["n_cols"]))
             except KeyError as exc:
-                raise ValueError("frame mapping must contain n_rows and n_cols") from exc
+                raise ValueError(
+                    "frame mapping must contain n_rows and n_cols"
+                ) from exc
         if isinstance(spec, Sequence) and not isinstance(spec, str | bytes):
             if len(spec) != 2:
                 raise ValueError("frame sequence must be (n_rows, n_cols)")
@@ -144,12 +146,12 @@ class CatalogOverlay:
     catalog: object
     pixel_cols: tuple[str, str] | None = ("x", "y")
     world_cols: tuple[str, str] | None = None
-    pixel_to_world: Callable[
-        [ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]
-    ] | None = None
-    world_to_pixel: Callable[
-        [ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]
-    ] | None = None
+    pixel_to_world: (
+        Callable[[ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]] | None
+    ) = None
+    world_to_pixel: (
+        Callable[[ArrayLike, ArrayLike], tuple[ArrayLike, ArrayLike]] | None
+    ) = None
     hover_cols: Sequence[str] | None = None
     style: Mapping[str, object] | None = None
     clip: bool = True
@@ -174,7 +176,9 @@ class CatalogOverlay:
             x, y = pixel
 
         if world is None and self.pixel_to_world is not None:
-            ra, dec = _call_catalog_transform(self.pixel_to_world, x, y, "pixel_to_world")
+            ra, dec = _call_catalog_transform(
+                self.pixel_to_world, x, y, "pixel_to_world"
+            )
         elif world is not None:
             ra, dec = world
         else:

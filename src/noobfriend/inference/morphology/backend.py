@@ -62,7 +62,9 @@ def choose_jax_platform(preferred: BackendName = "auto") -> str:
         return "cpu"
     if preferred == "cuda":
         if not has_gpu:
-            raise RuntimeError("JAX CUDA backend was requested, but no GPU device is visible.")
+            raise RuntimeError(
+                "JAX CUDA backend was requested, but no GPU device is visible."
+            )
         return "cuda"
     return "cuda" if has_gpu else "cpu"
 
@@ -276,7 +278,9 @@ def _numpyro_dist(prior: Prior, dist: Any) -> Any:
     if isinstance(prior, Normal):
         return dist.Normal(prior.loc, prior.scale)
     if isinstance(prior, TruncNormal):
-        return dist.TruncatedNormal(prior.loc, prior.scale, low=prior.low, high=prior.high)
+        return dist.TruncatedNormal(
+            prior.loc, prior.scale, low=prior.low, high=prior.high
+        )
     if isinstance(prior, LogUniform):
         return dist.TransformedDistribution(
             dist.Uniform(np.log(prior.low), np.log(prior.high)),
@@ -306,7 +310,9 @@ def _fit_diagnostics(samples: dict[str, Any], extra: dict[str, Any]) -> FitDiagn
         return FitDiagnostics(divergences=divergences)
 
 
-def _jax_render_image(static: _ImageStatic, scene: Scene, values: dict[str, Any], jnp: Any) -> Any:
+def _jax_render_image(
+    static: _ImageStatic, scene: Scene, values: dict[str, Any], jnp: Any
+) -> Any:
     """Render one image in JAX."""
     total = jnp.zeros(static.shape)
     for component in scene:
@@ -345,7 +351,9 @@ def _resolve_flux_jax(value: Any, band: str, values: dict[str, Any], jnp: Any) -
     """Resolve a flux spec in a JAX model."""
     if isinstance(value, FluxPart):
         total = _resolve_flux_jax(value.split.total, band, values, jnp)
-        fraction = jnp.clip(_resolve_flux_jax(value.split.fraction, band, values, jnp), 0.0, 1.0)
+        fraction = jnp.clip(
+            _resolve_flux_jax(value.split.fraction, band, values, jnp), 0.0, 1.0
+        )
         if value.part_name == "host":
             return total * fraction
         return total * (1.0 - fraction)
@@ -362,12 +370,16 @@ def _resolve_flux_jax(value: Any, band: str, values: dict[str, Any], jnp: Any) -
     return _resolve_scalar_jax(value, values)
 
 
-def _resolve_center_jax(center: Any, scene: Scene, values: dict[str, Any], jnp: Any) -> tuple[Any, Any]:
+def _resolve_center_jax(
+    center: Any, scene: Scene, values: dict[str, Any], jnp: Any
+) -> tuple[Any, Any]:
     """Resolve a centre object in a JAX model."""
     if isinstance(center, FixedCenter):
         return float(center.x), float(center.y)
     if isinstance(center, FreeCenter):
-        return _resolve_scalar_jax(center.x, values), _resolve_scalar_jax(center.y, values)
+        return _resolve_scalar_jax(center.x, values), _resolve_scalar_jax(
+            center.y, values
+        )
     if isinstance(center, EllipticalOffsetFrom):
         ref = scene.component(center.reference)
         ref_x, ref_y = _resolve_center_jax(ref.center, scene, values, jnp)
@@ -376,17 +388,23 @@ def _resolve_center_jax(center: Any, scene: Scene, values: dict[str, Any], jnp: 
         theta = _resolve_scalar_jax(center.theta, values) * jnp.pi / 180.0
         rho = _resolve_scalar_jax(center.rho, values)
         phi = _resolve_scalar_jax(center.phi, values) * jnp.pi / 180.0
-        dx = r_eff * rho * (
-            jnp.cos(phi) * jnp.cos(theta) - q * jnp.sin(phi) * jnp.sin(theta)
+        dx = (
+            r_eff
+            * rho
+            * (jnp.cos(phi) * jnp.cos(theta) - q * jnp.sin(phi) * jnp.sin(theta))
         )
-        dy = r_eff * rho * (
-            jnp.cos(phi) * jnp.sin(theta) + q * jnp.sin(phi) * jnp.cos(theta)
+        dy = (
+            r_eff
+            * rho
+            * (jnp.cos(phi) * jnp.sin(theta) + q * jnp.sin(phi) * jnp.cos(theta))
         )
         return ref_x + dx, ref_y + dy
     raise TypeError(f"unsupported center type {type(center)!r}")
 
 
-def _jax_point(static: _ImageStatic, center: tuple[Any, Any], flux: Any, jnp: Any) -> Any:
+def _jax_point(
+    static: _ImageStatic, center: tuple[Any, Any], flux: Any, jnp: Any
+) -> Any:
     """Render a bilinear point source in JAX."""
     x0, y0 = center
     cx = (static.shape[1] - 1) / 2.0 + x0 / static.pixel_scale
@@ -398,7 +416,9 @@ def _jax_point(static: _ImageStatic, center: tuple[Any, Any], flux: Any, jnp: An
     out = jnp.zeros(static.shape)
     for yy, wy in [(iy, 1.0 - dy), (iy + 1, dy)]:
         for xx, wx in [(ix, 1.0 - dx), (ix + 1, dx)]:
-            valid = (yy >= 0) & (yy < static.shape[0]) & (xx >= 0) & (xx < static.shape[1])
+            valid = (
+                (yy >= 0) & (yy < static.shape[0]) & (xx >= 0) & (xx < static.shape[1])
+            )
             out = out.at[
                 jnp.clip(yy, 0, static.shape[0] - 1),
                 jnp.clip(xx, 0, static.shape[1] - 1),

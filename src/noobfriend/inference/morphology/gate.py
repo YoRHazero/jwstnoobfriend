@@ -115,7 +115,9 @@ def _initial_vector(images: NoobImageSet, config: PSFGateConfig) -> np.ndarray:
     return np.asarray(values, dtype=float)
 
 
-def _bounds(images: NoobImageSet, config: PSFGateConfig) -> tuple[np.ndarray, np.ndarray]:
+def _bounds(
+    images: NoobImageSet, config: PSFGateConfig
+) -> tuple[np.ndarray, np.ndarray]:
     """Return least-squares lower/upper bounds."""
     lo = [-config.max_offset_arcsec, -config.max_offset_arcsec]
     hi = [config.max_offset_arcsec, config.max_offset_arcsec]
@@ -176,7 +178,9 @@ def _centroid_seed(images: NoobImageSet) -> tuple[float, float]:
     for image in images:
         mask = np.asarray(image.mask, dtype=bool)
         background = _background_seed(image)
-        weight = np.maximum(image.data - background, 0.0) / np.maximum(image.error, 1e-30)
+        weight = np.maximum(image.data - background, 0.0) / np.maximum(
+            image.error, 1e-30
+        )
         weight = np.where(mask & np.isfinite(weight), weight, 0.0)
         x, y = image.arcsec_grid()
         num_x += float(np.sum(weight * x))

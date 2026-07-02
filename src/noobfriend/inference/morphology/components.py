@@ -17,7 +17,9 @@ from noobfriend.inference.morphology.parameters import (
 class Center(Protocol):
     """Protocol for objects resolving a component centre in arcsec."""
 
-    def xy(self, scene: "SceneProtocol", values: dict[str, float]) -> tuple[float, float]:
+    def xy(
+        self, scene: "SceneProtocol", values: dict[str, float]
+    ) -> tuple[float, float]:
         """Return ``(x, y)`` in the shared arcsec frame."""
 
 
@@ -89,12 +91,8 @@ def elliptical_offset_xy(
     """Map ellipse coordinates to arcsec ``dx, dy``."""
     theta = np.deg2rad(theta_deg)
     phi = np.deg2rad(phi_deg)
-    dx = r_eff * rho * (
-        np.cos(phi) * np.cos(theta) - q * np.sin(phi) * np.sin(theta)
-    )
-    dy = r_eff * rho * (
-        np.cos(phi) * np.sin(theta) + q * np.sin(phi) * np.cos(theta)
-    )
+    dx = r_eff * rho * (np.cos(phi) * np.cos(theta) - q * np.sin(phi) * np.sin(theta))
+    dy = r_eff * rho * (np.cos(phi) * np.sin(theta) + q * np.sin(phi) * np.cos(theta))
     return float(dx), float(dy)
 
 

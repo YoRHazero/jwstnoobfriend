@@ -36,7 +36,10 @@ def render_scene(
             elif isinstance(component, Point):
                 flux = resolve_flux(component.flux, image.name, params)
                 model = _render_point(
-                    image.shape, image.pixel_scale, component.center.xy(scene, params), flux
+                    image.shape,
+                    image.pixel_scale,
+                    component.center.xy(scene, params),
+                    flux,
                 )
                 model = _convolve(model, kernel)
             elif isinstance(component, Sersic):
