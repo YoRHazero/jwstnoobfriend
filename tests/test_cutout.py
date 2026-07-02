@@ -184,6 +184,20 @@ class TestCutoutReproject:
             image, np.asarray(data, dtype=np.float64)[3:6, 2:5], atol=1e-9
         )
 
+    def test_reproject_coarse_step_matches_full_for_affine_wcs(self) -> None:
+        # Coarse-grid corner sampling + bicubic upsample must reproduce the
+        # per-corner result exactly for an affine WCS (bicubic captures a linear
+        # corner field), so coarse_step is a free speedup with no error here.
+        wcs = LinearWCS(x0=0, y0=0, ra0=0.0, dec0=0.0, scale=0.001)
+        data = np.arange(64 * 64, dtype=np.float64).reshape(64, 64)
+
+        cut = Cutout.from_bounds(wcs, x_bounds=(0, 48), y_bounds=(0, 48))
+        full, _, _ = cut.reproject(data, wcs)
+        coarse, _, _ = cut.reproject(data, wcs, coarse_step=(8, 8))
+
+        assert coarse.shape == full.shape == (48, 48)
+        np.testing.assert_allclose(coarse, full, atol=1e-9)
+
     def test_reproject_outside_source_has_zero_footprint(self) -> None:
         # A cutout window entirely off the source image yields no coverage.
         wcs = LinearWCS(x0=0, y0=0, ra0=0.0, dec0=0.0, scale=0.001)

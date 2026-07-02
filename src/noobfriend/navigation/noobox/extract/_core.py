@@ -72,6 +72,8 @@ class BoxExtract:
         skip_missing_wcs: bool = True,
         probe: bool = True,
         progress: bool = True,
+        coarse_step: tuple[int, int] | None = None,
+        auto_pad: bool = True,
     ) -> "BoxCutout":
         """Cut one sky position out of every box member that covers it.
 
@@ -119,6 +121,19 @@ class BoxExtract:
             test.
         progress : bool, default True
             Show a progress bar while reading the covering books.
+        coarse_step : tuple[int, int], optional
+            Only with ``reproject=True``: evaluate the WCS on a coarse subgrid
+            (step ``(row, col)`` in output pixels) and bicubic-upsample the
+            pixel corners, instead of one WCS call per corner. Recommended for
+            JWST gwcs, whose numerical inverse is expensive per call; a moderate
+            step (e.g. ``(16, 16)``) cuts the reprojection cost several-fold with
+            negligible error. See
+            :meth:`~noobfriend.extraction.cutout.Cutout.reproject`.
+        auto_pad : bool, default True
+            With ``coarse_step``, grow the shared grid outward to the next shape
+            that the step divides exactly (``coarse_step`` otherwise requires
+            it). The padding is ``< step`` pixels per axis; ignored when
+            ``coarse_step`` is ``None``.
 
         Returns
         -------
@@ -151,6 +166,8 @@ class BoxExtract:
             skip_missing_wcs=skip_missing_wcs,
             probe=probe,
             progress=progress,
+            coarse_step=coarse_step,
+            auto_pad=auto_pad,
         )
 
     def grism(

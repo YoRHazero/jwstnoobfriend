@@ -77,6 +77,8 @@ def _build(
     skip_missing_wcs: bool = True,
     probe: bool = True,
     progress: bool = True,
+    coarse_step: tuple[int, int] | None = None,
+    auto_pad: bool = True,
 ) -> "BoxCutout":
     """Build a :class:`BoxCutout` (see :meth:`BoxExtract.cutout`)."""
     from noobfriend.extraction.cutout import Cutout
@@ -129,13 +131,22 @@ def _build(
             f"reference book {reference.id} has no WCS for the cutout grid."
         )
     grid = Cutout.from_world(reference_wcs, ra, dec, **size)
+    if coarse_step is not None and auto_pad:
+        padded = grid.geometry.padded_to_multiple(*coarse_step)
+        grid = Cutout.from_bounds(
+            reference_wcs, x_bounds=padded.x_bounds, y_bounds=padded.y_bounds
+        )
     weights: dict[NooBook, np.ndarray] = {}
     for book in _tracked(covering, progress):
-        image, _footprint, weight = grid.reproject(book.data, book.wcs)
+        image, _footprint, weight = grid.reproject(
+            book.data, book.wcs, coarse_step=coarse_step
+        )
         stamps[book] = image
         weights[book] = weight
         if errs is not None and book.err is not None:
-            err_image, _, _ = grid.reproject(book.err, book.wcs)
+            err_image, _, _ = grid.reproject(
+                book.err, book.wcs, coarse_step=coarse_step
+            )
             errs[book] = err_image
     return BoxCutout(
         ra=ra, dec=dec, grid=grid, stamps=stamps, weights=weights, errs=errs

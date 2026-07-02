@@ -87,3 +87,43 @@ class TestCutoutGeometry:
     def test_corners_use_exclusive_upper_bounds(self) -> None:
         geom = CutoutGeometry(x_bounds=(0, 4), y_bounds=(0, 6))
         assert geom.corners == [(0, 0), (4, 0), (4, 6), (0, 6)]
+
+
+class TestPaddedToMultiple:
+    """Growing bounds so each axis divides the coarse reprojection step."""
+
+    def test_exact_multiple_is_unchanged(self) -> None:
+        geom = CutoutGeometry(x_bounds=(0, 32), y_bounds=(0, 16))
+        assert geom.padded_to_multiple(16, 16) == geom
+
+    def test_pads_to_next_multiple(self) -> None:
+        # cols len 33 -> 48, rows len 17 -> 32 for step 16.
+        geom = CutoutGeometry(x_bounds=(0, 33), y_bounds=(0, 17))
+        padded = geom.padded_to_multiple(16, 16)
+        assert padded.shape == (32, 48)
+        assert padded.shape[0] % 16 == 0 and padded.shape[1] % 16 == 0
+
+    def test_splits_padding_across_both_sides(self) -> None:
+        # len 33, step 16 -> pad 15: 7 on the low side, 8 on the high side.
+        geom = CutoutGeometry(x_bounds=(0, 33), y_bounds=(0, 33))
+        padded = geom.padded_to_multiple(16, 16)
+        assert padded.x_bounds == (-7, 41)
+        assert padded.y_bounds == (-7, 41)
+
+    def test_odd_axis_lengths_like_the_clear_cutout(self) -> None:
+        # Regression for the real clear shape (2449, 3249), which no nice step
+        # divides; step 16 pads each axis by 15.
+        geom = CutoutGeometry(x_bounds=(0, 3249), y_bounds=(0, 2449))
+        padded = geom.padded_to_multiple(16, 16)
+        assert padded.shape == (2464, 3264)
+        assert padded.shape[0] % 16 == 0 and padded.shape[1] % 16 == 0
+
+    def test_step_of_one_leaves_axis_unchanged(self) -> None:
+        geom = CutoutGeometry(x_bounds=(0, 33), y_bounds=(0, 17))
+        assert geom.padded_to_multiple(1, 1) == geom
+
+    def test_per_axis_steps_are_independent(self) -> None:
+        geom = CutoutGeometry(x_bounds=(0, 10), y_bounds=(0, 10))
+        padded = geom.padded_to_multiple(4, 8)  # rows%4==0, cols%8==0
+        assert padded.shape[0] % 4 == 0
+        assert padded.shape[1] % 8 == 0

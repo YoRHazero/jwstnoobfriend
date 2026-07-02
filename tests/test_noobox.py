@@ -159,7 +159,7 @@ def _patch_fake_cutout(monkeypatch):
         def array(self, data):
             return np.asarray(data, dtype=float) * 10.0
 
-        def reproject(self, data, wcs):
+        def reproject(self, data, wcs, *, coarse_step=None):
             image = np.asarray(data, dtype=float)
             ones = np.ones_like(image)
             return image, ones, ones

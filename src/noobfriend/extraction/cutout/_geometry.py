@@ -187,6 +187,40 @@ class CutoutGeometry:
             self.x_bounds[1] - self.x_bounds[0],
         )
 
+    def padded_to_multiple(self, row_step: int, col_step: int) -> "CutoutGeometry":
+        """Grow the bounds minimally so each axis length is a multiple of its step.
+
+        Coarse-grid reprojection (``coarse_step``) evaluates the WCS on a
+        sub-sampled corner field, which requires the step to divide the output
+        shape exactly. This pads the region outward to the next such multiple,
+        splitting the extra pixels across the two sides of each axis (the low
+        side takes the floor half) so the centre barely moves. The padding on an
+        axis is always ``< step``; a step ``<= 1`` leaves that axis unchanged.
+
+        Parameters
+        ----------
+        row_step, col_step : int
+            The row (y) and column (x) coarse steps the shape must divide by --
+            i.e. ``(coarse_step[0], coarse_step[1])``.
+
+        Returns
+        -------
+        CutoutGeometry
+            A new geometry whose ``shape`` is a multiple of ``(row_step,
+            col_step)`` on each axis.
+        """
+
+        def grow(lo: int, hi: int, step: int) -> tuple[int, int]:
+            if step <= 1:
+                return lo, hi
+            pad = (-(hi - lo)) % step
+            return lo - pad // 2, hi + (pad - pad // 2)
+
+        return CutoutGeometry(
+            x_bounds=grow(*self.x_bounds, col_step),
+            y_bounds=grow(*self.y_bounds, row_step),
+        )
+
     @property
     def meshgrid(self) -> tuple[np.ndarray, np.ndarray]:
         """Integer ``(grid_x, grid_y)`` pixel-index arrays for the region.
