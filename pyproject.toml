@@ -37,6 +37,9 @@ mcmc = [
     "numpyro>=0.21.0",
     "pymc>=6.0.1",
 ]
+cuda = [
+    "jax[cuda12]; sys_platform == 'linux'",
+]
 psf = [
     "stpsf>=2.1.0",
 ]
