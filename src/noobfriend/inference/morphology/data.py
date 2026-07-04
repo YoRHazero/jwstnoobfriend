@@ -18,20 +18,41 @@ import numpy as np
 
 @runtime_checkable
 class PSFProvider(Protocol):
-    """Protocol consumed by morphology renderers for PSF kernels."""
+    """Protocol consumed by morphology renderers for effective PSFs.
+
+    ``kernel_for`` returns the effective PSF (pixel-integrated, ePSF sense)
+    sampled at ``image.pixel_scale / oversample``, as a 2-D odd-sized array
+    normalised to unit sum. Providers holding a genuinely oversampled ePSF
+    should return it directly for the matching factor; providers holding
+    only a native-resolution kernel may resample internally (with a
+    corresponding loss of sub-pixel fidelity for undersampled PSFs).
+    """
 
     def kernel_for(self, image: "NoobImage", *, oversample: int = 1) -> np.ndarray:
-        """Return a 2-D, odd-sized, sum-normalised kernel for ``image``."""
+        """Return the effective PSF at ``pixel_scale / oversample`` sampling."""
 
 
 @dataclass(frozen=True)
 class KernelPSF:
-    """Simple PSF provider backed by a fixed kernel array."""
+    """PSF provider backed by a fixed effective-PSF array.
+
+    Parameters
+    ----------
+    kernel : numpy.ndarray
+        2-D odd-sized effective-PSF stamp.
+    oversample : int
+        Sampling of the stored array relative to the image pixel scale:
+        1 means native resolution, ``s`` means the array is sampled at
+        ``pixel_scale / s`` (an oversampled ePSF). Requests for other
+        factors are served by cubic-spline resampling; supplying a real
+        oversampled ePSF is strongly preferred for undersampled PSFs.
+    """
 
     kernel: np.ndarray
+    oversample: int = 1
 
-    def kernel_for(self, image: "NoobImage", *, oversample: int = 1) -> np.ndarray:
-        """Return the fixed kernel, normalised to unit sum."""
+    def __post_init__(self) -> None:
+        """Validate the stored stamp."""
         kernel = np.asarray(self.kernel, dtype=float)
         if kernel.ndim != 2:
             raise ValueError("PSF kernel must be a 2-D array.")
@@ -40,7 +61,38 @@ class KernelPSF:
         total = float(np.nansum(kernel))
         if not np.isfinite(total) or total <= 0:
             raise ValueError("PSF kernel must have positive finite sum.")
-        return kernel / total
+        if self.oversample < 1:
+            raise ValueError("KernelPSF.oversample must be >= 1.")
+
+    def kernel_for(self, image: "NoobImage", *, oversample: int = 1) -> np.ndarray:
+        """Return the effective PSF resampled to the requested factor."""
+        kernel = np.asarray(self.kernel, dtype=float)
+        kernel = kernel / float(np.nansum(kernel))
+        if oversample == self.oversample:
+            return kernel
+        return _resample_kernel(kernel, self.oversample, oversample)
+
+
+def _resample_kernel(kernel: np.ndarray, from_os: int, to_os: int) -> np.ndarray:
+    """Cubic-spline resample a centred kernel between oversampling factors."""
+    from scipy.interpolate import RectBivariateSpline
+
+    rows, cols = kernel.shape
+    grid_r = np.arange(rows) - (rows - 1) / 2.0
+    grid_c = np.arange(cols) - (cols - 1) / 2.0
+    spline = RectBivariateSpline(grid_r, grid_c, kernel, kx=3, ky=3)
+    ratio = from_os / to_os
+    out_rows = int(rows / ratio)
+    out_cols = int(cols / ratio)
+    out_rows -= 1 - out_rows % 2
+    out_cols -= 1 - out_cols % 2
+    new_r = (np.arange(out_rows) - (out_rows - 1) / 2.0) * ratio
+    new_c = (np.arange(out_cols) - (out_cols - 1) / 2.0) * ratio
+    resampled = spline(new_r, new_c)
+    total = float(resampled.sum())
+    if not np.isfinite(total) or total <= 0:
+        raise ValueError("kernel resampling produced a non-positive sum.")
+    return resampled / total
 
 
 @dataclass(frozen=True)

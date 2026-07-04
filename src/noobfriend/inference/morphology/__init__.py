@@ -1,119 +1,86 @@
-"""Composable morphology inference contracts.
+"""Bayesian spatial decomposition of AGN and host galaxies.
 
-The current package is a clean rewrite of the morphology API. New code should
-use explicit image, scene, backend, and result objects rather than
-environment-variable controlled workflows.
+The public surface follows a collapsed-sampler design: MCMC explores only the
+nonlinear morphology parameters (in a standardized, singularity-free latent
+space), while component fluxes and backgrounds are marginalized analytically
+and recovered exactly after sampling. Model presence ("is there a host?",
+"is this a dual AGN?") is decided by predictive comparison across the model
+family, never by boundary-hugging parameters inside one model.
+
+Typical use::
+
+    from noobfriend.inference.morphology import decompose
+
+    result = decompose(images, models=("point", "point+host"))
+    print(result.comparison.table)
+    fit = result["point+host"]
+    fit.flux("host", "f444w")        # exact amplitude posterior draws
+    fit.health                       # rank-normalized R-hat / ESS gates
+
+Sampling needs the optional MCMC stack (``uv add "jax[cpu]" numpyro arviz``);
+everything else (data containers, priors, model specs) imports without it.
 """
 
-from noobfriend.inference.morphology.backend import (
+from noobfriend.inference.morphology._map import MultistartConfig
+from noobfriend.inference.morphology._nuts import NutsConfig
+from noobfriend.inference.morphology.data import (
+    KernelPSF,
+    NoobImage,
+    NoobImageSet,
+    PSFProvider,
+)
+from noobfriend.inference.morphology.decompose import (
     MissingSamplerBackendError,
-    NumpyroNUTSBackend,
-    choose_jax_platform,
+    SamplerConfig,
+    decompose,
+    fit_model,
 )
-from noobfriend.inference.morphology.baseline import (
-    BaselineDecision,
-    WingSNRBaselineSelector,
+from noobfriend.inference.morphology.models import ModelSpec
+from noobfriend.inference.morphology.priors import (
+    AmplitudePriors,
+    CenterPrior,
+    HostPriors,
+    PointPriors,
+    Priors,
 )
-from noobfriend.inference.morphology.components import (
-    Background,
-    EllipticalOffsetFrom,
-    FixedCenter,
-    FreeCenter,
-    Point,
-    Sersic,
-    SersicShape,
-)
-from noobfriend.inference.morphology.comparison import (
-    LOOComparison,
-    compare_psis_loo,
-    psis_loo,
-)
-from noobfriend.inference.morphology.data import KernelPSF, NoobImage, NoobImageSet
-from noobfriend.inference.morphology.fit import (
-    AnchorSlopeMultiStartConfig,
-    AnchorSlopeMultiStartInitializer,
-    FitConfig,
-    MorphologyFitter,
-    MultiStartPreviewResult,
-    PreviewCandidate,
-)
-from noobfriend.inference.morphology.gate import (
-    PSFGate,
-    PSFGateConfig,
-    PSFGateResult,
-    RadialResidual,
-)
-from noobfriend.inference.morphology.parameters import (
-    LogUniform,
-    Normal,
-    Parameter,
-    PerBand,
-    Prior,
-    TotalFractionFlux,
-    TruncNormal,
-    Uniform,
-)
-from noobfriend.inference.morphology.render import inject_scene, render_scene
-from noobfriend.inference.morphology.result import (
-    FitDiagnostics,
-    FitResult,
+from noobfriend.inference.morphology.results import (
+    Comparison,
+    DecompositionResult,
+    ModelFit,
     PredictiveMetric,
-    RenderedScene,
+    SamplerHealth,
 )
-from noobfriend.inference.morphology.scene import Scene
-from noobfriend.inference.morphology.introspection import scene_parameters
-from noobfriend.inference.morphology.workflow import (
-    MorphologyWorkflow,
-    MorphologyWorkflowConfig,
-    MorphologyWorkflowResult,
+from noobfriend.inference.morphology.validation import (
+    RecoveryReport,
+    RecoveryRow,
+    recovery,
+    simulate,
 )
 
 __all__ = [
-    "AnchorSlopeMultiStartConfig",
-    "AnchorSlopeMultiStartInitializer",
-    "Background",
-    "BaselineDecision",
-    "EllipticalOffsetFrom",
-    "FitConfig",
-    "FitDiagnostics",
-    "FitResult",
-    "FixedCenter",
-    "FreeCenter",
+    "AmplitudePriors",
+    "CenterPrior",
+    "Comparison",
+    "DecompositionResult",
+    "HostPriors",
     "KernelPSF",
-    "LOOComparison",
-    "LogUniform",
     "MissingSamplerBackendError",
-    "MorphologyFitter",
-    "MorphologyWorkflow",
-    "MorphologyWorkflowConfig",
-    "MorphologyWorkflowResult",
-    "MultiStartPreviewResult",
+    "ModelFit",
+    "ModelSpec",
+    "MultistartConfig",
     "NoobImage",
     "NoobImageSet",
-    "Normal",
-    "NumpyroNUTSBackend",
-    "PSFGateResult",
-    "PSFGate",
-    "PSFGateConfig",
-    "Parameter",
-    "PerBand",
-    "Point",
-    "PreviewCandidate",
+    "NutsConfig",
+    "PSFProvider",
+    "PointPriors",
     "PredictiveMetric",
-    "Prior",
-    "RadialResidual",
-    "RenderedScene",
-    "Scene",
-    "Sersic",
-    "SersicShape",
-    "TotalFractionFlux",
-    "TruncNormal",
-    "Uniform",
-    "WingSNRBaselineSelector",
-    "choose_jax_platform",
-    "compare_psis_loo",
-    "inject_scene",
-    "psis_loo",
-    "render_scene",
-    "scene_parameters",
+    "Priors",
+    "RecoveryReport",
+    "RecoveryRow",
+    "SamplerConfig",
+    "SamplerHealth",
+    "decompose",
+    "fit_model",
+    "recovery",
+    "simulate",
 ]
