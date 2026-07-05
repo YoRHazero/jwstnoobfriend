@@ -13,6 +13,7 @@ wheels/
 # Personal Claude Code conventions (not shared)
 CLAUDE.local.md
 .claude/
+.codex/
 
 # Large example data (FITS files; document download source in README)
 example_data/
