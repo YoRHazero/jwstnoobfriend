@@ -33,7 +33,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from noobfriend.core.env import get_settings, stage_path_var
+from noobfriend.core.env import get_settings, stage_path_var, to_canonical, to_local
 
 __MUTE_BLOCK__get_settings()  # load .env into os.environ (CRDS, stage paths, NOOBOX_PATH)
 
@@ -62,11 +62,12 @@ def _keep(book) -> bool:
 
 
 def _out_location(book, stage: str) -> str:
-    """Compose <NOOB_SERVER>:<STAGE_<stage>_PATH>/<exposure-stem>_<stage>.fits.
+    """Canonical <host>:<server_path>/<stem>_<stage>.fits for the product.
 
-    Remote (a ``host:path`` spec) when NOOB_SERVER names a host, so write_bytes
-    uploads over SSH; local otherwise. Parent directories are created by
-    write_bytes, not here.
+    ``to_canonical`` rewrites a locally-mounted path back to its portable
+    ``host:server_path`` form so the NooBox records the server location, not this
+    machine's mount point; an already-remote or unmounted-local path is returned
+    as composed.
     """
     directory = os.getenv(stage_path_var(stage))
     if directory is None:
@@ -79,7 +80,7 @@ def _out_location(book, stage: str) -> str:
     stem = stem.rsplit("_", 1)[0]  # drop the input product suffix
     host = get_settings().server_host()
     base = f"{host}:{directory}" if host else directory
-    return base.rstrip("/") + "/" + f"{stem}_{stage}.fits"
+    return to_canonical(base.rstrip("/") + "/" + f"{stem}_{stage}.fits")
 
 
 def _open_model(raw: bytes):
@@ -93,6 +94,20 @@ def _open_model(raw: bytes):
         os.unlink(tmp)
 
 
+def _open_input(book):
+    """Open a book's product as a datamodel, directly when it is locally mounted.
+
+    ``to_local`` returns a real path when the book's (possibly canonical
+    ``host:path``) location resolves on this machine -- opened straight, with no
+    temp file and no deprecated bytes path; otherwise the bytes are fetched
+    (remote-capable, cached) and opened through a temp file.
+    """
+    local = to_local(book.location)
+    if local is not None:
+        return _dm.open(str(local))
+    return _open_model(book.read_bytes())
+
+
 def _save_bytes(model, stage: str) -> bytes:
     """Serialise ``model`` to bytes through a temp file (jwst save needs a path)."""
     with tempfile.NamedTemporaryFile(suffix=f"_{stage}.fits", delete=False) as handle:
@@ -104,6 +119,23 @@ def _save_bytes(model, stage: str) -> bytes:
         os.unlink(tmp)
 
 
+def _write_product(model, location: str, stage: str) -> bytes:
+    """Write ``model`` to ``location`` and return its bytes for the manifest.
+
+    A locally-mounted ``location`` is written straight to the mount (no temp file,
+    no SSH); a remote one is serialised to a temp file and uploaded. The returned
+    bytes seed ``NooBook.from_file`` so it need not re-read the product.
+    """
+    dest = to_local(location)
+    if dest is not None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        model.save(str(dest))
+        return dest.read_bytes()
+    raw = _save_bytes(model, stage)
+    write_bytes(location, raw)
+    return raw
+
+
 def main(output_noobox_path: str | None = None) -> None:
     box = NooBox.load()
     out_box = box if output_noobox_path is None else NooBox()
@@ -113,8 +145,7 @@ def main(output_noobox_path: str | None = None) -> None:
             out_box.add(book)  # back-fill the probed copy into the manifest
         if not _keep(book):
             continue
-        # bytes via the NooBox store: remote-capable and reuses the probe fetch.
-        model = _open_model(book.read_bytes())
+        model = _open_input(book)
         parent = book
 __BODY__
         model.close()
@@ -172,8 +203,7 @@ def render(recipe: Recipe) -> str:
             stage = cfg.save_as
             body += [
                 f"_loc = _out_location(book, {stage!r})",
-                f"_raw = _save_bytes(model, {stage!r})",
-                "write_bytes(_loc, _raw)",
+                f"_raw = _write_product(model, _loc, {stage!r})",
                 f"parent = NooBook.from_file(_loc, {stage!r}, parents=[parent], raw=_raw)",
                 "out_box.add(parent)",
             ]

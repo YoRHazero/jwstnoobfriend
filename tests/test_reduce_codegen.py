@@ -63,10 +63,21 @@ def test_clear_render_is_valid_python_with_the_chain() -> None:
 
 def test_clear_save_points_thread_explicit_lineage() -> None:
     source = render_clear(_clear())
-    assert "write_bytes(_loc, _raw)" in source
+    assert "_raw = _write_product(model, _loc, '2b')" in source
     assert "NooBook.from_file(_loc, '2b', parents=[parent], raw=_raw)" in source
     assert "NooBook.from_file(_loc, '2bi', parents=[parent], raw=_raw)" in source
     assert source.index("'2b'") < source.index("'2bi'")
+
+
+def test_clear_records_canonical_and_opens_mounted_directly() -> None:
+    # the manifest location is canonicalised, and mounted inputs/outputs are
+    # opened/saved directly (no temp file) via the core.env mount resolver
+    source = render_clear(_clear())
+    assert "to_canonical, to_local" in source
+    assert "return to_canonical(" in source
+    assert "def _open_input(book)" in source and "model = _open_input(book)" in source
+    assert "def _write_product(model" in source
+    assert "_dm.open(str(local))" in source  # direct open when locally mounted
 
 
 def test_clear_skip_removes_a_custom_step() -> None:

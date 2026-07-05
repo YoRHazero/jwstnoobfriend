@@ -68,7 +68,7 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from noobfriend.core.env import get_settings, stage_path_var
+from noobfriend.core.env import get_settings, stage_path_var, to_canonical, to_local
 
 __MUTE_BLOCK__get_settings()  # load .env into os.environ (CRDS, stage paths, NOOBOX_PATH)
 
@@ -104,7 +104,12 @@ def _keep(book) -> bool:
 
 
 def _out_location(book, stage: str) -> str:
-    """Compose <NOOB_SERVER>:<STAGE_<stage>_PATH>/<exposure-stem>_<stage>.fits."""
+    """Canonical <host>:<server_path>/<stem>_<stage>.fits for the product.
+
+    ``to_canonical`` rewrites a locally-mounted path back to its portable
+    ``host:server_path`` form so the NooBox records the server location, not this
+    machine's mount point.
+    """
     directory = os.getenv(stage_path_var(stage))
     if directory is None:
         raise RuntimeError(f"{stage_path_var(stage)} is unset in the environment.")
@@ -116,7 +121,7 @@ def _out_location(book, stage: str) -> str:
     stem = stem.rsplit("_", 1)[0]  # drop the input product suffix
     host = get_settings().server_host()
     base = f"{host}:{directory}" if host else directory
-    return base.rstrip("/") + "/" + f"{stem}_{stage}.fits"
+    return to_canonical(base.rstrip("/") + "/" + f"{stem}_{stage}.fits")
 
 
 def _open_model(raw: bytes):
@@ -130,6 +135,20 @@ def _open_model(raw: bytes):
         os.unlink(tmp)
 
 
+def _open_input(book):
+    """Open a book's product as a datamodel, directly when it is locally mounted.
+
+    ``to_local`` returns a real path when the book's (possibly canonical
+    ``host:path``) location resolves on this machine -- opened straight, with no
+    temp file; otherwise the bytes are fetched (remote-capable) and opened via a
+    temp file.
+    """
+    local = to_local(book.location)
+    if local is not None:
+        return _dm.open(str(local))
+    return _open_model(book.read_bytes())
+
+
 def _save_bytes(model, stage: str) -> bytes:
     """Serialise ``model`` to bytes through a temp file (jwst save needs a path)."""
     with tempfile.NamedTemporaryFile(suffix=f"_{stage}.fits", delete=False) as handle:
@@ -139,6 +158,22 @@ def _save_bytes(model, stage: str) -> bytes:
         return Path(tmp).read_bytes()
     finally:
         os.unlink(tmp)
+
+
+def _write_product(model, location: str, stage: str) -> bytes:
+    """Write ``model`` to ``location`` and return its bytes for the manifest.
+
+    A locally-mounted ``location`` is written straight to the mount (no temp file,
+    no SSH); a remote one is serialised to a temp file and uploaded.
+    """
+    dest = to_local(location)
+    if dest is not None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        model.save(str(dest))
+        return dest.read_bytes()
+    raw = _save_bytes(model, stage)
+    write_bytes(location, raw)
+    return raw
 
 
 def _group_key(book) -> tuple[str, str]:
@@ -184,12 +219,11 @@ def main(output_noobox_path: str | None = None) -> None:
             out_box.add(book)
         if not _keep(book):
             continue
-        model = _open_model(book.read_bytes())
+        model = _open_input(book)
         parent = book
 __PASS1_BODY__
         _loc = _out_location(book, STAGE_2B)
-        _raw = _save_bytes(model, STAGE_2B)
-        write_bytes(_loc, _raw)
+        _raw = _write_product(model, _loc, STAGE_2B)
         b2 = NooBook.from_file(_loc, STAGE_2B, parents=[parent], raw=_raw)
         out_box.add(b2)
         if DO_TEMPLATE:
@@ -211,7 +245,7 @@ __PASS1_BODY__
             _save_template(group, templates[group], len(group_grids))
         for book_id, group in track(produced, f"Grism pass 2 {STAGE_2B}->{STAGE_2BII}"):
             b2 = out_box.get(book_id)
-            model = _open_model(b2.read_bytes())
+            model = _open_input(b2)
             tmask = grism_trace_mask(
                 model.data, model.dq, dispersion_axis=_dispersion_axis(b2)
             )
@@ -219,8 +253,7 @@ __PASS1_BODY__
                 model.data, model.err, model.dq, templates[group], mask=tmask, scalar=SCALAR
             )
             _loc = _out_location(b2, STAGE_2BII)
-            _raw = _save_bytes(model, STAGE_2BII)
-            write_bytes(_loc, _raw)
+            _raw = _write_product(model, _loc, STAGE_2BII)
             out_box.add(NooBook.from_file(_loc, STAGE_2BII, parents=[b2], raw=_raw))
             model.close()
 

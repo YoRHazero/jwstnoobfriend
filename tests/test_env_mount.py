@@ -12,15 +12,13 @@ import typer
 import noobfriend.cli.env.mount as mount_cli
 from noobfriend.cli.env._io import read_env_file
 from noobfriend.cli.env._mount import (
-    MountState,
     default_mountpoint,
     ensure_gitignored,
     is_remote_server,
-    load_state,
     plan_rewrite,
     save_state,
-    sidecar_path,
 )
+from noobfriend.core.env._mount import MountState, load_state, sidecar_path
 
 
 class TestIsRemoteServer:

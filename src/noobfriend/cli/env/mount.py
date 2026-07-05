@@ -2,8 +2,9 @@
 
 ``mount`` sshfs-mounts ``NOOB_SERVER:DATA_ROOT_PATH`` (by default under the user
 cache, outside any repo) and rewrites the ``.env`` so the library reads local
-paths; ``unmount`` reverses it from the sidecar. The library itself stays
-mount-unaware -- once mounted, it simply sees a local server.
+paths; ``unmount`` reverses it from the sidecar. Most library code stays
+mount-unaware -- once mounted, it simply sees a local server -- except the
+reduction runner, which reads the sidecar for canonical manifest paths.
 """
 
 from pathlib import Path
@@ -13,23 +14,21 @@ import typer
 
 from noobfriend.cli.env._io import read_env_file, upsert_var
 from noobfriend.cli.env._mount import (
-    MountState,
     default_mountpoint,
     ensure_gitignored,
     git_work_tree,
     is_mounted,
     is_remote_server,
     is_tracked,
-    load_state,
     plan_rewrite,
     remove_state,
     run_sshfs,
     run_unmount,
     save_state,
-    sidecar_path,
     sshfs_available,
 )
 from noobfriend.core.console import console
+from noobfriend.core.env._mount import MountState, load_state, sidecar_path
 
 _ENV_FILE_OPTION = typer.Option(
     "-f",

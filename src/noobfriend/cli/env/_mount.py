@@ -2,10 +2,12 @@
 
 Mounting is a one-time configuration transform: the remote ``DATA_ROOT_PATH`` is
 sshfs-mounted locally and the ``.env`` is rewritten so the library sees a local
-``localhost`` server with local paths -- no library code is mount-aware. The
-original values are saved to a local *sidecar* so :func:`env unmount` can restore
-them verbatim. By default the mount lives outside any git repository (under the
-user cache), so the mount tree never lands in a working copy.
+``localhost`` server with local paths. Most library code stays mount-unaware; the
+reduction runner is the deliberate exception, reading the *sidecar* to record
+canonical server paths (see :mod:`noobfriend.core.env._mount`). The sidecar also
+lets :func:`env unmount` restore the original ``.env`` verbatim. By default the
+mount lives outside any git repository (under the user cache), so the mount tree
+never lands in a working copy.
 """
 
 import json
@@ -13,39 +15,17 @@ import os
 import platform
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
-#: Local-state file written next to the ``.env`` recording what to restore.
-SIDECAR_NAME: str = ".noob_mount.json"
+from noobfriend.core.env._mount import MountState, sidecar_path
+
 #: Values of ``NOOB_SERVER`` that mean "already local -- nothing to mount".
 _LOCAL_ALIASES: frozenset[str] = frozenset({"", "localhost", "local"})
 #: Tuned sshfs options (benchmarked): reconnect, cache, no compression, fast cipher.
 _SSHFS_OPTS: str = (
     "reconnect,cache=yes,kernel_cache,Compression=no,Ciphers=aes128-gcm@openssh.com"
 )
-
-
-@dataclass
-class MountState:
-    """The local sidecar: what was mounted and the ``.env`` values to restore.
-
-    Attributes
-    ----------
-    host : str
-        The ssh host (the original ``NOOB_SERVER``) that was mounted.
-    data_root : str
-        The remote ``DATA_ROOT_PATH`` that was mounted.
-    mountpoint : str
-        The local directory the remote root was mounted onto.
-    saved : dict of str to str
-        Original ``.env`` values, keyed by variable name, to restore on unmount.
-    """
-
-    host: str
-    data_root: str
-    mountpoint: str
-    saved: dict[str, str]
 
 
 def is_remote_server(value: str | None) -> bool:
@@ -119,19 +99,6 @@ def plan_rewrite(
         saved[name] = value
         new[name] = str(mountpoint if rel == "." else mountpoint / rel)
     return saved, new, uncovered
-
-
-def sidecar_path(env_dir: Path) -> Path:
-    """Return the sidecar path for the ``.env`` directory ``env_dir``."""
-    return env_dir / SIDECAR_NAME
-
-
-def load_state(env_dir: Path) -> MountState | None:
-    """Load the mount sidecar from ``env_dir``, or ``None`` if not mounted."""
-    path = sidecar_path(env_dir)
-    if not path.exists():
-        return None
-    return MountState(**json.loads(path.read_text()))
 
 
 def save_state(env_dir: Path, state: MountState) -> None:
