@@ -22,6 +22,13 @@ class EnvGroup(str, Enum):
     storage = "Storage"
 
 
+class EnvPathKind(str, Enum):
+    """Whether a configured filesystem path names a directory or a file."""
+
+    directory = "directory"
+    file = "file"
+
+
 @dataclass(frozen=True)
 class EnvField:
     """A single configuration variable as seen by the ``env`` CLI.
@@ -43,6 +50,9 @@ class EnvField:
         Default value to pre-fill, or ``None`` when the variable has no default.
     is_path : bool
         Whether the value denotes a filesystem path (drives ``env check``).
+    path_kind : EnvPathKind or None
+        The kind of filesystem object named by the value. ``None`` for
+        non-path variables.
     """
 
     name: str
@@ -50,6 +60,7 @@ class EnvField:
     comment: str
     default: str | None
     is_path: bool
+    path_kind: EnvPathKind | None = None
 
 
 def stage_path_var(stage: str) -> str:

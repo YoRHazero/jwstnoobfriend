@@ -18,7 +18,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from noobfriend.core.env._loader import load_environment
-from noobfriend.core.env.schema import EnvField, EnvGroup, stage_path_var
+from noobfriend.core.env.schema import EnvField, EnvGroup, EnvPathKind, stage_path_var
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class NoobSettings(BaseSettings):
     noobox_path: Path | None = Field(
         default=None,
         description="Path to the NooBox manifest file used by NooBox.save / load.",
-        json_schema_extra={"group": EnvGroup.noob},
+        json_schema_extra={"group": EnvGroup.noob, "path_kind": EnvPathKind.file},
     )
     noob_server: str = Field(
         default="localhost",
@@ -154,6 +154,9 @@ def env_fields() -> list[EnvField]:
         )
         annotation = info.annotation
         is_path = annotation is Path or Path in get_args(annotation)
+        path_kind = extra.get("path_kind", EnvPathKind.directory) if is_path else None
+        if isinstance(path_kind, str):
+            path_kind = EnvPathKind(path_kind)
         default = info.default
         fields.append(
             EnvField(
@@ -162,6 +165,7 @@ def env_fields() -> list[EnvField]:
                 comment=info.description or "",
                 default=None if default is None else str(default),
                 is_path=is_path,
+                path_kind=path_kind,
             )
         )
     return fields

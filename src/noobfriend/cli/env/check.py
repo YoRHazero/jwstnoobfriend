@@ -1,6 +1,7 @@
 """The ``env check`` command: report which configured paths exist on disk."""
 
 import os
+import posixpath
 from pathlib import Path
 from typing import Annotated
 
@@ -9,7 +10,7 @@ import typer
 from noobfriend.cli.env._io import find_overrides, read_env_file
 from noobfriend.cli.env._presenters import render_path_status
 from noobfriend.core.console import console
-from noobfriend.core.env import EnvGroup, env_fields
+from noobfriend.core.env import EnvGroup, EnvPathKind, env_fields
 from noobfriend.core.io import RemoteReadError, remote_exists, remote_makedirs
 
 _FIELDS = env_fields()
@@ -17,6 +18,9 @@ _SCHEMA_PATH_VARS: frozenset[str] = frozenset(
     field.name for field in _FIELDS if field.is_path
 )
 _SCHEMA_GROUPS: dict[str, EnvGroup] = {field.name: field.group for field in _FIELDS}
+_SCHEMA_PATH_KINDS: dict[str, EnvPathKind | None] = {
+    field.name: field.path_kind for field in _FIELDS
+}
 
 #: ``NOOB_SERVER`` values that denote the local machine rather than an ssh host.
 _LOCAL_SERVER_ALIASES: frozenset[str] = frozenset({"", "localhost", "local"})
@@ -37,6 +41,27 @@ def _group_of(name: str) -> EnvGroup:
     ``NOOB_SERVER`` points.
     """
     return _SCHEMA_GROUPS.get(name.upper(), EnvGroup.storage)
+
+
+def _path_kind_of(name: str) -> EnvPathKind:
+    """Return whether ``name`` identifies a file or directory path.
+
+    Dynamic ``*_PATH`` variables are stage/data directories by convention.
+    """
+    return _SCHEMA_PATH_KINDS.get(name.upper()) or EnvPathKind.directory
+
+
+def _local_mkdir_path(name: str, path: Path) -> Path:
+    """Return the local directory to create for ``name``'s configured path."""
+    return path.parent if _path_kind_of(name) is EnvPathKind.file else path
+
+
+def _remote_mkdir_path(name: str, path: str) -> str:
+    """Return the remote directory to create for ``name``'s configured path."""
+    if _path_kind_of(name) is not EnvPathKind.file:
+        return path
+    parent = posixpath.dirname(path.rstrip("/"))
+    return parent or "."
 
 
 def _resolve_server(raw: str | None) -> str | None:
@@ -131,8 +156,8 @@ def cli_check(
             console.print(
                 f"[dim]Storage paths checked on [cyan]{server_host}[/cyan] (NOOB_SERVER).[/dim]"
             )
-        missing_local: list[Path] = []
-        missing_remote: list[tuple[str, str]] = []
+        missing_local: list[tuple[str, Path]] = []
+        missing_remote: list[tuple[str, str, str]] = []
         for name, value in path_vars.items():
             key = (
                 f"[red]{name}[/red]"
@@ -152,31 +177,35 @@ def cli_check(
                 status = "[green]exists[/green]" if exists else "[red]missing[/red]"
                 console.print(f"{key}: [cyan]{server_host}[/cyan]:{value} {status}")
                 if not exists:
-                    missing_remote.append((server_host, value))
+                    missing_remote.append((name, server_host, value))
             else:
                 path = Path(value).resolve()
                 console.print(f"{key}: {render_path_status(path)}")
                 if not path.exists():
-                    missing_local.append(path)
+                    missing_local.append((name, path))
 
         total_missing = len(missing_local) + len(missing_remote)
         if total_missing and mkdir:
             console.print("[bold yellow]Creating missing directories...[/bold yellow]")
-            for local_path in missing_local:
+            for name, local_path in missing_local:
+                mkdir_path = _local_mkdir_path(name, local_path)
                 try:
-                    local_path.mkdir(parents=True, exist_ok=True)
-                    console.print(f"[green]Created:[/green] {local_path}")
+                    mkdir_path.mkdir(parents=True, exist_ok=True)
+                    label = "Created parent" if mkdir_path != local_path else "Created"
+                    console.print(f"[green]{label}:[/green] {mkdir_path}")
                 except OSError as error:
                     console.print(
-                        f"[bold red]Failed to create {local_path}:[/bold red] {error}"
+                        f"[bold red]Failed to create {mkdir_path}:[/bold red] {error}"
                     )
-            for host, remote_path in missing_remote:
+            for name, host, remote_path in missing_remote:
+                mkdir_path = _remote_mkdir_path(name, remote_path)
                 try:
-                    remote_makedirs(host, remote_path)
-                    console.print(f"[green]Created:[/green] {host}:{remote_path}")
+                    remote_makedirs(host, mkdir_path)
+                    label = "Created parent" if mkdir_path != remote_path else "Created"
+                    console.print(f"[green]{label}:[/green] {host}:{mkdir_path}")
                 except RemoteReadError as error:
                     console.print(
-                        f"[bold red]Failed to create {host}:{remote_path}:[/bold red] {error}"
+                        f"[bold red]Failed to create {host}:{mkdir_path}:[/bold red] {error}"
                     )
         elif total_missing:
             console.print(

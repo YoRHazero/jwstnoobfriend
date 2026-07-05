@@ -6,8 +6,9 @@ Public surface:
   layered ``.env`` files into :data:`os.environ`.
 - :class:`NoobSettings`, :func:`get_settings`, :func:`env_fields` — validated,
   typed access to the configuration variables, plus a render-friendly view.
-- :class:`EnvField`, :class:`EnvGroup`, :func:`stage_path_var` — declarative
-  primitives shared with the ``noobfriend env`` CLI.
+- :class:`EnvField`, :class:`EnvGroup`, :class:`EnvPathKind`,
+  :func:`stage_path_var` — declarative primitives shared with the
+  ``noobfriend env`` CLI.
 - :class:`MountState`, :func:`find_mount_state`, :func:`to_canonical`,
   :func:`to_local` — read the ``env mount`` sidecar and resolve canonical
   ``host:server_path`` locations against the local mount.
@@ -23,13 +24,14 @@ from noobfriend.core.env._mount import (
     to_canonical,
     to_local,
 )
-from noobfriend.core.env.schema import EnvField, EnvGroup, stage_path_var
+from noobfriend.core.env.schema import EnvField, EnvGroup, EnvPathKind, stage_path_var
 from noobfriend.core.env.settings import NoobSettings, env_fields, get_settings
 
 __all__ = [
     "SIDECAR_NAME",
     "EnvField",
     "EnvGroup",
+    "EnvPathKind",
     "MountState",
     "NoobSettings",
     "env_fields",

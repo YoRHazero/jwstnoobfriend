@@ -9,8 +9,13 @@ from noobfriend.cli.env._io import find_overrides, split_existing
 from noobfriend.cli.env._options import start_stage_callback, stage_list_callback
 from noobfriend.cli.env._render import render_base
 from noobfriend.cli.env.add_stage import stage_dir
-from noobfriend.cli.env.check import _group_of, _is_remote_path, _resolve_server
-from noobfriend.core.env import EnvGroup, env_fields
+from noobfriend.cli.env.check import (
+    _group_of,
+    _is_remote_path,
+    _resolve_server,
+    cli_check,
+)
+from noobfriend.core.env import EnvGroup, EnvPathKind, env_fields
 
 
 class TestEnvFields:
@@ -34,6 +39,11 @@ class TestEnvFields:
         assert fields["NOOBOX_PATH"].is_path
         assert not fields["NOOB_SERVER"].is_path
         assert not fields["CRDS_SERVER_URL"].is_path
+
+    def test_noobox_path_is_a_file_path(self) -> None:
+        fields = {field.name: field for field in env_fields()}
+        assert fields["NOOBOX_PATH"].path_kind is EnvPathKind.file
+        assert fields["DATA_ROOT_PATH"].path_kind is EnvPathKind.directory
 
     def test_defaults_and_groups(self) -> None:
         fields = {field.name: field for field in env_fields()}
@@ -96,6 +106,19 @@ class TestCheckTargeting:
     def test_nothing_is_remote_without_a_server(self) -> None:
         assert not _is_remote_path("DATA_ROOT_PATH", None)
         assert not _is_remote_path("STAGE_2A_PATH", None)
+
+    def test_mkdir_creates_noobox_parent_not_leaf(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("NOOBOX_PATH", raising=False)
+        manifest = tmp_path / "box" / "noobox.json"
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"NOOBOX_PATH={manifest}\n")
+
+        cli_check(mkdir=True, env_file=env_file)
+
+        assert manifest.parent.is_dir()
+        assert not manifest.exists()
 
 
 class TestStageDir:
