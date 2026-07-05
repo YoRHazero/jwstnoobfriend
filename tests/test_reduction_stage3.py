@@ -14,7 +14,7 @@ import pytest
 from astropy.table import Table
 
 from noobfriend.core.imgutils import SourceCatalog
-from noobfriend.reduction import (
+from noobfriend.reduction.mosaic import (
     FieldGrid,
     build_reference,
     clean_gaia,

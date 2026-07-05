@@ -23,7 +23,7 @@ from skimage.measure import block_reduce
 from skimage.restoration import inpaint_biharmonic
 from skimage.transform import resize
 
-from noobfriend.reduction._masking import source_exclusion
+from noobfriend.reduction.detector._masking import source_exclusion
 
 _Floats = NDArray[np.floating]
 _Ints = NDArray[np.integer]

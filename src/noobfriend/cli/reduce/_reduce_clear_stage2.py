@@ -11,24 +11,26 @@ from noobfriend.cli.reduce._recipe import StepSpec
 INPUT_STAGE: str = "2a"
 
 #: The fixed, ordered NIRCam imaging chain (rate -> cal).
+#:
+#: Flat is applied *before* the 1/f step: the pixel-to-pixel responsivity
+#: (crosshatch) is multiplicative in the sky, so flat-fielding only cancels it
+#: while the sky is still present -- a 1/f step that removes the sky pedestal
+#: first would strand the crosshatch. Outlier flagging follows flat (cleaner
+#: detection once the crosshatch is gone) and is DQ-only, so its position is free.
 CHAIN: tuple[StepSpec, ...] = (
-    StepSpec(
-        "fixed_pattern",
-        "per-detector fixed-pattern (crosshatch) subtraction (custom, two-pass)",
-    ),
-    StepSpec("oneoverf", "1/f striping removal (custom)", custom="subtract_oneoverf"),
-    StepSpec(
-        "outlier_flag",
-        "hot / cosmic-ray outlier-pixel flagging (custom)",
-        custom="flag_outlier_pixels",
-    ),
+    StepSpec("jwst_assign_wcs", "WCS assignment", jwst="jwst.assign_wcs.AssignWcsStep"),
+    StepSpec("jwst_flat_field", "flat fielding", jwst="jwst.flatfield.FlatFieldStep"),
     StepSpec(
         "jwst_bkg_subtract",
         "official BackgroundStep (no-op without dedicated background exposures)",
         jwst="jwst.background.BackgroundStep",
     ),
-    StepSpec("jwst_assign_wcs", "WCS assignment", jwst="jwst.assign_wcs.AssignWcsStep"),
-    StepSpec("jwst_flat_field", "flat fielding", jwst="jwst.flatfield.FlatFieldStep"),
+    StepSpec(
+        "outlier_flag",
+        "hot / cosmic-ray outlier-pixel flagging (custom)",
+        custom="flag_outlier_pixels",
+    ),
+    StepSpec("oneoverf", "1/f striping removal (custom)", custom="subtract_oneoverf"),
     StepSpec("jwst_photom", "flux calibration", jwst="jwst.photom.PhotomStep"),
     StepSpec(
         "background_2d",
@@ -57,10 +59,6 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         '# output_noobox = "data/reduced_noobox.json"  '
         "# omit to update NOOBOX_PATH in place",
         "# mute_jwst = true  # silence jwst / CRDS / stpipe INFO+WARNING logging",
-        "",
-        "# [clear]  # CLEAR fixed-pattern (crosshatch) step options",
-        '# template_dir = "clear_templates"  '
-        "# where per-detector templates are built / cached",
         "",
         "[select]",
         f'stage = "{stage}"',

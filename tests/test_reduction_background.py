@@ -10,7 +10,7 @@ extrapolated, so it is excluded.
 
 import numpy as np
 
-from noobfriend.reduction import subtract_background
+from noobfriend.reduction.detector import subtract_background
 
 # box=16 on a 256 frame gives a 16x16 mesh -- the same grid resolution as the
 # default box_size=128 on a 2048 NIRCam frame, so the default filter_size=3 is

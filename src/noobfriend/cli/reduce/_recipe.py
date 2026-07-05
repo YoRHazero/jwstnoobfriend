@@ -57,23 +57,11 @@ class StepConfig(BaseModel):
     save_as: str | None = None
 
 
-class ClearOptions(BaseModel):
-    """CLEAR-pipeline knobs for the per-detector fixed-pattern step (ignored by grism).
-
-    ``template_dir`` is where the one-per-detector fixed-pattern templates are
-    built and cached (and reused on re-runs); each detector's template is
-    ``<template_dir>/<detector>.npy``.
-    """
-
-    template_dir: str = "clear_templates"
-
-
 class GrismOptions(BaseModel):
-    """Grism-pipeline knobs for sidecar fixed-pattern and sky templates.
+    """Grism-pipeline knobs for the 2b -> 2bii sky-residual template step.
 
-    ``template_dir`` stores both the early detector/pupil fixed-pattern templates
-    (``fixedpattern_modA_R.npy`` etc.) and the later 2b -> 2bii sky-residual
-    templates (``skytemplate_modA_R.fits`` etc.).
+    ``template_dir`` stores the per-(module, direction) sky-residual templates
+    (``skytemplate_modA_R.fits`` etc.).
     """
 
     template_dir: str = "grism_templates"
@@ -134,7 +122,6 @@ class Recipe(BaseModel):
     steps: dict[str, StepConfig] = {}
     output_noobox: str | None = None
     mute_jwst: bool = False
-    clear: ClearOptions = ClearOptions()
     grism: GrismOptions = GrismOptions()
     stage3: Stage3Options = Stage3Options()
 

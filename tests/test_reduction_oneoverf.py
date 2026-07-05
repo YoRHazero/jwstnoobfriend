@@ -8,7 +8,7 @@ the source flux, and pass ``err`` / ``dq`` through untouched.
 
 import numpy as np
 
-from noobfriend.reduction import subtract_oneoverf
+from noobfriend.reduction.detector import subtract_oneoverf
 
 
 def _frame(

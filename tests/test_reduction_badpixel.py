@@ -7,7 +7,7 @@ leave the source pixels unflagged.
 
 import numpy as np
 
-from noobfriend.reduction import flag_outlier_pixels
+from noobfriend.reduction.detector import flag_outlier_pixels
 
 _SIZE = 128
 

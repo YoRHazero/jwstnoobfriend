@@ -47,7 +47,15 @@ def test_clear_render_is_valid_python_with_the_chain() -> None:
     assert "flag_outlier_pixels(model.data, model.err, model.dq)" in source
     assert "PhotomStep.call(model)" in source
     assert "BackgroundStep.call(model)" in source  # jwst no-op is included
-    assert "from noobfriend.reduction import" in source
+    assert "from noobfriend.reduction.detector import" in source
+    # flat precedes 1/f and outlier flagging: the multiplicative crosshatch is
+    # only cancelled while the sky is still present.
+    assert source.index("FlatFieldStep.call(model)") < source.index(
+        "subtract_oneoverf("
+    )
+    assert source.index("FlatFieldStep.call(model)") < source.index(
+        "flag_outlier_pixels("
+    )
     assert "SELECT = {'pupil': 'CLEAR', 'filter': ['F182M', 'F210M']}" in source
     assert "def _open_model(raw: bytes)" in source
     assert "_dm.open(fits.open" not in source
@@ -76,72 +84,34 @@ def test_mute_jwst_renders_logging_disable() -> None:
     assert "logging.disable" not in render_clear(_clear())
 
 
-def test_clear_fixed_pattern_runs_two_pass_before_oneoverf() -> None:
-    source = render_clear(_clear())
-    ast.parse(source)
-    # pass 0: per-detector template build helper + call
-    assert "def _build_fixed_pattern_templates(box)" in source
-    assert "templates = _build_fixed_pattern_templates(box)" in source
-    assert "fixed_pattern_residual(model.data, model.dq)" in source
-    assert "combine_fixed_pattern(" in source
-    assert "FIXED_PATTERN_DIR = Path('clear_templates')" in source
-    # per-frame subtract uses the detector's template, and runs before 1/f
-    assert (
-        "subtract_fixed_pattern(model.data, model.err, model.dq, templates[book.detector])"
-        in source
-    )
-    assert source.index("subtract_fixed_pattern(") < source.index("subtract_oneoverf(")
-
-
-def test_clear_fixed_pattern_template_dir_is_configurable() -> None:
-    recipe = _clear()
-    recipe.clear.template_dir = "scratch/fp"
-    assert "FIXED_PATTERN_DIR = Path('scratch/fp')" in render_clear(recipe)
-
-
-def test_clear_skip_fixed_pattern_omits_the_pass() -> None:
-    recipe = _clear()
-    recipe.steps["fixed_pattern"] = StepConfig(skip=True)
-    source = render_clear(recipe)
-    ast.parse(source)
-    assert "subtract_fixed_pattern" not in source
-    assert "_build_fixed_pattern_templates" not in source
-    assert "FIXED_PATTERN_DIR" not in source
-    assert "subtract_oneoverf(" in source  # the rest of the chain still renders
-
-
 # -- GRISM (WFSS) renderer ----------------------------------------------------
 
 
 def test_grism_render_is_valid_two_pass_python() -> None:
     source = render_grism(_grism())
     ast.parse(source)
-    # pass 0: rate-stage fixed-pattern template build + cache
-    assert "DO_FIXED_PATTERN = True" in source
-    assert "def _build_fixed_pattern_templates(box)" in source
-    assert "fixed_templates = _build_fixed_pattern_templates(box)" in source
-    assert "fixedpattern_mod{module}_{direction}.npy" in source
-    assert "grism_fixed_pattern_frame(" in source
-    assert "combine_fixed_pattern(" in source
+    # no fixed-pattern machinery -- the crosshatch is flat's job now
+    assert "fixed_pattern" not in source
     assert "TEMPLATE_DIR = Path('grism_templates')" in source
-    # fixed-pattern subtraction is the first pass-1 operation
-    assert "subtract_grism_fixed_pattern(" in source
-    assert source.index("subtract_grism_fixed_pattern(") < source.index(
-        "flag_outlier_pixels("
-    )
-    assert source.index("subtract_grism_fixed_pattern(") < source.index(
-        "AssignWcsStep.call(model)"
-    )
-    # pass 1: per-frame chain incl. the WFSS master-sky direct call
+    # pass 1: assign_wcs -> flat -> WFSS master-sky -> flag_outlier -> column 1/f
     assert "AssignWcsStep.call(model)" in source
-    assert "subtract_wfss_bkg(" in source
     assert "FlatFieldStep.call(model)" in source
+    assert "flag_outlier_pixels(model.data, model.err, model.dq)" in source
+    assert "subtract_wfss_bkg(" in source
+    assert "subtract_oneoverf(" in source and 'by="column"' in source
     assert "def _dispersion_axis(book)" in source
     assert 'pupil == "GRISMR"' in source
     assert 'pupil == "GRISMC"' in source
     assert "Unsupported grism pupil" in source
     assert "dispersion_axis=_dispersion_axis(book)" in source
     assert "dispersion_axis=_dispersion_axis(b2)" in source
+    # flat runs before the sky subtraction and the 1/f (crosshatch needs the sky);
+    # flag_outlier follows master-sky (symmetric with the CLEAR chain)
+    assert source.index("FlatFieldStep.call(model)") < source.index(
+        "subtract_wfss_bkg("
+    )
+    assert source.index("subtract_wfss_bkg(") < source.index("flag_outlier_pixels(")
+    assert source.index("flag_outlier_pixels(") < source.index("subtract_oneoverf(")
     # template build + pass 2
     assert "combine_sky_template(" in source
     assert "sky_residual_grid(model.data" in source
@@ -153,22 +123,20 @@ def test_grism_render_is_valid_two_pass_python() -> None:
     assert "_dm.open(fits.open" not in source
 
 
-def test_grism_fixed_pattern_template_dir_is_configurable() -> None:
+def test_grism_template_dir_is_configurable() -> None:
     recipe = _grism()
     recipe.grism.template_dir = "scratch/grism"
     assert "TEMPLATE_DIR = Path('scratch/grism')" in render_grism(recipe)
 
 
-def test_grism_skip_fixed_pattern_omits_the_pass() -> None:
+def test_grism_skip_oneoverf_omits_the_column_destripe() -> None:
     recipe = _grism()
-    recipe.steps["fixed_pattern"] = StepConfig(skip=True)
+    recipe.steps["oneoverf"] = StepConfig(skip=True)
     source = render_grism(recipe)
 
     ast.parse(source)
-    assert "DO_FIXED_PATTERN = False" in source
-    assert "subtract_grism_fixed_pattern" not in source
-    assert "_build_fixed_pattern_templates" not in source
-    assert "grism_fixed_pattern_frame" not in source
+    assert "subtract_oneoverf(" not in source
+    assert "subtract_wfss_bkg(" in source  # the rest of pass 1 still renders
     assert "combine_sky_template(" in source
     assert "subtract_sky_template(" in source
 
@@ -316,7 +284,8 @@ def test_grism_recipe_accepts_grism_steps() -> None:
     assert recipe.pipeline == "grism"
     assert recipe.grism.downsample == 4
     assert recipe.grism.template_dir == "grism_templates"
-    assert "fixed_pattern" in recipe.steps
+    assert "oneoverf" in recipe.steps
+    assert "master_sky" in recipe.steps
 
 
 def test_validate_stages_requires_a_save_point(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -381,7 +350,7 @@ def test_validate_stages_grism_accepts_renderer_default_stages(
     for stage in ("2A", "2B", "2BII"):
         monkeypatch.setenv(f"STAGE_{stage}_PATH", f"/data/{stage.lower()}")
     recipe = _grism()
-    recipe.steps.pop("flat")
+    recipe.steps.pop("oneoverf")
     recipe.steps.pop("template_bkg")
 
     validate_stages(recipe)  # renderer defaults to 2b / 2bii

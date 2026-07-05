@@ -9,7 +9,7 @@ outliers, and recover a known per-frame scale.
 import numpy as np
 import pytest
 
-from noobfriend.reduction import (
+from noobfriend.reduction.grism import (
     combine_sky_template,
     fit_template_scalar,
     grism_trace_mask,

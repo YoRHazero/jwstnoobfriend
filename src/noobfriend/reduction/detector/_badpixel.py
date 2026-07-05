@@ -15,7 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import ndimage as ndi
 
-from noobfriend.reduction._masking import source_exclusion
+from noobfriend.reduction.detector._masking import source_exclusion
 
 _Floats = NDArray[np.floating]
 _Ints = NDArray[np.integer]
@@ -56,7 +56,7 @@ def flag_outlier_pixels(
         When ``True``, also set flagged pixels in the returned ``data`` to ``NaN``.
     nsigma_source, dilate, dq_bad_bits
         Forwarded to the protecting source mask (see
-        :func:`~noobfriend.reduction._masking.source_exclusion`); used only when
+        :func:`~noobfriend.reduction.detector._masking.source_exclusion`); used only when
         ``mask`` is ``None``.
 
     Returns

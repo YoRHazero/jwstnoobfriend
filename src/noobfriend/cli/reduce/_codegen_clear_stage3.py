@@ -46,7 +46,7 @@ from noobfriend.core.display import track
 from noobfriend.core.imgutils import build_catalog
 from noobfriend.core.io import write_bytes
 from noobfriend.navigation import Footprint, NooBook, NooBox
-from noobfriend.reduction import (
+from noobfriend.reduction.mosaic import (
     build_reference,
     field_grid,
     select_point_sources,
