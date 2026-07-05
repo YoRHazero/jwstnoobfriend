@@ -249,6 +249,29 @@ def test_clear3_in_memory_auto_sizes_per_group() -> None:
     assert "IN_MEMORY = True" in render_clear3(recipe)
 
 
+def test_clear3_outlier_defaults_to_the_noob_engine() -> None:
+    # the field-median engine flags CRs in two borrow passes on a native-scale
+    # grid; the jwst step stays available as a runtime-gated fallback
+    source = render_clear3(_clear3())
+    ast.parse(source)
+    assert "OUTLIER_ENGINE = 'noob'" in source
+    assert "def _flag_outliers_noob(library, gbooks, corners" in source
+    assert "FieldMedian(grid, layers, work_dir=work)" in source
+    assert "blot_to_frame(median, grid, model.meta.wcs, model.data.shape)" in source
+    assert "model.dq |= cr * np.uint32(OUTLIER_DQ)" in source
+    assert "def _exposure_key(book)" in source
+    assert "_native_scale(gbooks)" in source
+    # corners are read once, before the engine branch, and reused for resample
+    assert source.index("corners = _library_corners(library)") < source.index(
+        "if DO_OUTLIER:"
+    )
+    assert "OutlierDetectionStep.call(library, in_memory=use_memory)" in source
+
+    recipe = _clear3()
+    recipe.stage3.outlier_engine = "jwst"
+    assert "OUTLIER_ENGINE = 'jwst'" in render_clear3(recipe)
+
+
 def test_clear3_stamps_many_to_one_tile_lineage() -> None:
     source = render_clear3(_clear3())
     assert "tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP)" in source

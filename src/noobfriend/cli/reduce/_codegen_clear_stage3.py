@@ -3,8 +3,9 @@
 Stage-3 is group-based, not per-frame: the generated script loads the NooBox,
 partitions the selected 2bi cal frames into mosaics by ``[stage3].group_by``,
 and for each group runs a field-level prep (``TweakRegStep`` with cleaned image
-catalogs + a PM-propagated GAIA ``abs_refcat`` -> ``SkyMatchStep`` ->
-``OutlierDetectionStep``) before drizzling onto a unified, tiled output grid
+catalogs + a PM-propagated GAIA ``abs_refcat`` -> ``SkyMatchStep`` -> outlier
+flagging, via the noobase field-median engine or ``OutlierDetectionStep`` per
+``[stage3].outlier_engine``) before drizzling onto a unified, tiled output grid
 (``ResampleStep`` per tile -> 3a). Each tile product stamps the cal books it
 drizzled as its parents, so the many-to-one lineage is recorded explicitly.
 
@@ -49,8 +50,12 @@ from noobfriend.core.imgutils import build_catalog
 from noobfriend.core.io import write_bytes
 from noobfriend.navigation import Footprint, NooBook, NooBox
 from noobfriend.reduction.mosaic import (
+    OUTLIER_DQ,
+    FieldMedian,
+    blot_to_frame,
     build_reference,
     field_grid,
+    flag_outliers,
     select_point_sources,
     tile_grid,
     tile_members,
@@ -79,6 +84,7 @@ STAR_FWHM_PX = __STAR_FWHM_PX__
 MINOBJ = __MINOBJ__
 ABS_MINOBJ = __ABS_MINOBJ__
 PIXFRAC = __PIXFRAC__
+OUTLIER_ENGINE = __OUTLIER_ENGINE__  # "noob" (field-median) or "jwst" (step)
 IN_MEMORY = __IN_MEMORY__  # True / False, or "auto" for a per-group fit-in-RAM check
 DO_ALIGN = __DO_ALIGN__
 DO_SKYMATCH = __DO_SKYMATCH__
@@ -112,6 +118,56 @@ def _pixel_scale(gbooks) -> float:
     """Long-wave (nrc?long) or short-wave output scale for the group's channel."""
     detector = gbooks[0].detector or ""
     return PIXEL_SCALE_LW if detector.endswith("long") else PIXEL_SCALE_SW
+
+
+#: Native NIRCam pixel scales (arcsec/px). The outlier median grid needs no
+#: supersampling, so it uses the channel's native scale, not the output scale.
+NATIVE_SCALE_SW = 0.031
+NATIVE_SCALE_LW = 0.063
+
+
+def _native_scale(gbooks) -> float:
+    """The native detector scale of the group's channel (for the median grid)."""
+    detector = gbooks[0].detector or ""
+    return NATIVE_SCALE_LW if detector.endswith("long") else NATIVE_SCALE_SW
+
+
+def _exposure_key(book) -> str:
+    """The exposure identity of a cal book: its filename minus detector/suffix."""
+    return "_".join(os.path.basename(book.location).split("_")[:3])
+
+
+def _flag_outliers_noob(library, gbooks, corners, work: Path) -> None:
+    """Flag cosmic rays with the noobase field-median engine (DQ bits only).
+
+    Two borrow passes over the library: each frame's good pixels are
+    reprojected into its exposure's layer of a disk-backed median stack on a
+    native-scale field grid, then the median is blotted back per frame and the
+    stcal-equivalent threshold sets ``OUTLIER | DO_NOT_USE``. Peak memory is
+    about one frame plus the median image, independent of the group size (and
+    of use_memory).
+    """
+    layers = list(dict.fromkeys(_exposure_key(book) for book in gbooks))
+    if len(layers) < 2:
+        return  # a cross-exposure median needs >= 2 dithers (mirror jwst's skip)
+    grid = field_grid(
+        corners, _native_scale(gbooks), rotation="auto" if ALIGN_TO_ROLL else 0.0
+    )
+    stack = FieldMedian(grid, layers, work_dir=work)
+    with library:
+        for index, model in enumerate(library):
+            stack.add(
+                _exposure_key(gbooks[index]), model.data, model.dq, model.meta.wcs
+            )
+            library.shelve(model, index, modify=False)
+    median = stack.median()
+    stack.cleanup()
+    with library:
+        for index, model in enumerate(library):
+            blot = blot_to_frame(median, grid, model.meta.wcs, model.data.shape)
+            cr = flag_outliers(model.data, model.err, blot)
+            model.dq |= cr * np.uint32(OUTLIER_DQ)
+            library.shelve(model, index, modify=True)
 
 
 def _scale_token(scale: float) -> str:
@@ -352,11 +408,17 @@ def main(output_noobox_path: str | None = None) -> None:
             )
         if DO_SKYMATCH:
             library = SkyMatchStep.call(library, in_memory=use_memory)
+        # Corners are read once after alignment -- skymatch and outlier flagging
+        # leave the WCS untouched, so one set serves both the outlier median
+        # grid and the output grid below.
+        corners = _library_corners(library)
         if DO_OUTLIER:
-            library = OutlierDetectionStep.call(library, in_memory=use_memory)
+            if OUTLIER_ENGINE == "noob":
+                _flag_outliers_noob(library, gbooks, corners, work / "outlier")
+            else:
+                library = OutlierDetectionStep.call(library, in_memory=use_memory)
 
         scale = _pixel_scale(gbooks)
-        corners = _library_corners(library)
         field = field_grid(corners, scale, rotation="auto" if ALIGN_TO_ROLL else 0.0)
         program_id = gbooks[0].program_id
         for tile in tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP):
@@ -438,6 +500,7 @@ def render(recipe: Recipe) -> str:
         .replace("__MINOBJ__", repr(s3.minobj))
         .replace("__ABS_MINOBJ__", repr(s3.abs_minobj))
         .replace("__PIXFRAC__", repr(s3.pixfrac))
+        .replace("__OUTLIER_ENGINE__", repr(s3.outlier_engine))
         .replace("__IN_MEMORY__", repr(s3.in_memory))
         .replace("__WORK_DIR__", repr(s3.work_dir))
         .replace("__CLEAN_WORK__", repr(s3.clean_work))

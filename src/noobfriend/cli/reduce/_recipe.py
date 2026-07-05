@@ -90,7 +90,10 @@ class Stage3Options(BaseModel):
     is matched image-source-to-GAIA, and the jwst default (15) silently rejects
     the fit -- leaving the WCS un-corrected -- when fewer clean sources coincide
     with GAIA, so the default here is lowered (verified: an F444W field tied at
-    ~6 mas with ~12 matches). ``in_memory`` controls whether the prep steps
+    ~6 mas with ~12 matches). ``outlier_engine`` picks the cross-exposure
+    CR flagger: ``"noob"`` (default) is the noobase-backed field-median engine
+    (streaming, memory-bounded, no hidden full-field drizzle), ``"jwst"`` falls
+    back to ``OutlierDetectionStep``. ``in_memory`` controls whether the prep steps
     hold the group's models resident: ``"auto"`` (default) keeps a group in
     memory only when its estimated peak (frames x planes x a resampling
     headroom) fits half the machine's RAM, spilling to disk otherwise; ``true``
@@ -111,6 +114,7 @@ class Stage3Options(BaseModel):
     minobj: int = 7
     abs_minobj: int = 6
     pixfrac: float = 0.8
+    outlier_engine: Literal["noob", "jwst"] = "noob"
     in_memory: bool | Literal["auto"] = "auto"
     work_dir: str = "stage3_work"
     clean_work: bool = False
