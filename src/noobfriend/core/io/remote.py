@@ -21,6 +21,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from noobfriend.core.env import to_local
+
 #: ``ssh`` connection-multiplexing socket, kept separate from the fetch CLI's
 #: own ControlPath so the long-lived notebook read session and the short-lived
 #: download command never share — and thus never tear down — each other's
@@ -71,6 +73,13 @@ def _parse_spec(spec: str | Path) -> tuple[str | None, str]:
     directory-destination parser, an empty remote path is rejected here: this
     resolves a single *file*, not a directory.
 
+    A remote-looking spec that nevertheless resolves on this machine -- its
+    host and path match the active ``env mount``, or the environment declares
+    storage local and the path lies under ``DATA_ROOT_PATH`` (see
+    :func:`noobfriend.core.env.to_local`) -- is returned as *local*, so every
+    transport built on this parser transparently skips the SSH round-trip for
+    canonical ``host:path`` locations that are really this machine's own files.
+
     Parameters
     ----------
     spec : str or Path
@@ -103,6 +112,9 @@ def _parse_spec(spec: str | Path) -> tuple[str | None, str]:
             raise ValueError(
                 f"Invalid remote spec {spec!r}: a file path is required after ':'."
             )
+        local = to_local(spec)
+        if local is not None:
+            return None, str(local)
         return host, path
     return None, spec
 

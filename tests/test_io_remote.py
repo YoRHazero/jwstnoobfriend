@@ -53,6 +53,24 @@ class TestParseSpec:
             _parse_spec("icrhome08:")
 
 
+class TestParseSpecOwnMachineResolution:
+    """Remote-looking specs that resolve on this machine parse as local."""
+
+    def test_resolved_spec_parses_local(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "noobfriend.core.io.remote.to_local",
+            lambda spec: Path("/mnt/data/x.fits"),
+        )
+        assert _parse_spec("server:/disk/data/x.fits") == (None, "/mnt/data/x.fits")
+
+    def test_unresolved_spec_stays_remote(self, monkeypatch) -> None:
+        monkeypatch.setattr("noobfriend.core.io.remote.to_local", lambda spec: None)
+        assert _parse_spec("server:/disk/data/x.fits") == (
+            "server",
+            "/disk/data/x.fits",
+        )
+
+
 class TestFetchBytesLocal:
     """Local specs are read straight off disk, as str or Path."""
 

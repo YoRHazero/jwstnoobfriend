@@ -199,8 +199,8 @@ def test_clear3_render_is_valid_group_based_python() -> None:
     ast.parse(source)
     assert "from jwst.tweakreg import TweakRegStep" in source
     assert "TweakRegStep.call(" in source
-    assert "SkyMatchStep.call(library, in_memory=IN_MEMORY)" in source
-    assert "OutlierDetectionStep.call(library, in_memory=IN_MEMORY)" in source
+    assert "SkyMatchStep.call(library, in_memory=use_memory)" in source
+    assert "OutlierDetectionStep.call(library, in_memory=use_memory)" in source
     assert "ResampleStep.call(" in source
     assert "abs_refcat=str(absref)" in source
     assert "abs_minobj=ABS_MINOBJ" in source and "ABS_MINOBJ = 6" in source
@@ -216,12 +216,37 @@ def test_clear3_uses_modellibrary_borrow_pattern() -> None:
     # stage-3 steps return a ModelLibrary (not the input), so the runner must
     # build a (possibly on-disk) library and borrow/shelve, not iterate a list
     source = render_clear3(_clear3())
-    assert "ModelLibrary(_asn(paths), on_disk=not IN_MEMORY)" in source
+    assert "ModelLibrary(_asn(paths), on_disk=not use_memory)" in source
     assert "library = TweakRegStep.call(" in source
     assert "library.borrow(i) for i in members" in source
     assert "library.shelve(model, index, modify=False)" in source
     # the per-tile subset is in memory, so its resample is always in_memory=True
     assert "in_memory=True" in source
+
+
+def test_clear3_resolves_inputs_locally_and_records_canonical() -> None:
+    # inputs that resolve on this machine (mount / data server) go into the
+    # association directly -- no staging copy; outputs are written through the
+    # mount when possible and recorded under their canonical location
+    source = render_clear3(_clear3())
+    assert "to_canonical, to_local" in source
+    assert "def _input_paths(gbooks" in source
+    assert "_materialize" not in source
+    assert "local = to_local(book.location)" in source
+    assert "def _write_product(model" in source
+    assert "raw = _write_product(resampled, loc, STAGE_OUT)" in source
+    assert "return to_canonical(" in source
+
+
+def test_clear3_in_memory_auto_sizes_per_group() -> None:
+    source = render_clear3(_clear3())
+    assert "IN_MEMORY = 'auto'" in source
+    assert "def _use_memory(gbooks)" in source
+    assert "use_memory = _use_memory(gbooks)" in source
+
+    recipe = _clear3()
+    recipe.stage3.in_memory = True
+    assert "IN_MEMORY = True" in render_clear3(recipe)
 
 
 def test_clear3_stamps_many_to_one_tile_lineage() -> None:
@@ -247,6 +272,7 @@ def test_clear3_recipe_validates_stage3_steps() -> None:
     assert recipe.select.stage == "2bi"
     assert recipe.stage3.pixel_scale_sw == 0.025
     assert recipe.stage3.pixel_scale_lw == 0.05
+    assert recipe.stage3.in_memory == "auto"
     assert set(recipe.steps) == {"align", "skymatch", "outlier", "resample"}
 
 

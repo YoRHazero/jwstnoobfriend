@@ -90,11 +90,13 @@ class Stage3Options(BaseModel):
     is matched image-source-to-GAIA, and the jwst default (15) silently rejects
     the fit -- leaving the WCS un-corrected -- when fewer clean sources coincide
     with GAIA, so the default here is lowered (verified: an F444W field tied at
-    ~6 mas with ~12 matches). ``in_memory`` (default false)
-    spills the skymatch / outlier / resample models to disk -- safe on the large
-    fields stage-3 targets; set true to keep them resident for speed on small
-    ones. Per-group astrometry sidecars go under ``work_dir`` and are deleted
-    afterwards when ``clean_work`` is set.
+    ~6 mas with ~12 matches). ``in_memory`` controls whether the prep steps
+    hold the group's models resident: ``"auto"`` (default) keeps a group in
+    memory only when its estimated peak (frames x planes x a resampling
+    headroom) fits half the machine's RAM, spilling to disk otherwise; ``true``
+    / ``false`` force one mode for every group. Per-group astrometry sidecars
+    go under ``work_dir`` and are deleted afterwards when ``clean_work`` is
+    set.
     """
 
     group_by: list[str] = ["observation", "filter"]
@@ -109,7 +111,7 @@ class Stage3Options(BaseModel):
     minobj: int = 7
     abs_minobj: int = 6
     pixfrac: float = 0.8
-    in_memory: bool = False
+    in_memory: bool | Literal["auto"] = "auto"
     work_dir: str = "stage3_work"
     clean_work: bool = False
 

@@ -7,6 +7,7 @@ import pytest
 
 from noobfriend.core.env import _mount as mount_mod
 from noobfriend.core.env import find_mount_state, to_canonical, to_local
+from noobfriend.core.io import fetch_bytes
 
 
 def _write_sidecar(env_dir: Path, mountpoint: Path) -> None:
@@ -64,3 +65,31 @@ def test_to_local_resolves_canonical_and_local(mounted: Path) -> None:
 def test_canonical_local_roundtrip(mounted: Path) -> None:
     p = mounted / "stage2" / "2b" / "x.fits"
     assert to_local(to_canonical(str(p))) == p
+
+
+def test_to_local_drops_own_host_when_storage_is_local(
+    unmounted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # NOOB_SERVER unset / 'localhost' / 'local' declares storage on this
+    # machine, so a canonical host:path under the local data root is own data.
+    monkeypatch.setenv("NOOB_SERVER", "localhost")
+    monkeypatch.setenv("DATA_ROOT_PATH", "/disk/data")
+    assert to_local("server:/disk/data/2b/x.fits") == Path("/disk/data/2b/x.fits")
+    assert to_local("server:/elsewhere/x.fits") is None  # outside the data root
+
+
+def test_to_local_keeps_remote_when_storage_is_remote(
+    unmounted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NOOB_SERVER", "server")
+    monkeypatch.setenv("DATA_ROOT_PATH", "/disk/data")
+    assert to_local("server:/disk/data/2b/x.fits") is None
+
+
+def test_fetch_bytes_reads_through_the_mount(mounted: Path) -> None:
+    # the transport itself (via _parse_spec) resolves a canonical location to
+    # the mounted file -- no SSH involved
+    target = mounted / "2b" / "x.bin"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"mounted")
+    assert fetch_bytes("user@server:/disk/data/2b/x.bin") == b"mounted"

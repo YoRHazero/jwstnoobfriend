@@ -73,7 +73,7 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         "abs_minobj = 6       # tweakreg absolute (GAIA) min matches; jwst default 15",
         "#   raising abs_minobj too high silently leaves the WCS un-tied to GAIA",
         "pixfrac = 0.8        # drizzle pixfrac",
-        "in_memory = false    # false spills skymatch/outlier/resample to disk (big fields)",
+        'in_memory = "auto"   # keep a group in RAM when it fits; true/false to force',
         'work_dir = "stage3_work"  # scratch dir for per-group tweakreg catalogs/refcat',
         "clean_work = false   # delete each group's work_dir sidecars after it finishes",
         "",

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from noobfriend.core.env._loader import find_project_root
+from noobfriend.core.env.settings import get_settings
 
 #: Sidecar file ``env mount`` writes next to the ``.env`` it rewrote.
 SIDECAR_NAME: str = ".noob_mount.json"
@@ -97,6 +98,11 @@ def to_local(location: str) -> Path | None:
     - A plain local path (no ``host:`` prefix) is returned as a :class:`Path`.
     - A ``host:server_path`` whose host and root match the active mount is
       rewritten to the mounted local path.
+    - A ``host:server_path`` whose path lies under the local ``DATA_ROOT_PATH``
+      while the environment declares storage local (``NOOB_SERVER`` unset /
+      ``localhost`` / ``local``) is *this machine's own data* -- typically a
+      canonical manifest read back on the data server itself -- so the host
+      prefix is dropped and the path returned as-is.
     - Anything else (a genuinely remote host, or nothing mounted) returns
       ``None``, signalling the caller to fall back to a remote fetch.
     """
@@ -104,13 +110,28 @@ def to_local(location: str) -> Path | None:
     if not sep or not host or host.startswith("/") or host.startswith("."):
         return Path(location)  # already a local path
     state = find_mount_state()
-    if state is None or host != state.host:
+    if state is not None and host == state.host:
+        rel = _relative_to(remote, state.data_root)
+        if rel is not None:
+            mount = Path(state.mountpoint)
+            return mount if rel == "." else mount / rel
+    root = _storage_local_root()
+    if root is not None and _relative_to(remote, str(root)) is not None:
+        return Path(remote)
+    return None
+
+
+def _storage_local_root() -> Path | None:
+    """Return ``DATA_ROOT_PATH`` when the environment declares storage local.
+
+    ``None`` when ``NOOB_SERVER`` names a remote host (storage lives elsewhere)
+    or no data root is configured -- either way the own-machine shortcut in
+    :func:`to_local` must not fire.
+    """
+    settings = get_settings()
+    if settings.server_host() is not None:
         return None
-    rel = _relative_to(remote, state.data_root)
-    if rel is None:
-        return None
-    mount = Path(state.mountpoint)
-    return mount if rel == "." else mount / rel
+    return settings.data_root_path
 
 
 def _env_dirs() -> list[Path]:
