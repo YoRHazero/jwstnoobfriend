@@ -1807,16 +1807,16 @@ wheels = [
 
 [[package]]
 name = "noobase"
-version = "0.0.6"
+version = "0.0.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/40/f1360489c77b1db8c713e43d947ff9e9292fcc66baeb875417d7e20e8aed/noobase-0.0.6.tar.gz", hash = "sha256:ad63c0e53b6eedd3f78e5db140e7dc18b1f559919580d7ee9f228e8e531babad", size = 244595, upload-time = "2026-06-15T03:42:45.984Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/98/d06a72a73437738fff15bc5301a620718b69cf584c34430b03b9d2344aa8/noobase-0.0.7.tar.gz", hash = "sha256:c66aae335aad2daba69b6d2a6d7dd526b1ba4e1f1cf3f6e329c6ddaa051c2a91", size = 265994, upload-time = "2026-07-07T03:03:24.383Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/99/d6093c0b6dd77ca98270ce62be443ee280e01d41e36c22321e042fd7d75c/noobase-0.0.6-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:532a0d666934baeecb626caadd38b9bc1e964c22f3c033e92c8657ec7526a223", size = 567064, upload-time = "2026-06-15T03:42:40.95Z" },
-    { url = "https://files.pythonhosted.org/packages/52/a4/70e79e5da6cf41350b852b5e9f8fadcfc4b58003aed0b9d7119934faa1e3/noobase-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ef03abdb61f5071bf905efe7d74cb014471bf05e4f7d4f496f5838e33992a825", size = 640929, upload-time = "2026-06-15T03:42:42.706Z" },
-    { url = "https://files.pythonhosted.org/packages/69/7d/1402af13703d8315a9ae2ee52e6408c501bb7c3ca0281cefbe463a048839/noobase-0.0.6-cp312-abi3-win_amd64.whl", hash = "sha256:674f211011c9389408942b40277db68757e0669fdb9556f7fbc1d35d88bdbe99", size = 521352, upload-time = "2026-06-15T03:42:44.623Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/90/6e9955cd40d34fa74c3b7b3646acf51982fcedf522b72de8bb1a57e62dbf/noobase-0.0.7-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:28377d3822effec7c76ee31762626babda5be7279de32f9795de68badbf22dfe", size = 634354, upload-time = "2026-07-07T03:03:20.612Z" },
+    { url = "https://files.pythonhosted.org/packages/16/ac/cdda223860a5a208f490d7fd023b2f19d7cc704e3ba47ce937922696f17d/noobase-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4a199c186ea4ac1b343f230df6769b461d5711c669032e80f30a8a6927789488", size = 718995, upload-time = "2026-07-07T03:03:21.951Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/2a/f710f15570cb24abf34dc7389d29e335f24dbf5d477841cc96498545501a/noobase-0.0.7-cp312-abi3-win_amd64.whl", hash = "sha256:6d0808ac9829f230d350203ee2dfbe9b18b03c5d4dd230f215c49e46390b975a", size = 600387, upload-time = "2026-07-07T03:03:23.165Z" },
 ]
 
 [[package]]
@@ -1877,7 +1877,7 @@ requires-dist = [
     { name = "jax", extras = ["cuda12"], marker = "sys_platform == 'linux' and extra == 'cuda'" },
     { name = "jupyter-bokeh", specifier = ">=4.0.5" },
     { name = "matplotlib", specifier = ">=3.10.9" },
-    { name = "noobase", specifier = ">=0.0.6" },
+    { name = "noobase", specifier = ">=0.0.7" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "numpyro", marker = "extra == 'mcmc'", specifier = ">=0.21.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
