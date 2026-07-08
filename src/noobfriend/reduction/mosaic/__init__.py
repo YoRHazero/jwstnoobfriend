@@ -25,6 +25,7 @@ from noobfriend.reduction.mosaic._outlier import (
     blot_to_frame,
     flag_outliers,
 )
+from noobfriend.reduction.mosaic._sky import SkyMatcher, frame_sky
 from noobfriend.reduction.mosaic._tiling import (
     FieldGrid,
     TileSpec,
@@ -41,6 +42,7 @@ __all__ = [
     "FrameSources",
     "GaiaReference",
     "ReferenceProvider",
+    "SkyMatcher",
     "TileSpec",
     "align_group",
     "blot_to_frame",
@@ -48,6 +50,7 @@ __all__ = [
     "clean_gaia",
     "field_grid",
     "flag_outliers",
+    "frame_sky",
     "query_gaia",
     "select_point_sources",
     "tile_grid",

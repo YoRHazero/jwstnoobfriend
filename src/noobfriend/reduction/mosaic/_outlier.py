@@ -26,14 +26,13 @@ frames come in as ``(data, err, dq)`` arrays plus a WCS exposing the gwcs
 :class:`~noobfriend.reduction.mosaic.FieldGrid`.
 """
 
-import math
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 import numpy as np
-from noobase.image import make_pixel_corners, reproject_exact
 
+from noobfriend.reduction.mosaic._reproject import frame_window, reproject_to_window
 from noobfriend.reduction.mosaic._tiling import FieldGrid
 
 #: JWST pixel DQ flags this module reads/writes (stable published values;
@@ -42,95 +41,6 @@ DO_NOT_USE: int = 1
 OUTLIER: int = 16
 #: The bits :func:`flag_outliers` hits are meant to set: ``DO_NOT_USE | OUTLIER``.
 OUTLIER_DQ: int = DO_NOT_USE | OUTLIER
-
-#: Number of sample points per frame edge when projecting a frame's outline
-#: onto the grid (distortion bows the edges, so corners alone under-cover).
-_EDGE_SAMPLES: int = 9
-
-#: Extra grid pixels around a frame's projected bounding box.
-_WINDOW_MARGIN: int = 8
-
-
-def _as_native_float(data: np.ndarray) -> np.ndarray:
-    """Coerce to native-endian, C-contiguous float32/float64 for ``noobase``.
-
-    JWST FITS arrays are typically big-endian (``>f4``); float width is
-    preserved and non-float input is promoted to ``float64``.
-    """
-    array = np.asarray(data)
-    if array.dtype.kind == "f" and array.dtype.itemsize in (4, 8):
-        target = np.dtype(f"=f{array.dtype.itemsize}")
-    else:
-        target = np.dtype("=f8")
-    return np.ascontiguousarray(array, dtype=target)
-
-
-def _padded(length: int, step: int) -> int:
-    """Round ``length`` up to a multiple of ``step``.
-
-    ``make_pixel_corners`` requires ``coarse_step`` to divide the target shape
-    exactly, so target windows are padded up and the result cropped back.
-    """
-    return int(math.ceil(length / step)) * step
-
-
-def _frame_window(
-    shape: tuple[int, int],
-    detector_to_world: Callable[..., tuple[Any, Any]],
-    grid: FieldGrid,
-) -> tuple[int, int, int, int]:
-    """Return the grid-pixel window ``(x0, y0, nx, ny)`` covering a frame.
-
-    The frame outline is sampled along each edge (not just the corners --
-    distortion bows the edges outward), projected into grid pixels, and the
-    bounding box padded by :data:`_WINDOW_MARGIN` and clipped to the grid.
-    """
-    ny_f, nx_f = shape
-    t = np.linspace(0.0, 1.0, _EDGE_SAMPLES)
-    xs = np.concatenate(
-        [t * (nx_f - 1), np.full_like(t, nx_f - 1), t * (nx_f - 1), np.zeros_like(t)]
-    )
-    ys = np.concatenate(
-        [np.zeros_like(t), t * (ny_f - 1), np.full_like(t, ny_f - 1), t * (ny_f - 1)]
-    )
-    ra, dec = detector_to_world(xs, ys)
-    gx, gy = grid.wcs.world_to_pixel_values(np.asarray(ra), np.asarray(dec))
-    ny_g, nx_g = grid.shape
-    x0 = max(0, int(np.floor(np.min(gx))) - _WINDOW_MARGIN)
-    y0 = max(0, int(np.floor(np.min(gy))) - _WINDOW_MARGIN)
-    x1 = min(nx_g, int(np.ceil(np.max(gx))) + _WINDOW_MARGIN + 1)
-    y1 = min(ny_g, int(np.ceil(np.max(gy))) + _WINDOW_MARGIN + 1)
-    return x0, y0, max(0, x1 - x0), max(0, y1 - y0)
-
-
-def _reproject(
-    source: np.ndarray,
-    target_shape: tuple[int, int],
-    target_pixel_to_world: Callable[..., tuple[Any, Any]],
-    source_world_to_pixel: Callable[..., tuple[Any, Any]],
-    coarse_step: tuple[int, int] | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Reproject ``source`` onto ``target_shape``; return ``(image, weight)``.
-
-    The target shape is padded up to a ``coarse_step`` multiple (a
-    ``make_pixel_corners`` requirement) and the result cropped back; the pad
-    rows/columns fall outside the source and cost nothing. ``image`` is NaN
-    where nothing valid contributes; ``weight`` is the valid-pixel overlap
-    fraction (NaN/masked source pixels excluded).
-    """
-    ny, nx = target_shape
-    if coarse_step is not None:
-        shape = (_padded(ny, coarse_step[0]), _padded(nx, coarse_step[1]))
-    else:
-        shape = (ny, nx)
-    corners = make_pixel_corners(
-        shape,
-        target_pixel_to_world=target_pixel_to_world,
-        source_world_to_pixel=source_world_to_pixel,
-        coarse_step=coarse_step,
-    )
-    result = reproject_exact(_as_native_float(source), corners)
-    return result.image[:ny, :nx], result.weight[:ny, :nx]
 
 
 class FieldMedian:
@@ -227,7 +137,7 @@ class FieldMedian:
         index = self._index[layer]
         world_to_detector = wcs.get_transform("world", "detector")
         detector_to_world = wcs.get_transform("detector", "world")
-        x0, y0, nx, ny = _frame_window(data.shape, detector_to_world, self._grid)
+        x0, y0, nx, ny = frame_window(data.shape, detector_to_world, self._grid)
         if nx == 0 or ny == 0:
             return
 
@@ -237,7 +147,7 @@ class FieldMedian:
             )
 
         source = np.where((np.asarray(dq) & DO_NOT_USE) == 0, data, np.nan)
-        image, weight = _reproject(
+        image, weight, _ = reproject_to_window(
             source, (ny, nx), window_pixel_to_world, world_to_detector, coarse_step
         )
         positive = weight[weight > 0]
@@ -313,7 +223,7 @@ def blot_to_frame(
         coverage (those pixels are never flagged).
     """
     detector_to_world = wcs.get_transform("detector", "world")
-    image, _ = _reproject(
+    image, _, _ = reproject_to_window(
         median, shape, detector_to_world, grid.wcs.world_to_pixel_values, coarse_step
     )
     return image
