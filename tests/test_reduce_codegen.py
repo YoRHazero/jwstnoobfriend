@@ -33,6 +33,12 @@ def _clear3() -> Recipe:
     return Recipe.model_validate(tomllib.loads(scaffold_clear3("2bi")))
 
 
+def _clear3_jwst() -> Recipe:
+    recipe = _clear3()
+    recipe.stage3.engine = "jwst"
+    return recipe
+
+
 def _grism() -> Recipe:
     return Recipe.model_validate(tomllib.loads(scaffold_grism("2a")))
 
@@ -194,17 +200,14 @@ def test_grism_skip_template_disables_second_pass() -> None:
 # -- CLEAR stage-3 (mosaicking) renderer --------------------------------------
 
 
-def test_clear3_render_is_valid_group_based_python() -> None:
+def test_clear3_defaults_to_noob_engine_jwst_free() -> None:
+    # the default engine is the custom noob chain: valid Python, no jwst import
     source = render_clear3(_clear3())
     ast.parse(source)
-    assert "from jwst.tweakreg import TweakRegStep" in source
-    assert "TweakRegStep.call(" in source
-    assert "SkyMatchStep.call(library, in_memory=use_memory)" in source
-    assert "OutlierDetectionStep.call(library, in_memory=use_memory)" in source
-    assert "ResampleStep.call(" in source
-    assert "abs_refcat=str(absref)" in source
-    assert "abs_minobj=ABS_MINOBJ" in source and "ABS_MINOBJ = 6" in source
-    assert "build_catalog(" in source and "select_point_sources(cat)" in source
+    assert 'engine = "noob"' in scaffold_clear3("2bi")
+    assert _clear3().stage3.engine == "noob"
+    assert "from jwst" not in source  # fully jwst-free
+    assert "ModelLibrary" not in source and "ResampleStep" not in source
     assert "GROUP_BY = ['observation', 'filter']" in source
     assert "PIXEL_SCALE_SW = 0.025" in source and "PIXEL_SCALE_LW = 0.05" in source
     assert "scale = _pixel_scale(gbooks)" in source  # per-channel output scale
@@ -212,81 +215,77 @@ def test_clear3_render_is_valid_group_based_python() -> None:
     assert 'STAGE_IN = "2bi"' in source and 'STAGE_OUT = "3a"' in source
 
 
-def test_clear3_uses_modellibrary_borrow_pattern() -> None:
-    # stage-3 steps return a ModelLibrary (not the input), so the runner must
-    # build a (possibly on-disk) library and borrow/shelve, not iterate a list
+def test_clear3_noob_wires_the_custom_chain() -> None:
+    # align -> sky -> outlier -> coadd via the reduction.mosaic components
     source = render_clear3(_clear3())
-    assert "ModelLibrary(_asn(paths), on_disk=not use_memory)" in source
-    assert "library = TweakRegStep.call(" in source
-    assert "library.borrow(i) for i in members" in source
-    assert "library.shelve(model, index, modify=False)" in source
-    # the per-tile subset is in memory, so its resample is always in_memory=True
-    assert "in_memory=True" in source
+    assert "align_group(frames, gaia=gaia)" in source
+    assert "FrameSources(book.id" in source
+    assert "SkyMatcher(sky_field)" in source and "matcher.match()" in source
+    assert "FieldMedian(grid, layers, work_dir=work)" in source
+    assert "flag_outliers(" in source and "blot_to_frame(" in source
+    assert "coadd = TileCoadd(field, tile)" in source
+    assert "result = coadd.result()" in source
+    assert "noise_kernel(result.sci, result.err, max_lag=NOISE_MAX_LAG)" in source
+    # the alignment correction is composed into each frame's gwcs
+    assert "apply_correction_to_gwcs(book.wcs, correction)" in source
 
 
-def test_clear3_resolves_inputs_locally_and_records_canonical() -> None:
-    # inputs that resolve on this machine (mount / data server) go into the
-    # association directly -- no staging copy; outputs are written through the
-    # mount when possible and recorded under their canonical location
+def test_clear3_noob_writes_asdf_fits_3a_with_all_planes() -> None:
     source = render_clear3(_clear3())
-    assert "to_canonical, to_local" in source
-    assert "def _input_paths(gbooks" in source
-    assert "_materialize" not in source
-    assert "local = to_local(book.location)" in source
-    assert "def _write_product(model" in source
-    assert "raw = _write_product(resampled, loc, STAGE_OUT)" in source
+    assert "tile_gwcs(field, tile)" in source
+    assert '"SCI": result.sci' in source and '"ERR": result.err' in source
+    assert '"WHT": result.wht' in source and '"NOISEKERN": kernel.cov' in source
+    assert "write_asdf_fits(" in source
+    assert '"instrument": {"pupil": pupil, "filter": band}' in source
+
+
+def test_clear3_noob_partial_reads_and_records_canonical() -> None:
+    # frames are partial-read through the book (no jwst datamodels), and tiles
+    # are recorded under their canonical location
+    source = render_clear3(_clear3())
+    assert "np.asarray(book.data)" in source and "np.asarray(book.dq)" in source
+    assert "datamodels" not in source
     assert "return to_canonical(" in source
 
 
-def test_clear3_in_memory_auto_sizes_per_group() -> None:
-    source = render_clear3(_clear3())
-    assert "IN_MEMORY = 'auto'" in source
-    assert "def _use_memory(gbooks)" in source
-    assert "use_memory = _use_memory(gbooks)" in source
-
+def test_clear3_noob_skip_align_gates_the_correction() -> None:
     recipe = _clear3()
+    recipe.steps["align"] = StepConfig(skip=True)
+    source = render_clear3(recipe)
+    assert "DO_ALIGN = False" in source
+    assert "corrections = _align(gbooks, corners) if DO_ALIGN else {}" in source
+    assert "TileCoadd(field, tile)" in source  # coadd still runs
+    ast.parse(source)
+
+
+def test_clear3_jwst_engine_renders_official_steps() -> None:
+    source = render_clear3(_clear3_jwst())
+    ast.parse(source)
+    assert "from jwst.tweakreg import TweakRegStep" in source
+    assert "TweakRegStep.call(" in source
+    assert "SkyMatchStep.call(library, in_memory=use_memory)" in source
+    assert "ResampleStep.call(" in source
+    assert "ModelLibrary(_asn(paths), on_disk=not use_memory)" in source
+    assert "library.borrow(i) for i in members" in source
+    assert "abs_minobj=ABS_MINOBJ" in source and "ABS_MINOBJ = 6" in source
+
+
+def test_clear3_jwst_engine_in_memory_and_outlier_knobs() -> None:
+    source = render_clear3(_clear3_jwst())
+    assert "IN_MEMORY = 'auto'" in source and "def _use_memory(gbooks)" in source
+    assert "OUTLIER_ENGINE = 'noob'" in source
+    assert "OutlierDetectionStep.call(library, in_memory=use_memory)" in source
+
+    recipe = _clear3_jwst()
     recipe.stage3.in_memory = True
     assert "IN_MEMORY = True" in render_clear3(recipe)
 
 
-def test_clear3_outlier_defaults_to_the_noob_engine() -> None:
-    # the field-median engine flags CRs in two borrow passes on a native-scale
-    # grid; the jwst step stays available as a runtime-gated fallback
-    source = render_clear3(_clear3())
-    ast.parse(source)
-    assert "OUTLIER_ENGINE = 'noob'" in source
-    assert "def _flag_outliers_noob(library, gbooks, corners" in source
-    assert "FieldMedian(grid, layers, work_dir=work)" in source
-    assert "blot_to_frame(median, grid, model.meta.wcs, model.data.shape)" in source
-    assert "model.dq |= cr * np.uint32(OUTLIER_DQ)" in source
-    assert "def _exposure_key(book)" in source
-    assert "_native_scale(gbooks)" in source
-    # corners are read once, before the engine branch, and reused for resample
-    assert source.index("corners = _library_corners(library)") < source.index(
-        "if DO_OUTLIER:"
-    )
-    assert "OutlierDetectionStep.call(library, in_memory=use_memory)" in source
-
-    recipe = _clear3()
-    recipe.stage3.outlier_engine = "jwst"
-    assert "OUTLIER_ENGINE = 'jwst'" in render_clear3(recipe)
-
-
 def test_clear3_stamps_many_to_one_tile_lineage() -> None:
-    source = render_clear3(_clear3())
-    assert "tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP)" in source
-    assert "tile_members(field, tile, corners)" in source
-    assert "parents=[gbooks[i] for i in members]" in source
-
-
-def test_clear3_skip_align_gates_tweakreg() -> None:
-    recipe = _clear3()
-    recipe.steps["align"] = StepConfig(skip=True)
-    source = render_clear3(recipe)
-    # steps are gated by runtime DO_* flags, not by omitting their code/imports
-    assert "DO_ALIGN = False" in source
-    assert "ResampleStep.call(" in source  # resample still runs
-    ast.parse(source)
+    for source in (render_clear3(_clear3()), render_clear3(_clear3_jwst())):
+        assert "tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP)" in source
+        assert "tile_members(field, tile, corners)" in source
+        assert "parents=[gbooks[i] for i in members]" in source
 
 
 def test_clear3_recipe_validates_stage3_steps() -> None:

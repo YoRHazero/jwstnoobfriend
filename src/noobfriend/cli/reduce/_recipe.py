@@ -73,7 +73,14 @@ class GrismOptions(BaseModel):
 class Stage3Options(BaseModel):
     """Stage-3 mosaicking knobs: grouping, unified output grid and astrometry.
 
-    ``group_by`` are the :class:`~noobfriend.navigation.NooBook` fields whose
+    ``engine`` picks the whole stage-3 implementation, with no mixing:
+    ``"noob"`` (default) runs the noobase-backed custom chain (deep-catalog
+    align -> scalar sky match -> field-median outlier -> reproject_exact coadd,
+    writing an asdf-in-FITS 3a with an honest error plane and a noise kernel);
+    ``"jwst"`` runs the official ``TweakRegStep`` / ``SkyMatchStep`` /
+    ``OutlierDetectionStep`` / ``ResampleStep`` chain (the ``outlier_engine`` /
+    ``in_memory`` / ``minobj`` knobs below apply only to it). ``group_by`` are
+    the :class:`~noobfriend.navigation.NooBook` fields whose
     distinct combinations define one mosaic (``["observation", "filter"]`` =
     one per field per band). The output scale is per channel --
     ``pixel_scale_sw`` for short-wave detectors (``nrc[ab][1-4]``) and
@@ -102,6 +109,7 @@ class Stage3Options(BaseModel):
     set.
     """
 
+    engine: Literal["noob", "jwst"] = "noob"
     group_by: list[str] = ["observation", "filter"]
     pixel_scale_sw: float = 0.025
     pixel_scale_lw: float = 0.05

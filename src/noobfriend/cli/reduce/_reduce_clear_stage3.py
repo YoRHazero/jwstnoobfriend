@@ -59,6 +59,7 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         "",
         "# Mosaic grouping, unified output grid and astrometry options.",
         "[stage3]",
+        'engine = "noob"      # "noob" custom chain, or "jwst" official steps (no mixing)',
         'group_by = ["observation", "filter"]  # one mosaic per field per band',
         "pixel_scale_sw = 0.025  # arcsec/pix for short-wave (nrc[ab][1-4])",
         "pixel_scale_lw = 0.05   # arcsec/pix for long-wave (nrc[ab]long)",
