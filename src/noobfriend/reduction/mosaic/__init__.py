@@ -2,11 +2,13 @@
 
 Output-grid tiling (footprint corners in / grid + tile geometry out), the
 astrometric reference pipeline (GAIA query, cleaning, image-source selection and
-tweakreg-catalog formatting) that stage-3 resampling and alignment consume, and
-the field-median outlier flagging that replaces jwst's imaging
+tweakreg-catalog formatting) that stage-3 resampling and alignment consume, the
+deep-self-catalog alignment that replaces jwst's ``TweakRegStep``, and the
+field-median outlier flagging that replaces jwst's imaging
 ``OutlierDetectionStep``.
 """
 
+from noobfriend.reduction.mosaic._align import FrameSources, align_group
 from noobfriend.reduction.mosaic._astrometry import (
     GaiaReference,
     ReferenceProvider,
@@ -36,9 +38,11 @@ __all__ = [
     "OUTLIER_DQ",
     "FieldGrid",
     "FieldMedian",
+    "FrameSources",
     "GaiaReference",
     "ReferenceProvider",
     "TileSpec",
+    "align_group",
     "blot_to_frame",
     "build_reference",
     "clean_gaia",
