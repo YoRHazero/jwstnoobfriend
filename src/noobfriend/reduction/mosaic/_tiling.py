@@ -32,6 +32,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from astropy.wcs import WCS
+    from gwcs import WCS as GwcsWCS
 
 #: World ``(ra, dec)`` corner vertices of one product, shape ``(K, 2)`` in deg.
 Corners = np.ndarray
@@ -373,3 +374,52 @@ def tile_resample_params(field: FieldGrid, tile: TileSpec) -> dict[str, object]:
         "pixel_scale": field.pixel_scale,
         "output_shape": [tile.nx, tile.ny],
     }
+
+
+def tile_gwcs(field: FieldGrid, tile: TileSpec) -> "GwcsWCS":
+    """Build the tile's output GWCS from astropy-core models (jwst-free).
+
+    The noob coadd writes its ``3a`` tile as an ASDF-in-FITS product carrying a
+    GWCS (so :class:`~noobfriend.navigation.NooBook` and the rest of the reader
+    stack consume it unchanged). The tile grid is a plain TAN -- the field's
+    ``crval`` and ``CD`` matrix with the reference pixel shifted to tile-local
+    coordinates -- so the GWCS is ``Shift | Affine | Pix2Sky_Gnomonic |
+    RotateNative2Celestial`` on standard ``astropy`` models, which serialise to
+    ASDF with stock ``asdf-astropy`` tags (no jwst, no custom extension).
+
+    Parameters
+    ----------
+    field : FieldGrid
+        The output grid the tile is a window of.
+    tile : TileSpec
+        The tile whose pixel grid the GWCS describes.
+
+    Returns
+    -------
+    gwcs.WCS
+        A ``detector`` -> ``world`` GWCS in the tile's 0-based pixel frame,
+        matching ``field.wcs`` shifted by the tile origin.
+    """
+    from astropy import coordinates as coord
+    from astropy import units as u
+    from astropy.modeling import models
+    from gwcs import coordinate_frames as cf
+    from gwcs import wcs as gwcs_wcs
+
+    cd = np.asarray(field.wcs.wcs.cd, dtype=float)
+    ra0, dec0 = field.crval
+    lonpole = float(field.wcs.wcs.lonpole)
+    # field.crpix is 1-based full-field; shift to 0-based tile-local
+    shift_x = field.crpix[0] - tile.x0 - 1.0
+    shift_y = field.crpix[1] - tile.y0 - 1.0
+    forward = (
+        (models.Shift(-shift_x) & models.Shift(-shift_y))
+        | models.AffineTransformation2D(matrix=cd)
+        | models.Pix2Sky_Gnomonic()
+        | models.RotateNative2Celestial(ra0, dec0, lonpole)
+    )
+    detector = cf.Frame2D(name="detector", axes_order=(0, 1), unit=(u.pix, u.pix))
+    world = cf.CelestialFrame(
+        reference_frame=coord.ICRS(), name="world", unit=(u.deg, u.deg)
+    )
+    return gwcs_wcs.WCS([(detector, forward), (world, None)])

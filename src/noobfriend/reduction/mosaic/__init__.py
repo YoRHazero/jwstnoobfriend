@@ -32,6 +32,7 @@ from noobfriend.reduction.mosaic._tiling import (
     TileSpec,
     field_grid,
     tile_grid,
+    tile_gwcs,
     tile_members,
     tile_resample_params,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "query_gaia",
     "select_point_sources",
     "tile_grid",
+    "tile_gwcs",
     "tile_members",
     "tile_resample_params",
     "to_tweakreg_catalog",

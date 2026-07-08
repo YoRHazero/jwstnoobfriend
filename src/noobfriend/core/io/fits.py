@@ -26,13 +26,14 @@ react to specific failures.
 """
 
 import warnings
+from collections.abc import Mapping
 from contextlib import contextmanager
 from io import BytesIO
 from typing import Any
 
 import asdf
 import numpy as np
-from asdf.exceptions import AsdfPackageVersionWarning
+from asdf.exceptions import AsdfBlockIndexWarning, AsdfPackageVersionWarning
 from astropy.io import fits
 from gwcs import WCS
 from stdatamodels import asdf_in_fits
@@ -58,12 +59,17 @@ _PROBE: int = 1 << 15
 
 
 @contextmanager
-def _silence_asdf_version_warning() -> Any:
-    """Locally silence :class:`asdf.exceptions.AsdfPackageVersionWarning`.
+def _silence_asdf_read_warnings() -> Any:
+    """Locally silence the two noisy, non-actionable ASDF read warnings.
 
-    These warnings appear whenever the file's ASDF schema versions differ from
-    the installed versions; they are noisy and almost never actionable in a
-    read-only pipeline.
+    - :class:`~asdf.exceptions.AsdfPackageVersionWarning`: the file's ASDF
+      schema versions differ from the installed ones -- noisy, almost never
+      actionable in a read-only pipeline.
+    - :class:`~asdf.exceptions.AsdfBlockIndexWarning`: the block index of an
+      ASDF *extracted from its FITS embedding* (as :func:`_meta_tree` does)
+      does not parse, so asdf falls back to serial block reading -- which is
+      always correct. It never fires for the whole-file path, so silencing it
+      cannot hide a real read failure.
 
     Yields
     ------
@@ -72,6 +78,7 @@ def _silence_asdf_version_warning() -> Any:
     """
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=AsdfPackageVersionWarning)
+        warnings.filterwarnings("ignore", category=AsdfBlockIndexWarning)
         yield
 
 
@@ -87,10 +94,10 @@ def _meta_tree(acc: ByteAccessor) -> dict:
     try:
         asdf_bytes = extract_asdf(acc.read_tail(_TAIL))
     except KeyError:
-        with _silence_asdf_version_warning(), asdf_in_fits.open(acc.open()) as af:
+        with _silence_asdf_read_warnings(), asdf_in_fits.open(acc.open()) as af:
             return af.tree["meta"]
     with (
-        _silence_asdf_version_warning(),
+        _silence_asdf_read_warnings(),
         asdf.open(BytesIO(asdf_bytes), lazy_load=True) as af,
     ):
         return af.tree["meta"]
@@ -306,3 +313,38 @@ def read_dq(acc: ByteAccessor, layout: FitsLayout) -> np.ndarray:
     if span is None:
         raise KeyError("DQ")
     return _decode_image(span.header, acc.read_range(span.data_loc, span.data_span))
+
+
+def write_asdf_fits(planes: Mapping[str, np.ndarray], tree: Mapping[str, Any]) -> bytes:
+    """Assemble image planes plus an embedded ASDF tree into FITS bytes.
+
+    The write counterpart of :func:`read_meta_and_gwcs`: a ``PrimaryHDU``
+    followed by one ``ImageHDU`` per named plane (``SCI`` / ``ERR`` / ``WHT`` /
+    ...), with ``tree`` embedded as a trailing ASDF HDU via
+    :mod:`stdatamodels.asdf_in_fits`. ``tree["meta"]`` carries what the readers
+    expect -- ``wcs`` (a GWCS) and ``instrument`` fields -- so the product is
+    read back through the same tail-ASDF path with no jwst dependency. The GWCS
+    should be built from stock ``astropy`` models (e.g.
+    :func:`noobfriend.reduction.mosaic.tile_gwcs`) so it serialises with standard
+    ``asdf-astropy`` tags.
+
+    Parameters
+    ----------
+    planes : mapping of str to numpy.ndarray
+        Image extensions in order; the key is the ``EXTNAME``.
+    tree : mapping
+        The ASDF tree to embed (typically ``{"meta": {"wcs": ..., ...}}``).
+
+    Returns
+    -------
+    bytes
+        The complete FITS file, ready for
+        :func:`noobfriend.core.io.write_bytes`.
+    """
+    hdus: list[fits.hdu.base._BaseHDU] = [fits.PrimaryHDU()]
+    for name, array in planes.items():
+        hdus.append(fits.ImageHDU(np.asarray(array), name=name))
+    hdulist = asdf_in_fits.to_hdulist(dict(tree), fits.HDUList(hdus))
+    buffer = BytesIO()
+    hdulist.writeto(buffer)
+    return buffer.getvalue()
