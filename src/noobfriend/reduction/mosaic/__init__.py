@@ -9,6 +9,7 @@ field-median outlier flagging that replaces jwst's imaging
 """
 
 from noobfriend.reduction.mosaic._align import FrameSources, align_group
+from noobfriend.reduction.mosaic._coadd import CoaddTile, TileCoadd, noise_kernel
 from noobfriend.reduction.mosaic._astrometry import (
     GaiaReference,
     ReferenceProvider,
@@ -37,12 +38,14 @@ from noobfriend.reduction.mosaic._tiling import (
 
 __all__ = [
     "OUTLIER_DQ",
+    "CoaddTile",
     "FieldGrid",
     "FieldMedian",
     "FrameSources",
     "GaiaReference",
     "ReferenceProvider",
     "SkyMatcher",
+    "TileCoadd",
     "TileSpec",
     "align_group",
     "blot_to_frame",
@@ -51,6 +54,7 @@ __all__ = [
     "field_grid",
     "flag_outliers",
     "frame_sky",
+    "noise_kernel",
     "query_gaia",
     "select_point_sources",
     "tile_grid",
