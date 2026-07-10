@@ -122,17 +122,20 @@ def _save_bytes(model, stage: str) -> bytes:
 def _write_product(model, location: str, stage: str) -> bytes:
     """Write ``model`` to ``location`` and return its bytes for the manifest.
 
-    A locally-mounted ``location`` is written straight to the mount (no temp file,
-    no SSH); a remote one is serialised to a temp file and uploaded. The returned
-    bytes seed ``NooBook.from_file`` so it need not re-read the product.
+    Always serialised through a *local* temp file first: the bytes in hand then
+    serve one streamed write to the (possibly sshfs-mounted) destination -- or
+    the upload for a true remote -- plus seeding ``NooBook.from_file``. Writing
+    straight to a FUSE mount and re-reading the product back would cost an
+    extra wire round-trip per product (a default sshfs mount drops a file's
+    page cache on re-open, so the read-back is not served from cache).
     """
+    raw = _save_bytes(model, stage)
     dest = to_local(location)
     if dest is not None:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        model.save(str(dest))
-        return dest.read_bytes()
-    raw = _save_bytes(model, stage)
-    write_bytes(location, raw)
+        dest.write_bytes(raw)
+    else:
+        write_bytes(location, raw)
     return raw
 
 
