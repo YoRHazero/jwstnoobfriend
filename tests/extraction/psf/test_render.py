@@ -5,11 +5,9 @@ hybrid PSFs are built from synthetic stars (as in test_psf.py's TestBuild), then
 rendered to native grids, convolved, and round-tripped through FITS.
 """
 
-import astropy.units as u
 import matplotlib
 import numpy as np
 import pytest
-from astropy.coordinates import SkyCoord
 from noobase.image import convolve_psf
 
 matplotlib.use("Agg")
@@ -21,33 +19,17 @@ from noobfriend.extraction.psf import (  # noqa: E402
     render_core,
 )
 
-
-class _LinearWCS:
-    """A minimal APE-14 WCS: pixel (x, y) -> sky via a linear scale."""
-
-    def __init__(self, ra0: float = 53.0, dec0: float = -27.0, scale: float = 1e-4):
-        self.ra0, self.dec0, self.scale = ra0, dec0, scale
-
-    def pixel_to_world(self, x: np.ndarray, y: np.ndarray) -> SkyCoord:
-        return SkyCoord(
-            (self.ra0 + self.scale * np.asarray(x)) * u.deg,
-            (self.dec0 + self.scale * np.asarray(y)) * u.deg,
-        )
+from ._helpers import LinearWCS, make_frame  # noqa: E402
 
 
 def _frame(positions: list[tuple], *, seed: int = 0) -> np.ndarray:
     """Synthetic 220x220 frame with Gaussian point sources at ``(y, x)``."""
-    rng = np.random.default_rng(seed)
-    img = rng.normal(0.0, 1.0, size=(220, 220))
-    yy, xx = np.mgrid[0:220, 0:220]
-    for y, x in positions:
-        img += 300.0 * np.exp(-0.5 * (((yy - y) / 2.0) ** 2 + ((xx - x) / 2.0) ** 2))
-    return img
+    return make_frame(positions, shape=(220, 220), seed=seed)
 
 
 def _filled(cutout_size: int) -> SourceExtractor:
     """Return a selected extractor over four bright stars in phase-shifted frames."""
-    wcs = _LinearWCS()
+    wcs = LinearWCS()
     ext = SourceExtractor(fwhm=4.0, cutout_size=cutout_size, nsigma=5.0)
     positions = [(70, 70), (70, 150), (150, 70), (150, 150)]
     for k in range(6):

@@ -15,6 +15,8 @@ import pytest
 from noobfriend.navigation import Footprint, NooBook, NooBox
 from noobfriend.navigation.noobox.extract import _grism
 
+from ._helpers import make_grism_book
+
 
 def _square(cx: float, cy: float, half: float = 0.01) -> Footprint:
     """Axis-aligned square footprint; corners in (0,0),(nx,0),(nx,ny),(0,ny) order."""
@@ -28,41 +30,15 @@ def _square(cx: float, cy: float, half: float = 0.01) -> Footprint:
     )
 
 
-def _grism_book(
-    *,
-    ident: str = "00001",
-    detector: str = "nrca1",
-    pupil: str = "GRISMR",
-    footprint: Footprint | None = None,
-    shape: tuple[int, int] = (2048, 2048),
-) -> NooBook:
-    stem = f"jw01895001001_02101_{ident}_{detector}_2bii"
-    return NooBook(
-        id=f"{stem}@2bii",
-        location=f"/{stem}.fits",
-        stage="2bii",
-        program_id="01895",
-        observation=("001",),
-        visit=("001",),
-        ggsaa=("02101",),
-        exposure=(ident,),
-        detector=detector,
-        pupil=pupil,
-        filter="F444W",
-        shape=shape,
-        footprint=footprint,
-    )
-
-
 # -- grism identity / grouping ------------------------------------------------
 
 
 def test_grism_identity_and_default_group():
-    a = _grism_book(detector="nrca1", pupil="GRISMR")
-    b = _grism_book(detector="nrcb3", pupil="GRISMC")
+    a = make_grism_book(detector="nrca1", pupil="GRISMR")
+    b = make_grism_book(detector="nrcb3", pupil="GRISMC")
 
     assert _grism._is_grism(a)
-    assert not _grism._is_grism(_grism_book(pupil="CLEAR"))
+    assert not _grism._is_grism(make_grism_book(pupil="CLEAR"))
     assert _grism._default_group(a) == ("a", "row")
     assert _grism._default_group(b) == ("b", "column")
 
@@ -92,8 +68,8 @@ def test_dispersion_unit_row_and_column():
 
 def test_pre_gate_selects_by_trace_segment(monkeypatch):
     monkeypatch.setattr(_grism, "_seed_extent", lambda *a, **k: (0.0, 0.02))
-    near = _grism_book(ident="00001", footprint=_square(0.015, 0.0))
-    far = _grism_book(ident="00002", footprint=_square(0.5, 0.0))
+    near = make_grism_book(ident="00001", footprint=_square(0.015, 0.0))
+    far = make_grism_book(ident="00002", footprint=_square(0.5, 0.0))
 
     candidates = _grism._pre_gate([near, far], 0.0, 0.0)
 
@@ -104,11 +80,11 @@ def test_pre_gate_selects_by_trace_segment(monkeypatch):
 def test_pre_gate_per_frame_direction_handles_rotation(monkeypatch):
     """A frame whose dispersion axis is rotated still selects via its own corners."""
     monkeypatch.setattr(_grism, "_seed_extent", lambda *a, **k: (0.0, 0.02))
-    axis_aligned = _grism_book(ident="00001", footprint=_square(0.015, 0.0))
+    axis_aligned = make_grism_book(ident="00001", footprint=_square(0.015, 0.0))
     # corners arranged so detector-x (corner1 - corner0) points +Dec, not +RA;
     # footprint sits north of the source, where the trace lands only if its
     # direction is taken from this frame's own corners.
-    rotated = _grism_book(
+    rotated = make_grism_book(
         ident="00002",
         footprint=Footprint.from_corners(
             [(0.01, 0.005), (0.01, 0.025), (-0.01, 0.025), (-0.01, 0.005)]
@@ -175,8 +151,8 @@ def _boxgrism(books: list[NooBook]) -> _grism.BoxGrism:
 
 def test_boxgrism_spectra_keyed_by_book(monkeypatch):
     _patch_pixels(monkeypatch)
-    a = _grism_book(ident="00001", detector="nrca1", pupil="GRISMR")
-    b = _grism_book(ident="00002", detector="nrcb1", pupil="GRISMC")
+    a = make_grism_book(ident="00001", detector="nrca1", pupil="GRISMR")
+    b = make_grism_book(ident="00002", detector="nrcb1", pupil="GRISMC")
     g = _boxgrism([a, b])
 
     spectra = g.spectra
@@ -187,8 +163,8 @@ def test_boxgrism_spectra_keyed_by_book(monkeypatch):
 
 def test_boxgrism_combine_grouping(monkeypatch):
     _patch_pixels(monkeypatch)
-    a = _grism_book(ident="00001", detector="nrca1", pupil="GRISMR")
-    b = _grism_book(ident="00002", detector="nrcb1", pupil="GRISMC")
+    a = make_grism_book(ident="00001", detector="nrca1", pupil="GRISMR")
+    b = make_grism_book(ident="00002", detector="nrcb1", pupil="GRISMC")
     g = _boxgrism([a, b])
 
     single = g.combine(group_by=None)
@@ -205,7 +181,7 @@ def test_boxgrism_combine_grouping(monkeypatch):
 
 def test_boxgrism_spectra_requires_err(monkeypatch):
     _patch_pixels(monkeypatch, err_none=True)
-    g = _boxgrism([_grism_book(ident="00001")])
+    g = _boxgrism([make_grism_book(ident="00001")])
 
     with pytest.raises(ValueError, match="no ERR"):
         _ = g.spectra
@@ -215,13 +191,13 @@ def test_boxgrism_spectra_requires_err(monkeypatch):
 
 
 def test_build_selects_grism_and_keeps_covered(monkeypatch):
-    grism_covered = _grism_book(
+    grism_covered = make_grism_book(
         ident="00001", pupil="GRISMR", footprint=_square(0.0, 0.0)
     )
-    grism_uncovered = _grism_book(
+    grism_uncovered = make_grism_book(
         ident="00002", pupil="GRISMR", footprint=_square(0.0, 0.0)
     )
-    clear = _grism_book(ident="00003", pupil="CLEAR")
+    clear = make_grism_book(ident="00003", pupil="CLEAR")
     monkeypatch.setattr(NooBook, "wcs", property(lambda self: object()))
     monkeypatch.setattr(_grism, "_pre_gate", lambda books, ra, dec: list(books))
 
@@ -262,7 +238,7 @@ def test_build_selects_grism_and_keeps_covered(monkeypatch):
 
 def test_build_raises_without_grism_frames():
     box = NooBox()
-    box.add(_grism_book(ident="00001", pupil="CLEAR"))
+    box.add(make_grism_book(ident="00001", pupil="CLEAR"))
 
     with pytest.raises(ValueError, match="no grism"):
         box.extract.grism(0.0, 0.0, spatial_half=8, probe=False, progress=False)
@@ -270,8 +246,12 @@ def test_build_raises_without_grism_frames():
 
 def test_build_tolerates_uncoverable_frame(monkeypatch):
     """A frame whose dispersion model raises (source far off-array) is dropped."""
-    covered = _grism_book(ident="00001", pupil="GRISMR", footprint=_square(0.0, 0.0))
-    crashes = _grism_book(ident="00002", pupil="GRISMR", footprint=_square(0.0, 0.0))
+    covered = make_grism_book(
+        ident="00001", pupil="GRISMR", footprint=_square(0.0, 0.0)
+    )
+    crashes = make_grism_book(
+        ident="00002", pupil="GRISMR", footprint=_square(0.0, 0.0)
+    )
     monkeypatch.setattr(NooBook, "wcs", property(lambda self: object()))
     monkeypatch.setattr(_grism, "_pre_gate", lambda books, ra, dec: list(books))
     monkeypatch.setattr(

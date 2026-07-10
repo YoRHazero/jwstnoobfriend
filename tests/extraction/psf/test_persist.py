@@ -7,45 +7,12 @@ cache is read lazily and never deleted, and the edge cases (empty, overwrite,
 missing manifest, spilled source).
 """
 
-import astropy.units as u
 import numpy as np
 import pytest
-from astropy.coordinates import SkyCoord
 
 from noobfriend.extraction.psf import Cutout, SourceExtractor
 
-
-class _LinearWCS:
-    """A minimal APE-14 WCS: pixel (x, y) -> sky via a linear scale."""
-
-    def __init__(self, ra0: float = 53.0, dec0: float = -27.0, scale: float = 1e-4):
-        self.ra0, self.dec0, self.scale = ra0, dec0, scale
-
-    def pixel_to_world(self, x: np.ndarray, y: np.ndarray) -> SkyCoord:
-        return SkyCoord(
-            (self.ra0 + self.scale * np.asarray(x)) * u.deg,
-            (self.dec0 + self.scale * np.asarray(y)) * u.deg,
-        )
-
-
-def _frame(
-    positions: list[tuple],
-    *,
-    peak: float = 300.0,
-    sigma: float = 2.0,
-    shape: tuple[int, int] = (120, 120),
-    noise: float = 1.0,
-    seed: int = 0,
-) -> np.ndarray:
-    """Synthetic frame; each position is ``(y, x)`` or ``(y, x, sigma_x)``."""
-    rng = np.random.default_rng(seed)
-    img = rng.normal(0.0, noise, size=shape)
-    yy, xx = np.mgrid[0 : shape[0], 0 : shape[1]]
-    for pos in positions:
-        y, x = pos[0], pos[1]
-        sx = pos[2] if len(pos) > 2 else sigma
-        img += peak * np.exp(-0.5 * (((yy - y) / sigma) ** 2 + ((xx - x) / sx) ** 2))
-    return img
+from ._helpers import LinearWCS, make_frame
 
 
 def _cutouts_equal(a: Cutout, b: Cutout) -> bool:
@@ -62,13 +29,13 @@ def _cutouts_equal(a: Cutout, b: Cutout) -> bool:
 
 def _two_source_extractor(cutout_size: int = 21, **store_kwargs) -> SourceExtractor:
     """Two physical sources across two frames, with band / detector labels."""
-    wcs = _LinearWCS()
+    wcs = LinearWCS()
     ext = SourceExtractor(fwhm=4.0, cutout_size=cutout_size, nsigma=5.0, **store_kwargs)
-    frame = _frame([(40, 40), (80, 80)], seed=1)
+    frame = make_frame([(40, 40), (80, 80)], seed=1)
     err = np.ones_like(frame)
     dq = np.zeros_like(frame, dtype=np.int32)
     ext.add_from_frame(frame, err, dq, wcs=wcs, filter="F210M", detector="nrca1")
-    frame2 = _frame([(40, 40), (80, 80)], seed=2)
+    frame2 = make_frame([(40, 40), (80, 80)], seed=2)
     ext.add_from_frame(frame2, np.ones_like(frame2), wcs=wcs, filter="F182M")
     return ext
 
@@ -109,8 +76,8 @@ class TestRoundTrip:
 
     def test_config_preserved(self, tmp_path) -> None:
         ext = SourceExtractor(fwhm=3.5, cutout_size=21, nsigma=4.0, match_radius=0.2)
-        _LinearWCS()
-        ext.add_from_frame(_frame([(60, 60)], seed=1), wcs=_LinearWCS())
+        LinearWCS()
+        ext.add_from_frame(make_frame([(60, 60)], seed=1), wcs=LinearWCS())
         ext.save(tmp_path / "cache")
         loaded = SourceExtractor.load(tmp_path / "cache")
         assert loaded.fwhm == 3.5
@@ -157,12 +124,12 @@ class TestLoadedCacheIsSafe:
         assert len(again) == len(ext)
 
     def test_select_after_load_streams_and_builds(self, tmp_path) -> None:
-        wcs = _LinearWCS()
+        wcs = LinearWCS()
         positions = [(70, 70), (70, 150), (150, 70), (150, 150)]
         src = SourceExtractor(fwhm=4.0, cutout_size=29, nsigma=5.0)
         for k in range(6):
             oy, ox = (0.37 * k) % 1 - 0.5, (0.61 * k) % 1 - 0.5
-            frame = _frame(
+            frame = make_frame(
                 [(y + oy, x + ox) for y, x in positions], shape=(220, 220), seed=k
             )
             src.add_from_frame(
@@ -186,7 +153,7 @@ class TestRebuiltPositions:
         loaded = SourceExtractor.load(tmp_path / "cache")
         before = loaded.n_sources
         # a new detection at an existing source's position must match, not add
-        loaded.add_from_frame(_frame([(40, 40)], seed=9), wcs=_LinearWCS())
+        loaded.add_from_frame(make_frame([(40, 40)], seed=9), wcs=LinearWCS())
         assert loaded.n_sources == before
 
 

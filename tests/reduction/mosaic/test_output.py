@@ -7,37 +7,23 @@ product is downstream-compatible.
 
 import numpy as np
 from astropy.io import fits
-from astropy.wcs import WCS
 
 from noobfriend.core.io import write_asdf_fits
 from noobfriend.navigation import NooBook
 from noobfriend.reduction.mosaic import TileSpec, field_grid, tile_gwcs
+
+from ._helpers import corners, tan_wcs
 
 RA0, DEC0 = 150.0, 2.0
 SCALE = 0.05
 
 
 def _tan(shape):
-    w = WCS(naxis=2)
-    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    w.wcs.crval = [RA0, DEC0]
-    w.wcs.crpix = [shape[1] / 2 + 0.5, shape[0] / 2 + 0.5]
-    w.wcs.cd = (SCALE / 3600.0) * np.array([[-1.0, 0.0], [0.0, 1.0]])
-    return w
-
-
-def _corners(w, shape):
-    ny, nx = shape
-    return np.array(
-        [
-            w.wcs_pix2world([[x, y]], 0)[0]
-            for x, y in [(0, 0), (nx, 0), (nx, ny), (0, ny)]
-        ]
-    )
+    return tan_wcs(RA0, DEC0, shape, SCALE)
 
 
 def _field(shape=(200, 200)):
-    return field_grid([_corners(_tan(shape), shape)], SCALE, rotation=0.0)
+    return field_grid([corners(_tan(shape), shape)], SCALE, rotation=0.0)
 
 
 def test_tile_gwcs_matches_field_wcs():

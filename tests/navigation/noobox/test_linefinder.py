@@ -10,9 +10,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from noobfriend.navigation import Footprint, NooBook, NooBox
+from noobfriend.navigation import Footprint, NooBook
 from noobfriend.navigation import _linefinder as shared
 from noobfriend.navigation.noobox.extract import _linefinder as boxlf
+
+from ._helpers import make_box, make_grism_book
 
 
 def _square() -> Footprint:
@@ -27,21 +29,13 @@ def _grism_book(
     visit: str = "001",
     footprint: Footprint | None = None,
 ) -> NooBook:
-    stem = f"jw01895001{visit}_02101_{ident}_{detector}_2bii"
-    return NooBook(
-        id=f"{stem}@2bii",
-        location=f"/{stem}.fits",
-        stage="2bii",
-        program_id="01895",
-        observation=("001",),
-        visit=(visit,),
-        ggsaa=("02101",),
-        exposure=(ident,),
+    return make_grism_book(
+        ident=ident,
         detector=detector,
         pupil=pupil,
-        filter="F444W",
-        shape=(4, 4),
+        visit=visit,
         footprint=footprint or _square(),
+        shape=(4, 4),
     )
 
 
@@ -126,13 +120,6 @@ def test_frame_linefinder_requires_err(monkeypatch):
 # -- BoxLineFinder ------------------------------------------------------------
 
 
-def _box(*books: NooBook) -> NooBox:
-    box = NooBox()
-    for book in books:
-        box.add(book)
-    return box
-
-
 def test_box_linefinder_default_grouping_skips_non_grism(monkeypatch):
     _patch_finder(monkeypatch)
     a1 = _grism_book(ident="00001", visit="001", detector="nrca1")
@@ -140,7 +127,7 @@ def test_box_linefinder_default_grouping_skips_non_grism(monkeypatch):
     b = _grism_book(ident="00003", visit="002", detector="nrca1")  # different visit
     clear = _grism_book(ident="00004", pupil="CLEAR")  # not grism
 
-    lf = _box(a1, a2, b, clear).extract.linefinder(probe=False)
+    lf = make_box(a1, a2, b, clear).extract.linefinder(probe=False)
 
     groups = lf.groups
     assert len(groups) == 2  # (visit 001) and (visit 002); CLEAR excluded
@@ -153,7 +140,7 @@ def test_box_linefinder_heatmaps_catalog_exposure(monkeypatch):
     _patch_pixels(monkeypatch)
     a1 = _grism_book(ident="00001", visit="001")
     a2 = _grism_book(ident="00002", visit="001")
-    lf = _box(a1, a2).extract.linefinder(probe=False)
+    lf = make_box(a1, a2).extract.linefinder(probe=False)
 
     heatmaps = lf.heatmaps
     assert len(heatmaps) == 1
@@ -172,11 +159,11 @@ def test_box_linefinder_group_by_override(monkeypatch):
     _patch_finder(monkeypatch)
     a = _grism_book(ident="00001", detector="nrca1")
     b = _grism_book(ident="00002", detector="nrcb1")
-    lf = _box(a, b).extract.linefinder(group_by="detector", probe=False)
+    lf = make_box(a, b).extract.linefinder(group_by="detector", probe=False)
 
     assert sorted(lf.groups) == ["nrca1", "nrcb1"]
 
 
 def test_box_linefinder_no_grism_raises():
     with pytest.raises(ValueError, match="no grism"):
-        _box(_grism_book(pupil="CLEAR")).extract.linefinder(probe=False)
+        make_box(_grism_book(pupil="CLEAR")).extract.linefinder(probe=False)

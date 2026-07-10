@@ -67,3 +67,10 @@ dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.14",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: sampling or otherwise long-running tests (deselect with -m 'not slow')",
+    "integration: crosses subpackage boundaries or exercises an end-to-end flow",
+]

@@ -1,7 +1,6 @@
 """Tests for the inverse-variance tile coadd (synthetic frames only)."""
 
 import numpy as np
-from astropy.wcs import WCS
 
 from noobfriend.core.imgutils import NoiseAutocovariance
 from noobfriend.reduction.mosaic import (
@@ -12,30 +11,20 @@ from noobfriend.reduction.mosaic import (
 )
 from noobfriend.core.wcs import from_fits_wcs
 
+from ._helpers import corners, tan_wcs
+
 RA0, DEC0 = 150.0, 2.0
 SCALE = 0.5  # arcsec/pix
 
 
 def _tan(ra0, dec0, shape):
-    """Return a plain TAN astropy WCS centred at (ra0, dec0)."""
-    w = WCS(naxis=2)
-    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    w.wcs.crval = [ra0, dec0]
-    w.wcs.crpix = [shape[1] / 2 + 0.5, shape[0] / 2 + 0.5]
-    w.wcs.cd = (SCALE / 3600.0) * np.array([[-1.0, 0.0], [0.0, 1.0]])
-    return w
-
-
-def _corners(w, shape):
-    ny, nx = shape
-    px = [(0, 0), (nx, 0), (nx, ny), (0, ny)]
-    return np.array([w.wcs_pix2world([[x, y]], 0)[0] for x, y in px], dtype=float)
+    return tan_wcs(ra0, dec0, shape, SCALE)
 
 
 def _setup(shape=(100, 100)):
     """Return a field, a whole-field tile and a frame WCS, all co-aligned."""
     w = _tan(RA0, DEC0, shape)
-    field = field_grid([_corners(w, shape)], SCALE, rotation=0.0)
+    field = field_grid([corners(w, shape)], SCALE, rotation=0.0)
     tile = TileSpec(0, 0, 0, 0, field.shape[1], field.shape[0])
     return field, tile, w, shape
 

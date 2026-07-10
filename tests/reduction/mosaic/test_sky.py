@@ -1,30 +1,20 @@
 """Tests for the DIY scalar sky matcher (synthetic frames only, no real FITS)."""
 
 import numpy as np
-from astropy.wcs import WCS
 
 from noobfriend.core.wcs import from_fits_wcs
 from noobfriend.reduction.mosaic import SkyMatcher, field_grid, frame_sky
 from noobfriend.reduction.mosaic._sky import _solve_offsets
+
+from ._helpers import corners as _corners
+from ._helpers import tan_wcs
 
 RA0, DEC0 = 150.0, 2.0
 SCALE = 1.0  # arcsec/pix (coarse; sky needs no resolution)
 
 
 def _tan(ra0, dec0, shape):
-    """Return a plain TAN astropy WCS centred at (ra0, dec0)."""
-    w = WCS(naxis=2)
-    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    w.wcs.crval = [ra0, dec0]
-    w.wcs.crpix = [shape[1] / 2 + 0.5, shape[0] / 2 + 0.5]
-    w.wcs.cd = (SCALE / 3600.0) * np.array([[-1.0, 0.0], [0.0, 1.0]])
-    return w
-
-
-def _corners(w, shape):
-    ny, nx = shape
-    px = [(0, 0), (nx, 0), (nx, ny), (0, ny)]
-    return np.array([w.wcs_pix2world([[x, y]], 0)[0] for x, y in px], dtype=float)
+    return tan_wcs(ra0, dec0, shape, SCALE)
 
 
 def test_frame_sky_recovers_level_ignoring_sources():

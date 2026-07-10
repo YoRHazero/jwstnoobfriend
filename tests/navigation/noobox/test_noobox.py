@@ -14,6 +14,8 @@ import pytest
 
 from noobfriend.navigation import Footprint, NooBook, NooBox
 
+from ._helpers import make_box
+
 
 def _touch(directory: Path, name: str) -> None:
     (directory / name).write_text("")
@@ -79,13 +81,6 @@ def _footprint(offset: float = 0.0) -> Footprint:
             (offset, 1.0),
         ]
     )
-
-
-def _box(*books: NooBook) -> NooBox:
-    box = NooBox()
-    for book in books:
-        box.add(book)
-    return box
 
 
 def _patch_book_pixels(monkeypatch, *, wcs_by_id: dict[str, object | None]) -> None:
@@ -272,7 +267,7 @@ def test_filter_returns_sharing_subset(tmp_path):
 
 
 def test_select_glob_membership_and_tuple_fields():
-    box = _box(
+    box = make_box(
         _exposure_book("2a", "cal", detector="nrca1"),
         _exposure_book("2a", "cal", detector="nrcb1"),
         _exposure_book("2a", "cal", detector="nrca3"),
@@ -288,7 +283,7 @@ def test_select_glob_membership_and_tuple_fields():
 
 
 def test_group_by_and_distinct():
-    box = _box(
+    box = make_box(
         _exposure_book("2a", "cal", detector="nrca1"),
         _exposure_book("2a", "cal", detector="nrcb1"),
     )
@@ -303,10 +298,10 @@ def test_group_by_and_distinct():
 def test_copy_is_an_independent_sandbox():
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal")
-    box = _box(cal)
+    box = make_box(cal)
 
     clone = box.copy()
-    clone.merge(_box(rate), child="2a")  # prepend: stamps the clone's 2a parents
+    clone.merge(make_box(rate), child="2a")  # prepend: stamps the clone's 2a parents
 
     assert clone[cal.id].parent_ids == (rate.id,)  # the edge lands on the copy
     assert box[cal.id].parent_ids == ()  # original book untouched
@@ -328,7 +323,7 @@ def test_extract_sources_forwards_books_to_source_extractor(monkeypatch):
     _patch_book_pixels(monkeypatch, wcs_by_id={book_a.id: wcs_a, book_b.id: wcs_b})
     created = _capture_source_extractor(monkeypatch)
 
-    extractor = _box(book_a, book_b).extract.sources(
+    extractor = make_box(book_a, book_b).extract.sources(
         fwhm=4.0,
         cutout_size=55,
         nsigma=4.5,
@@ -371,7 +366,7 @@ def test_extract_sources_probes_thin_books_for_filter_labels(monkeypatch):
 
     monkeypatch.setattr(NooBook, "probe", fake_probe)
 
-    extractor = _box(book).extract.sources(progress=False)
+    extractor = make_box(book).extract.sources(progress=False)
 
     assert extractor is created[0]
     assert extractor.kwargs["fwhm"] == 4.0
@@ -386,11 +381,11 @@ def test_extract_sources_missing_wcs_raises_or_skips(monkeypatch):
     created = _capture_source_extractor(monkeypatch)
 
     with pytest.raises(ValueError, match="has no assigned WCS"):
-        _box(missing).extract.sources(
+        make_box(missing).extract.sources(
             fwhm=4.0, cutout_size=21, probe=False, progress=False
         )
 
-    extractor = _box(missing, good).extract.sources(
+    extractor = make_box(missing, good).extract.sources(
         fwhm=4.0,
         cutout_size=21,
         skip_missing_wcs=True,
@@ -423,7 +418,7 @@ def test_extract_cutout_gates_by_footprint_native(monkeypatch):
     far = _exposure_book("2a", "cal", exposure="00002", footprint=_footprint(5.0))
     _patch_book_pixels(monkeypatch, wcs_by_id={covering.id: object(), far.id: object()})
 
-    result = _box(covering, far).extract.cutout(
+    result = make_box(covering, far).extract.cutout(
         0.5, 0.5, half=2, reproject=False, probe=False, progress=False
     )
 
@@ -442,7 +437,7 @@ def test_extract_cutout_reproject_prefers_stage3_grid(monkeypatch):
         monkeypatch, wcs_by_id={exposure.id: wcs_exposure, mosaic.id: wcs_mosaic}
     )
 
-    result = _box(exposure, mosaic).extract.cutout(
+    result = make_box(exposure, mosaic).extract.cutout(
         0.5, 0.5, half=2, probe=False, progress=False
     )
 
@@ -457,7 +452,7 @@ def test_extract_cutout_no_coverage_raises(monkeypatch):
     _patch_book_pixels(monkeypatch, wcs_by_id={far.id: object()})
 
     with pytest.raises(ValueError, match="no book in the box covers"):
-        _box(far).extract.cutout(0.5, 0.5, half=2, probe=False, progress=False)
+        make_box(far).extract.cutout(0.5, 0.5, half=2, probe=False, progress=False)
 
 
 def test_extract_cutout_coadd_weighted_mean(monkeypatch):
@@ -468,7 +463,7 @@ def test_extract_cutout_coadd_weighted_mean(monkeypatch):
         monkeypatch, wcs_by_id={book_a.id: object(), book_b.id: object()}
     )
 
-    result = _box(book_a, book_b).extract.cutout(
+    result = make_box(book_a, book_b).extract.cutout(
         0.5, 0.5, half=2, probe=False, progress=False
     )
 
@@ -482,9 +477,9 @@ def test_extract_cutout_coadd_weighted_mean(monkeypatch):
 def test_merge_is_in_place_and_links_by_identity_key():
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal")
-    box = _box(rate)
+    box = make_box(rate)
 
-    result = box.merge(_box(cal))
+    result = box.merge(make_box(cal))
 
     assert result is box  # in-place, returns self
     assert box[cal.id].parent_ids == (rate.id,)
@@ -494,9 +489,9 @@ def test_merge_is_in_place_and_links_by_identity_key():
 def test_merge_no_key_match_leaves_parents_empty():
     rate = _exposure_book("1b", "rate", exposure="00001")
     cal = _exposure_book("2a", "cal", exposure="00002")  # different exposure
-    box = _box(rate)
+    box = make_box(rate)
 
-    box.merge(_box(cal))
+    box.merge(make_box(cal))
 
     assert box[cal.id].parent_ids == ()
 
@@ -504,9 +499,9 @@ def test_merge_no_key_match_leaves_parents_empty():
 def test_merge_never_links_same_stage():
     cal = _exposure_book("2a", "cal")
     crf = _exposure_book("2a", "crf")  # same identity key, same stage
-    box = _box(cal)
+    box = make_box(cal)
 
-    box.merge(_box(crf))
+    box.merge(make_box(crf))
 
     assert box[crf.id].parent_ids == ()
 
@@ -514,9 +509,9 @@ def test_merge_never_links_same_stage():
 def test_merge_keeps_already_stamped_parents():
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal", parent_ids=("stamped@99",))  # e.g. by reduction
-    box = _box(rate)
+    box = make_box(rate)
 
-    box.merge(_box(cal))
+    box.merge(make_box(cal))
 
     assert box[cal.id].parent_ids == ("stamped@99",)  # not re-pointed
 
@@ -525,10 +520,10 @@ def test_merge_branch_with_explicit_parent():
     two_b = _exposure_book("2b", "cal")
     two_bi = _exposure_book("2bi", "cali")
     two_bii = _exposure_book("2bii", "calii")
-    box = _box(two_b)
+    box = make_box(two_b)
 
-    box.merge(_box(two_bi))  # links to the leaf 2b
-    box.merge(_box(two_bii), parent="2b")  # branch off 2b, not the current leaf
+    box.merge(make_box(two_bi))  # links to the leaf 2b
+    box.merge(make_box(two_bii), parent="2b")  # branch off 2b, not the current leaf
 
     assert box[two_bi.id].parent_ids == (two_b.id,)
     assert box[two_bii.id].parent_ids == (two_b.id,)
@@ -537,9 +532,9 @@ def test_merge_branch_with_explicit_parent():
 def test_merge_prepend_with_child():
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal")
-    box = _box(cal)
+    box = make_box(cal)
 
-    box.merge(_box(rate), child="2a")  # incoming 1b becomes parent of 2a
+    box.merge(make_box(rate), child="2a")  # incoming 1b becomes parent of 2a
 
     assert box[cal.id].parent_ids == (rate.id,)
     assert box[rate.id].parent_ids == ()
@@ -576,7 +571,7 @@ def test_merge_overwrite_true_incoming_wins():
 def test_leaves_and_roots():
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal")
-    box = _box(rate).merge(_box(cal))
+    box = make_box(rate).merge(make_box(cal))
 
     assert {b.id for b in box.leaves()} == {cal.id}
     assert {b.id for b in box.roots()} == {rate.id}
@@ -589,7 +584,12 @@ def test_family_returns_view_over_products_through_book():
     cal = _exposure_book("2a", "cal")
     two_b = _exposure_book("2b", "cal")
     two_bi = _exposure_book("2bi", "cali")
-    box = _box(rate).merge(_box(cal)).merge(_box(two_b)).merge(_box(two_bi))
+    box = (
+        make_box(rate)
+        .merge(make_box(cal))
+        .merge(make_box(two_b))
+        .merge(make_box(two_bi))
+    )
 
     family = box.family(cal.id)
 
@@ -604,9 +604,9 @@ def test_family_keeps_sibling_branches_outside_seed_path():
     two_b = _exposure_book("2b", "cal")
     two_bi = _exposure_book("2bi", "cali")
     two_bii = _exposure_book("2bii", "calii")
-    box = _box(rate).merge(_box(cal)).merge(_box(two_b))
-    box.merge(_box(two_bi))
-    box.merge(_box(two_bii), parent="2b")
+    box = make_box(rate).merge(make_box(cal)).merge(make_box(two_b))
+    box.merge(make_box(two_bi))
+    box.merge(make_box(two_bii), parent="2b")
 
     family = box.family(two_bi)
 
@@ -622,7 +622,7 @@ def test_family_split_parents_returns_stage3_parent_branches():
     cal_b = _exposure_book("2a", "cal", exposure="00002", parent_ids=(rate_b.id,))
     two_bi_b = _exposure_book("2bi", "cali", exposure="00002", parent_ids=(cal_b.id,))
     mosaic = _stage3_book((two_bi_a.id, two_bi_b.id))
-    box = _box(rate_a, cal_a, two_bi_a, rate_b, cal_b, two_bi_b, mosaic)
+    box = make_box(rate_a, cal_a, two_bi_a, rate_b, cal_b, two_bi_b, mosaic)
 
     merged = box.family(mosaic)
     branches = box.family(mosaic, split_parents=True)
@@ -647,12 +647,12 @@ def test_family_split_parents_returns_stage3_parent_branches():
 def test_family_requires_parent_coverage():
     orphan = _exposure_book("2a", "cal", parent_ids=("missing@1b",))
     with pytest.raises(ValueError, match="parent_id .* is not present"):
-        _box(orphan).family(orphan)
+        make_box(orphan).family(orphan)
 
     present = _exposure_book("2bi", "cali")
     partial_mosaic = _stage3_book((present.id, "missing@2bi"))
     assert {
-        book.id for book in _box(present, partial_mosaic).family(partial_mosaic)
+        book.id for book in make_box(present, partial_mosaic).family(partial_mosaic)
     } == {
         present.id,
         partial_mosaic.id,
@@ -660,13 +660,13 @@ def test_family_requires_parent_coverage():
 
     missing_mosaic = _stage3_book(("missing-a@2bi", "missing-b@2bi"))
     with pytest.raises(ValueError, match="none of its parent_ids"):
-        _box(missing_mosaic).family(missing_mosaic)
+        make_box(missing_mosaic).family(missing_mosaic)
 
 
 def test_family_copy_returns_independent_box():
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal")
-    box = _box(rate).merge(_box(cal))
+    box = make_box(rate).merge(make_box(cal))
 
     family = box.family(cal, copy=True)
 
@@ -679,7 +679,7 @@ def test_family_copy_returns_independent_box():
 
 
 def test_to_table_summarises_members():
-    box = _box(
+    box = make_box(
         _exposure_book("1b", "rate"),
         _exposure_book("2a", "cal"),
     )
@@ -701,7 +701,7 @@ def test_viz_footprints_defaults_to_one_colour(monkeypatch):
     monkeypatch.setattr(
         "noobfriend.core.display.plot.plot_footprints", fake_plot_footprints
     )
-    box = _box(
+    box = make_box(
         _exposure_book("2a", "cal", exposure="00001", footprint=_footprint(0.0)),
         _exposure_book("2a", "cal", exposure="00002", footprint=_footprint(2.0)),
     )
@@ -723,7 +723,7 @@ def test_viz_footprints_colours_by_group(monkeypatch):
     monkeypatch.setattr(
         "noobfriend.core.display.plot.plot_footprints", fake_plot_footprints
     )
-    box = _box(
+    box = make_box(
         _exposure_book(
             "2a", "cal", exposure="00001", filter="F200W", footprint=_footprint(0.0)
         ),
@@ -750,7 +750,9 @@ def test_viz_footprints_colours_by_group(monkeypatch):
 def test_save_load_roundtrip_preserves_lineage(tmp_path):
     rate = _exposure_book("1b", "rate")
     cal = _exposure_book("2a", "cal")
-    box = _box(rate).merge(_box(cal))  # cal now carries parent_ids == (rate.id,)
+    box = make_box(rate).merge(
+        make_box(cal)
+    )  # cal now carries parent_ids == (rate.id,)
     manifest = tmp_path / "noobox.json"
 
     box.save(manifest)
