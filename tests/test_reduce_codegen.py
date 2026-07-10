@@ -283,7 +283,7 @@ def test_clear3_noob_skip_align_gates_the_correction() -> None:
     recipe.steps["align"] = StepConfig(skip=True)
     source = render_clear3(recipe)
     assert "DO_ALIGN = False" in source
-    assert "corrections = _align(gbooks, corners) if DO_ALIGN else {}" in source
+    assert "corrections = _align(gbooks, corners, tag) if DO_ALIGN else {}" in source
     assert "TileCoadd(field, tile)" in source  # coadd still runs
     ast.parse(source)
 

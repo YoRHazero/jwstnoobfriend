@@ -485,6 +485,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -633,32 +634,33 @@ def _detect(book):
     return np.asarray(stars.ra), np.asarray(stars.dec), np.asarray(stars.snr)
 
 
-def _align(gbooks, corners):
+def _align(gbooks, corners, tag):
     """Deep-catalog + GAIA alignment; return {book_id: TangentCorrection}."""
     frames = []
-    for book in gbooks:
+    for book in track(gbooks, f"[{tag}] detect"):
         ra, dec, snr = _detect(book)
         frames.append(FrameSources(book.id, ra, dec, snr ** 2))
     gaia = None
     ra0, dec0, radius = _field_cone(corners)
+    _note(tag, "GAIA reference query...")
     ref = build_reference(ra0, dec0, radius, OBS_EPOCH, footprints=corners)
     gaia = (np.asarray(ref["RA"]), np.asarray(ref["DEC"]))
     return align_group(frames, gaia=gaia)
 
 
-def _skymatch(gbooks, corners, corrections):
+def _skymatch(gbooks, corners, corrections, tag):
     """Scalar cross-frame sky levels; return {book_id: level to subtract}."""
     sky_field = field_grid(
         corners, SKY_SCALE, rotation="auto" if ALIGN_TO_ROLL else 0.0
     )
     matcher = SkyMatcher(sky_field)
-    for book in gbooks:
+    for book in track(gbooks, f"[{tag}] sky-match"):
         matcher.add(book.id, np.asarray(book.data), np.asarray(book.dq),
                     _corrected(book, corrections))
     return matcher.match()
 
 
-def _outlier(gbooks, corners, corrections, work: Path):
+def _outlier(gbooks, corners, corrections, work: Path, tag):
     """Field-median CR flags; return {book_id: cr_mask} (DQ bits to OR in)."""
     layers = list(dict.fromkeys(_exposure_key(book) for book in gbooks))
     masks: dict = {book.id: None for book in gbooks}
@@ -668,16 +670,25 @@ def _outlier(gbooks, corners, corrections, work: Path):
         corners, _native_scale(gbooks), rotation="auto" if ALIGN_TO_ROLL else 0.0
     )
     stack = FieldMedian(grid, layers, work_dir=work)
-    for book in gbooks:
+    for book in track(gbooks, f"[{tag}] outlier: median stack"):
         stack.add(_exposure_key(book), np.asarray(book.data), np.asarray(book.dq),
                   _corrected(book, corrections))
     median = stack.median()
     stack.cleanup()
-    for book in gbooks:
+    for book in track(gbooks, f"[{tag}] outlier: blot + flag"):
         wcs = _corrected(book, corrections)
         blot = blot_to_frame(median, grid, wcs, book.shape)
         masks[book.id] = flag_outliers(np.asarray(book.data), np.asarray(book.err), blot)
     return masks
+
+
+def _note(tag, message):
+    """Plain flushed progress line: stays visible when stdout is piped/teed.
+
+    The rich bars only render live on a real terminal; through a pipe they
+    print once at loop completion, so long phases would otherwise be silent.
+    """
+    print(f"[{tag}] {message}", flush=True)
 
 
 def _corrected(book, corrections):
@@ -704,22 +715,27 @@ def main(output_noobox_path: str | None = None) -> None:
     for book in books:
         groups.setdefault(_group_key(book), []).append(book)
 
-    for gkey, gbooks in track(list(groups.items()), "Mosaicking groups"):
+    # groups get a plain banner (not an outer bar): the inner track bars need
+    # the console to themselves, and flushed prints survive piping into tee
+    for gi, (gkey, gbooks) in enumerate(groups.items(), start=1):
         tag = "_".join(gkey)
+        t_group = time.perf_counter()
+        _note(tag, f"group {gi}/{len(groups)}: {len(gbooks)} frames")
         work = WORK_DIR / tag
         corners = [_corners(book) for book in gbooks]
 
-        corrections = _align(gbooks, corners) if DO_ALIGN else {}
-        sky = _skymatch(gbooks, corners, corrections) if DO_SKYMATCH else {}
-        cr = _outlier(gbooks, corners, corrections, work / "outlier") if DO_OUTLIER \\
-            else {book.id: None for book in gbooks}
+        corrections = _align(gbooks, corners, tag) if DO_ALIGN else {}
+        sky = _skymatch(gbooks, corners, corrections, tag) if DO_SKYMATCH else {}
+        cr = _outlier(gbooks, corners, corrections, work / "outlier", tag) \\
+            if DO_OUTLIER else {book.id: None for book in gbooks}
 
         scale = _pixel_scale(gbooks)
         field = field_grid(corners, scale, rotation="auto" if ALIGN_TO_ROLL else 0.0)
         program_id = gbooks[0].program_id
         pupil = gbooks[0].pupil
         band = gbooks[0].filter
-        for tile in tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP):
+        tiles = list(tile_grid(field, target_size=TILE_SIZE, overlap=TILE_OVERLAP))
+        for tile in track(tiles, f"[{tag}] tiles"):
             members, coverage = tile_members(field, tile, corners)
             if not members or coverage < MIN_COVERAGE:
                 continue
@@ -761,6 +777,7 @@ def main(output_noobox_path: str | None = None) -> None:
 
         if CLEAN_WORK:
             shutil.rmtree(work, ignore_errors=True)
+        _note(tag, f"done in {(time.perf_counter() - t_group) / 60:.1f} min")
 
     out_box.save(output_noobox_path)
 
