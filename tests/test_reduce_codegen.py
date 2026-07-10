@@ -94,6 +94,33 @@ def test_clear_skip_removes_a_custom_step() -> None:
     assert "flag_outlier_pixels" in source
 
 
+def test_clear_workers_render_pool_with_single_writer_manifest() -> None:
+    # default: sequential loop, WORKERS = 1; workers > 1: spawn-context process
+    # pool where workers return product books and only the parent adds to the
+    # manifest (NooBox is not concurrent-safe)
+    sequential = render_clear(_clear())
+    assert "WORKERS = 1" in sequential
+    recipe = _clear()
+    recipe.workers = 4
+    source = render_clear(recipe)
+    ast.parse(source)
+    assert "WORKERS = 4" in source
+    assert "ProcessPoolExecutor(max_workers=WORKERS" in source
+    assert 'multiprocessing.get_context("spawn")' in source
+    assert "pool.submit(_reduce_one, book)" in source
+    # the ONLY out_box.add sites are in main (probe back-fill + the two
+    # collection branches); the rendered chain appends to a worker-local list
+    assert "products.append(parent)" in source
+    assert source.count("out_box.add(") == 3
+
+
+def test_workers_below_one_is_rejected() -> None:
+    recipe = _clear()
+    with pytest.raises(ValueError, match="workers"):
+        recipe.workers = 0
+        Recipe.model_validate(recipe.model_dump())
+
+
 def test_mute_jwst_renders_logging_disable() -> None:
     recipe = _clear()
     recipe.mute_jwst = True

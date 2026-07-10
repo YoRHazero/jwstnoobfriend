@@ -22,15 +22,19 @@ Run where the NooBox product locations open locally (e.g. on the data server):
     python <this_script.py>
 
 The updated manifest goes to OUTPUT_NOOBOX below (set from the recipe); when it
-is None the input manifest (NOOBOX_PATH) is updated in place. Give each parallel
-shard its own output_noobox in the recipe and merge them afterwards.
+is None the input manifest (NOOBOX_PATH) is updated in place. WORKERS > 1 (set
+from the recipe) reduces frames in a process pool with a single-writer
+manifest: workers write the products and return small NooBook records, only
+this parent process updates the NooBox.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import multiprocessing
 import os
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from noobfriend.core.env import get_settings, stage_path_var, to_canonical, to_local
@@ -47,6 +51,7 @@ __JWST_IMPORTS__
 STAGE_IN = "__STAGE_IN__"
 SELECT = __SELECT__
 OUTPUT_NOOBOX = __OUTPUT_NOOBOX__
+WORKERS = __WORKERS__
 
 
 def _keep(book) -> bool:
@@ -139,19 +144,38 @@ def _write_product(model, location: str, stage: str) -> bytes:
     return raw
 
 
+def _reduce_one(book) -> list:
+    """Reduce one input book through the chain; return its saved product books."""
+    model = _open_input(book)
+    parent = book
+    products = []
+__BODY__
+    model.close()
+    return products
+
+
 def main(output_noobox_path: str | None = None) -> None:
     box = NooBox.load()
     out_box = box if output_noobox_path is None else NooBox()
-    for book in track(box.select(stage=STAGE_IN), f"Reducing {STAGE_IN}"):
+    todo = []
+    for book in box.select(stage=STAGE_IN):
         if not book.is_probed:
             book = book.probe()
             out_box.add(book)  # back-fill the probed copy into the manifest
-        if not _keep(book):
-            continue
-        model = _open_input(book)
-        parent = book
-__BODY__
-        model.close()
+        if _keep(book):
+            todo.append(book)
+    if WORKERS <= 1:
+        for book in track(todo, f"Reducing {STAGE_IN}"):
+            for product in _reduce_one(book):
+                out_box.add(product)
+    else:
+        os.environ.setdefault("OMP_NUM_THREADS", "1")  # inherited by workers
+        context = multiprocessing.get_context("spawn")  # jwst/CRDS fork-unsafe
+        with ProcessPoolExecutor(max_workers=WORKERS, mp_context=context) as pool:
+            futures = [pool.submit(_reduce_one, book) for book in todo]
+            for future in track(futures, f"Reducing {STAGE_IN} (x{WORKERS})"):
+                for product in future.result():
+                    out_box.add(product)
     out_box.save(output_noobox_path)
 
 
@@ -208,7 +232,7 @@ def render(recipe: Recipe) -> str:
                 f"_loc = _out_location(book, {stage!r})",
                 f"_raw = _write_product(model, _loc, {stage!r})",
                 f"parent = NooBook.from_file(_loc, {stage!r}, parents=[parent], raw=_raw)",
-                "out_box.add(parent)",
+                "products.append(parent)",
             ]
 
     source = (
@@ -218,7 +242,8 @@ def render(recipe: Recipe) -> str:
         .replace("__STAGE_IN__", recipe.select.stage)
         .replace("__SELECT__", repr(select))
         .replace("__OUTPUT_NOOBOX__", repr(recipe.output_noobox))
-        .replace("__BODY__", "\n".join(" " * 8 + line for line in body))
+        .replace("__WORKERS__", repr(recipe.workers))
+        .replace("__BODY__", "\n".join(" " * 4 + line for line in body))
     )
     ast.parse(source)  # guarantee the generated source is valid Python
     return source

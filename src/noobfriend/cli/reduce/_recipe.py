@@ -136,11 +136,18 @@ class Recipe(BaseModel):
     steps: dict[str, StepConfig] = {}
     output_noobox: str | None = None
     mute_jwst: bool = False
+    #: Parallel frame workers for the CLEAR stage-2 runner (single-writer
+    #: manifest: workers reduce + write products, only the parent process
+    #: updates the NooBox). ``1`` renders the sequential runner. Other
+    #: renderers currently ignore it.
+    workers: int = 1
     grism: GrismOptions = GrismOptions()
     stage3: Stage3Options = Stage3Options()
 
     @model_validator(mode="after")
     def _known_steps(self) -> "Recipe":
+        if self.workers < 1:
+            raise ValueError(f"workers must be >= 1; got {self.workers}.")
         from noobfriend.cli.reduce._registry import step_specs_for
 
         specs = step_specs_for(self.pipeline, self.select.stage)

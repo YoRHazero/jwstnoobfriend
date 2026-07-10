@@ -59,6 +59,8 @@ def scaffold(stage: str = INPUT_STAGE) -> str:
         '# output_noobox = "data/reduced_noobox.json"  '
         "# omit to update NOOBOX_PATH in place",
         "# mute_jwst = true  # silence jwst / CRDS / stpipe INFO+WARNING logging",
+        "# workers = 4  # parallel frame processes (single-writer manifest);"
+        " 1 = sequential",
         "",
         "[select]",
         f'stage = "{stage}"',
