@@ -87,6 +87,49 @@ def test_external_mask_and_dq_exclusion() -> None:
         assert np.std(out[~source]) < 2.0
 
 
+def test_crossblock_fallback_recovers_starved_rows() -> None:
+    # A source covering ~95% of one amp block's width starves those rows' own
+    # median; the cross-block fallback must predict their offsets from the
+    # other amps (the row 1/f is common-mode), absorbing per-amp gain and
+    # pedestal differences -- and must beat both the skip and the
+    # noise-dominated own estimate.
+    rng = np.random.default_rng(7)
+    ny = nx = 1024
+    block = nx // 4
+    data = rng.normal(0.0, 0.02, size=(ny, nx))
+    stripe = rng.normal(0.0, 0.02, size=ny)
+    gains = (1.0, 0.9, 1.1, 1.05)
+    pedestals = (0.01, -0.02, 0.015, 0.0)
+    for b in range(4):
+        cols = slice(b * block, (b + 1) * block)
+        data[:, cols] += gains[b] * stripe[:, None] + pedestals[b]
+    err = np.full_like(data, 0.02)
+    dq = np.zeros(data.shape, dtype=np.int32)
+
+    rows = slice(400, 600)
+    source = np.zeros(data.shape, dtype=bool)
+    source[rows, block : block + int(0.95 * block)] = True
+
+    covered = (rows, slice(block, block + int(0.95 * block)))
+    resid = {}
+    for fb in (None, 0.5):
+        out, _, _ = subtract_oneoverf(
+            data, err, dq, by="row", mask=source, fallback_frac=fb
+        )
+        prof = np.median(out[covered], axis=1)
+        resid[fb] = np.std(prof - prof.mean())
+
+    assert resid[0.5] < 0.6 * resid[None]  # beats skip / starved own estimate
+    assert resid[0.5] < 0.5 * np.std(stripe)  # stripe actually removed
+
+    # Below the threshold the fallback path must be byte-identical to off.
+    small = np.zeros(data.shape, dtype=bool)
+    small[rows, block : block + block // 10] = True
+    out_off, _, _ = subtract_oneoverf(data, err, dq, mask=small, fallback_frac=None)
+    out_on, _, _ = subtract_oneoverf(data, err, dq, mask=small, fallback_frac=0.5)
+    assert np.array_equal(out_off, out_on)
+
+
 def test_rejects_non_2d_and_bad_by() -> None:
     err = np.ones((4, 4))
     dq = np.zeros((4, 4), dtype=np.int32)

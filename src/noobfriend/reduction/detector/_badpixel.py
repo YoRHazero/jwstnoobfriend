@@ -77,6 +77,12 @@ def flag_outlier_pixels(
     if image.ndim != 2:
         raise ValueError(f"data must be 2-D; got shape {image.shape}.")
 
+    # wing_scale=0: the wing tier exists to keep faint source wings out of
+    # background *level* estimates (1/f medians, background mesh); here the
+    # mask only protects sources from being flagged, and smooth wings never
+    # trip the 3x3-median test anyway -- while a ~100px protected halo around
+    # every big segment (bright galaxy, dispersed grism trace) would blind the
+    # hot-pixel cleanup there and shift the global sigma estimate.
     protected = source_exclusion(
         image,
         dq,
@@ -84,6 +90,7 @@ def flag_outlier_pixels(
         nsigma=nsigma_source,
         dilate=dilate,
         dq_bad_bits=dq_bad_bits,
+        wing_scale=0.0,
     )
     residual = image - ndi.median_filter(image, size=3, mode="nearest")
     background = residual[~protected & np.isfinite(residual)]
