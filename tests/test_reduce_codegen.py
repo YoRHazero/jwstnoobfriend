@@ -233,8 +233,11 @@ def test_clear3_noob_wires_the_custom_chain() -> None:
 def test_clear3_noob_writes_asdf_fits_3a_with_all_planes() -> None:
     source = render_clear3(_clear3())
     assert "tile_gwcs(field, tile)" in source
-    assert '"SCI": result.sci' in source and '"ERR": result.err' in source
-    assert '"WHT": result.wht' in source and '"NOISEKERN": kernel.cov' in source
+    # image planes are stored float32 (halved size); the noise kernel stays f64
+    assert '"SCI": result.sci.astype("float32")' in source
+    assert '"ERR": result.err.astype("float32")' in source
+    assert '"WHT": result.wht.astype("float32")' in source
+    assert '"NOISEKERN": kernel.cov' in source
     assert "write_asdf_fits(" in source
     assert '"instrument": {"pupil": pupil, "filter": band}' in source
 

@@ -738,8 +738,13 @@ def main(output_noobox_path: str | None = None) -> None:
                 "instrument": {"pupil": pupil, "filter": band},
                 "noise": {"max_lag": kernel.max_lag},
             }}
+            # store the image planes as float32 (halves the product size; f32
+            # is ample for the coadd -- the ivm accumulation stays f64). The
+            # small noise kernel keeps f64 for the noise model.
             raw = write_asdf_fits(
-                {"SCI": result.sci, "ERR": result.err, "WHT": result.wht,
+                {"SCI": result.sci.astype("float32"),
+                 "ERR": result.err.astype("float32"),
+                 "WHT": result.wht.astype("float32"),
                  "NOISEKERN": kernel.cov},
                 tree,
             )
