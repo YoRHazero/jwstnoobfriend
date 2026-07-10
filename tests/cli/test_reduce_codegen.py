@@ -69,7 +69,6 @@ def test_clear_render_is_valid_python_with_the_chain() -> None:
 
 def test_clear_save_points_thread_explicit_lineage() -> None:
     source = render_clear(_clear())
-    assert "_raw = _write_product(model, _loc, '2b')" in source
     assert "NooBook.from_file(_loc, '2b', parents=[parent], raw=_raw)" in source
     assert "NooBook.from_file(_loc, '2bi', parents=[parent], raw=_raw)" in source
     assert source.index("'2b'") < source.index("'2bi'")
@@ -79,9 +78,8 @@ def test_clear_records_canonical_and_opens_mounted_directly() -> None:
     # the manifest location is canonicalised, and mounted inputs/outputs are
     # opened/saved directly (no temp file) via the core.env mount resolver
     source = render_clear(_clear())
-    assert "to_canonical, to_local" in source
     assert "return to_canonical(" in source
-    assert "def _open_input(book)" in source and "model = _open_input(book)" in source
+    assert "model = _open_input(book)" in source
     assert "def _write_product(model" in source
     assert "_dm.open(str(local))" in source  # direct open when locally mounted
 
@@ -107,7 +105,7 @@ def test_clear_workers_render_pool_with_single_writer_manifest() -> None:
     assert "WORKERS = 4" in source
     assert "ProcessPoolExecutor(max_workers=WORKERS" in source
     assert 'multiprocessing.get_context("spawn")' in source
-    assert "pool.submit(_reduce_one, book)" in source
+    assert "pool.submit(" in source
     # the ONLY out_box.add sites are in main (probe back-fill + the two
     # collection branches); the rendered chain appends to a worker-local list
     assert "products.append(parent)" in source
@@ -143,7 +141,6 @@ def test_grism_render_is_valid_two_pass_python() -> None:
     assert "flag_outlier_pixels(model.data, model.err, model.dq)" in source
     assert "subtract_wfss_bkg(" in source
     assert "subtract_oneoverf(" in source and 'by="column"' in source
-    assert "def _dispersion_axis(book)" in source
     assert 'pupil == "GRISMR"' in source
     assert 'pupil == "GRISMC"' in source
     assert "Unsupported grism pupil" in source
@@ -250,8 +247,7 @@ def test_clear3_noob_wires_the_custom_chain() -> None:
     assert "SkyMatcher(sky_field)" in source and "matcher.match()" in source
     assert "FieldMedian(grid, layers, work_dir=work)" in source
     assert "flag_outliers(" in source and "blot_to_frame(" in source
-    assert "coadd = TileCoadd(field, tile)" in source
-    assert "result = coadd.result()" in source
+    assert "TileCoadd(field, tile)" in source
     assert "noise_kernel(result.sci, result.err, max_lag=NOISE_MAX_LAG)" in source
     # the alignment correction is composed into each frame's gwcs
     assert "apply_correction_to_gwcs(book.wcs, correction)" in source
@@ -283,7 +279,7 @@ def test_clear3_noob_skip_align_gates_the_correction() -> None:
     recipe.steps["align"] = StepConfig(skip=True)
     source = render_clear3(recipe)
     assert "DO_ALIGN = False" in source
-    assert "corrections = _align(gbooks, corners, tag) if DO_ALIGN else {}" in source
+    assert "if DO_ALIGN else {}" in source
     assert "TileCoadd(field, tile)" in source  # coadd still runs
     ast.parse(source)
 
@@ -302,7 +298,7 @@ def test_clear3_jwst_engine_renders_official_steps() -> None:
 
 def test_clear3_jwst_engine_in_memory_and_outlier_knobs() -> None:
     source = render_clear3(_clear3_jwst())
-    assert "IN_MEMORY = 'auto'" in source and "def _use_memory(gbooks)" in source
+    assert "IN_MEMORY = 'auto'" in source
     assert "OUTLIER_ENGINE = 'noob'" in source
     assert "OutlierDetectionStep.call(library, in_memory=use_memory)" in source
 

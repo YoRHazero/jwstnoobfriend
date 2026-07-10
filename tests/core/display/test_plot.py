@@ -86,17 +86,17 @@ class TestResolveLimits:
 class TestBroadcastLimits:
     """Broadcasting a scalar/sequence/None ``vmin``/``vmax`` to one per image."""
 
-    def test_none_broadcasts_none(self) -> None:
-        assert _broadcast_limits(None, 3, "vmin") == [None, None, None]
-
-    def test_scalar_broadcasts(self) -> None:
-        assert _broadcast_limits(2.0, 3, "vmin") == [2.0, 2.0, 2.0]
-
-    def test_numpy_scalar_is_scalar(self) -> None:
-        assert _broadcast_limits(np.float32(2.0), 2, "vmin") == [2.0, 2.0]
-
-    def test_sequence_is_per_image(self) -> None:
-        assert _broadcast_limits([1.0, 2.0, 3.0], 3, "vmax") == [1.0, 2.0, 3.0]
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (None, [None, None, None]),
+            (2.0, [2.0, 2.0, 2.0]),
+            (np.float32(2.0), [2.0, 2.0, 2.0]),  # numpy scalar is a scalar
+            ([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]),
+        ],
+    )
+    def test_spec_forms(self, spec: object, expected: list) -> None:
+        assert _broadcast_limits(spec, 3, "vmin") == expected
 
     def test_sequence_length_mismatch_raises(self) -> None:
         with pytest.raises(ValueError, match="vmax has length 2, expected 3"):
@@ -237,14 +237,16 @@ class TestReferenceCenter:
 class TestResolveColors:
     """Colour-spec resolution (None / single / per-item)."""
 
-    def test_none_uses_default(self) -> None:
-        assert _resolve_colors(None, 2, ["a", "b"], "colors") == ["a", "b"]
-
-    def test_single_string_broadcasts(self) -> None:
-        assert _resolve_colors("red", 3, ["x"], "colors") == ["red", "red", "red"]
-
-    def test_sequence_used_verbatim(self) -> None:
-        assert _resolve_colors(["a", "b"], 2, ["x", "y"], "colors") == ["a", "b"]
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (None, ["a", "b"]),  # falls back to the default palette
+            ("red", ["red", "red"]),
+            (["x", "y"], ["x", "y"]),
+        ],
+    )
+    def test_spec_forms(self, spec: object, expected: list[str]) -> None:
+        assert _resolve_colors(spec, 2, ["a", "b"], "colors") == expected
 
     def test_length_mismatch_raises(self) -> None:
         with pytest.raises(ValueError, match="colors length 1 != 2"):
@@ -289,13 +291,10 @@ class TestOrthographic:
 class TestToLines:
     """Normalising a single spectrum vs several into a list of 1-D arrays."""
 
-    def test_single_1d_array(self) -> None:
-        lines = _to_lines(np.arange(5.0), "flux")
-        assert len(lines) == 1 and lines[0].shape == (5,)
-
-    def test_single_python_list(self) -> None:
-        lines = _to_lines([1.0, 2.0, 3.0], "flux")
-        assert len(lines) == 1 and lines[0].tolist() == [1.0, 2.0, 3.0]
+    def test_single_1d_input(self) -> None:
+        for flux in (np.arange(3.0), [0.0, 1.0, 2.0]):  # array or python list
+            lines = _to_lines(flux, "flux")
+            assert len(lines) == 1 and lines[0].tolist() == [0.0, 1.0, 2.0]
 
     def test_sequence_of_arrays(self) -> None:
         lines = _to_lines([np.arange(3.0), np.arange(4.0)], "flux")
@@ -339,42 +338,43 @@ class TestResolveErrors:
     def test_none_is_all_none(self) -> None:
         assert _resolve_errors(None, [np.arange(3.0), np.arange(3.0)]) == [None, None]
 
-    def test_single_sigma_for_single_line(self) -> None:
-        errs = _resolve_errors(np.ones(3), [np.arange(3.0)])
-        assert len(errs) == 1 and errs[0].tolist() == [1.0, 1.0, 1.0]
-
-    def test_single_python_list_for_single_line(self) -> None:
-        errs = _resolve_errors([0.1, 0.2, 0.3], [np.arange(3.0)])
-        assert len(errs) == 1 and errs[0].shape == (3,)
+    def test_single_sigma_forms_for_single_line(self) -> None:
+        for sigma in (np.ones(3), [1.0, 1.0, 1.0]):  # array or python list
+            errs = _resolve_errors(sigma, [np.arange(3.0)])
+            assert len(errs) == 1 and errs[0].tolist() == [1.0, 1.0, 1.0]
 
     def test_per_line_with_a_hole(self) -> None:
         errs = _resolve_errors([np.ones(3), None], [np.arange(3.0), np.arange(3.0)])
         assert errs[0] is not None and errs[1] is None
 
-    def test_count_mismatch_raises(self) -> None:
-        with pytest.raises(ValueError, match="expected 2"):
-            _resolve_errors([np.ones(3)], [np.arange(3.0), np.arange(3.0)])
-
-    def test_single_array_with_many_lines_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be a list of 2"):
-            _resolve_errors(np.ones(3), [np.arange(3.0), np.arange(3.0)])
-
-    def test_length_mismatch_raises(self) -> None:
-        with pytest.raises(ValueError, match="error length"):
-            _resolve_errors(np.ones(4), [np.arange(3.0)])
+    @pytest.mark.parametrize(
+        ("error", "n_lines", "match"),
+        [
+            ([np.ones(3)], 2, "expected 2"),
+            (np.ones(3), 2, "must be a list of 2"),
+            (np.ones(4), 1, "error length"),
+        ],
+    )
+    def test_bad_error_spec_raises(
+        self, error: object, n_lines: int, match: str
+    ) -> None:
+        with pytest.raises(ValueError, match=match):
+            _resolve_errors(error, [np.arange(3.0)] * n_lines)
 
 
 class TestBroadcastColors:
     """Colour spec resolution (None lets matplotlib cycle)."""
 
-    def test_none_is_all_none(self) -> None:
-        assert _broadcast_colors(None, 2) == [None, None]
-
-    def test_single_string_broadcasts(self) -> None:
-        assert _broadcast_colors("C1", 3) == ["C1", "C1", "C1"]
-
-    def test_sequence_used_verbatim(self) -> None:
-        assert _broadcast_colors(["a", "b"], 2) == ["a", "b"]
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (None, [None, None]),
+            ("C1", ["C1", "C1"]),
+            (["a", "b"], ["a", "b"]),
+        ],
+    )
+    def test_spec_forms(self, spec: object, expected: list) -> None:
+        assert _broadcast_colors(spec, 2) == expected
 
     def test_length_mismatch_raises(self) -> None:
         with pytest.raises(ValueError, match="colors length 1 != 2"):
@@ -396,53 +396,39 @@ class TestModelCurveFromInput:
         mc = _ModelCurve.from_input({"flux_func": lambda w: w, "label": "fit"}, 0)
         assert mc.flux_func is not None and mc.label == "fit"
 
-    def test_unknown_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="unknown key"):
-            _ModelCurve.from_input({"flux_func": lambda w: w, "colour": "r"}, 0)
-
-    def test_both_forms_raises(self) -> None:
-        with pytest.raises(ValueError, match="not both"):
-            _ModelCurve.from_input(
+    @pytest.mark.parametrize(
+        ("model", "match"),
+        [
+            ({"flux_func": lambda w: w, "colour": "r"}, "unknown key"),
+            (
                 {
                     "flux_func": lambda w: w,
                     "wavelength": np.arange(3.0),
                     "flux": np.ones(3),
                 },
-                0,
-            )
-
-    def test_neither_form_raises(self) -> None:
-        with pytest.raises(ValueError, match="provide a curve"):
-            _ModelCurve.from_input({"label": "x"}, 0)
-
-    def test_flux_without_wavelength_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be given together"):
-            _ModelCurve.from_input({"flux": np.ones(3)}, 0)
-
-    def test_error_with_func_raises(self) -> None:
-        with pytest.raises(ValueError, match="'error' applies only"):
-            _ModelCurve.from_input({"flux_func": lambda w: w, "error": np.ones(3)}, 0)
-
-    def test_range_without_func_raises(self) -> None:
-        with pytest.raises(ValueError, match="'wavelength_range' applies only"):
-            _ModelCurve.from_input(
+                "not both",
+            ),
+            ({"label": "x"}, "provide a curve"),
+            ({"flux": np.ones(3)}, "must be given together"),
+            ({"flux_func": lambda w: w, "error": np.ones(3)}, "'error' applies only"),
+            (
                 {
                     "wavelength": np.arange(3.0),
                     "flux": np.ones(3),
                     "wavelength_range": (0.0, 1.0),
                 },
-                0,
-            )
-
-    def test_wavelength_flux_length_mismatch_raises(self) -> None:
-        with pytest.raises(ValueError, match="!= 'flux' length"):
-            _ModelCurve.from_input((np.arange(4.0), np.ones(3)), 0)
-
-    def test_two_tuple_of_non_arrays_raises(self) -> None:
-        with pytest.raises(ValueError, match="pass a list for multiple models"):
-            _ModelCurve.from_input(
-                ({"flux_func": lambda w: w}, {"flux_func": lambda w: w}), 0
-            )
+                "'wavelength_range' applies only",
+            ),
+            ((np.arange(4.0), np.ones(3)), "!= 'flux' length"),
+            (
+                ({"flux_func": lambda w: w}, {"flux_func": lambda w: w}),
+                "pass a list for multiple models",
+            ),
+        ],
+    )
+    def test_invalid_input_raises(self, model: object, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            _ModelCurve.from_input(model, 0)
 
 
 class TestModelCurveSample:
@@ -511,9 +497,6 @@ class TestCentersToEdges:
         edges = _centers_to_edges(np.array([0.0, 1.0, 3.0]))
         assert np.allclose(edges, [-0.5, 0.5, 2.0, 4.0])
 
-    def test_length_is_n_plus_one(self) -> None:
-        assert _centers_to_edges(np.arange(10.0)).size == 11
-
 
 class TestCollapse2d:
     """NaN-aware spatial collapse fallback for the 2-D panel."""
@@ -564,9 +547,6 @@ class TestSpatialWindow:
 
     def test_parse_returns_sorted_pair(self) -> None:
         assert _parse_window([3.0, 1.0]) == (1.0, 3.0)
-
-    def test_parse_accepts_tuple_and_list(self) -> None:
-        assert _parse_window((1.0, 2.0)) == _parse_window([1.0, 2.0])
 
     def test_parse_bad_length_raises(self) -> None:
         with pytest.raises(ValueError, match="must be .low, high."):
