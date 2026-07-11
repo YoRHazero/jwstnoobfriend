@@ -175,9 +175,12 @@ def test_get_transform_accepts_gwcs_style_call_forms() -> None:
     assert isinstance(scalar_out[0], float)
     np.testing.assert_allclose(scalar_out[0], want_ra[0])
 
-    # Direct call evaluates the full forward pipeline, like gwcs.
-    called_ra, _ = noob(np.array([100.0, 200.0]), np.array([50.0, 60.0]))
+    # Direct call / invert evaluate the full pipeline both ways, like gwcs.
+    called_ra, called_dec = noob(np.array([100.0, 200.0]), np.array([50.0, 60.0]))
     np.testing.assert_allclose(called_ra, want_ra)
+    back_x, back_y = noob.invert(called_ra, called_dec)
+    np.testing.assert_allclose(back_x, [100.0, 200.0], atol=1e-8)
+    np.testing.assert_allclose(back_y, [50.0, 60.0], atol=1e-8)
 
 
 def _grism_pair():

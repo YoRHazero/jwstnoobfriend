@@ -145,6 +145,14 @@ class NoobWCS:
         """
         return self.get_transform(self._frames[0], self._frames[-1])(*values)
 
+    def invert(self, *values: Any) -> Any:
+        """Evaluate the full backward pipeline (last frame -> first), like gwcs.
+
+        Uses the compiled analytic inverses; raises ``ValueError`` where a
+        stage has none (gwcs would fall back to numerical inversion there).
+        """
+        return self.get_transform(self._frames[-1], self._frames[0])(*values)
+
     def __getstate__(self) -> dict[str, Any]:
         """Pickle the specs only -- built programs hold Rust objects."""
         return {"frames": self._frames, "stages": self._stages}
