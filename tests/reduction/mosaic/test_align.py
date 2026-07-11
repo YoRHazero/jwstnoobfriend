@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from noobfriend.reduction.mosaic import FrameSources, align_group
+from noobfriend.reduction.mosaic._align import _fit_affine
 
 RA0, DEC0 = 150.0, 2.0
 _COS = np.cos(np.radians(DEC0))
@@ -112,6 +113,79 @@ def test_gaia_tie_pins_absolute_frame():
                 d = np.hypot((cra[j] - true_ra[s]) * _COS, cdec[j] - true_dec[s])
                 errs.append(d * 3.6e6)
     assert np.median(errs) < 1.0  # mas, noiseless absolute tie
+
+
+def test_gaia_tie_survives_noise_with_few_anchors():
+    # Regression for the real-data tie collapse: with centroid noise and only
+    # ~20 anchors, the old clip criterion (bare std of the positive residual
+    # norms, no center term) repeatedly clipped good anchors until the affine
+    # fit returned a wrong-signed offset. The tie must recover a coherent
+    # absolute offset to ~the noise level.
+    rng = np.random.default_rng(3)
+    frames, _, (true_ra, true_dec), membership = _build(
+        rng, 8, 80, 55, shift_mas=30.0, noise_mas=8.0
+    )
+    common = np.array([20.0, -12.0]) / 3.6e6  # raw-WCS-vs-GAIA style offset
+    frames = [
+        FrameSources(f.frame_id, f.ra + common[0] / _COS, f.dec + common[1], f.weight)
+        for f in frames
+    ]
+    stars = rng.choice(80, 20, replace=False)
+    gaia = (true_ra[stars], true_dec[stars])
+
+    corr = align_group(frames, gaia=gaia, n_iter=2)
+
+    errs = []
+    star_set = set(int(s) for s in stars)
+    for frame, idx in zip(frames, membership):
+        cra, cdec = _apply(corr[frame.frame_id], frame.ra, frame.dec)
+        for j, s in enumerate(idx):
+            if int(s) in star_set:
+                d = np.hypot((cra[j] - true_ra[s]) * _COS, cdec[j] - true_dec[s])
+                errs.append(d * 3.6e6)
+    # noise is 8 mas per detection; the tie must remove the 23-mas common
+    # offset, leaving residuals at the noise level (old clip left ~20 mas)
+    assert np.median(errs) < 12.0
+
+
+def test_fit_affine_survives_tight_core_anchor_geometry():
+    # REAL FRESCO GOODS-S GAIA-tie anchors (tangent-plane deg, embedded as
+    # literals): a few ultra-tight high-membership centroids + a loose tail
+    # with field-gradient structure. On these numbers the old clip criterion
+    # (bare std of the positive residual norms, no center term) death-spiraled
+    # 20 -> 18 -> 12 -> 4 anchors and returned a wrong-signed offset
+    # (-2.5, -5.2) mas; the true tie is ~(+12.5, +6.6) mas.
+    cat = np.array([
+        [0.0055238236, 0.0592342248], [0.0021460183, 0.0524140888],
+        [-0.0368678793, 0.0428699627], [-0.0281249297, 0.0665272418],
+        [0.0511112598, 0.0340783331], [0.0297047996, 0.0073650315],
+        [0.0293793800, 0.0330371395], [0.0066169081, 0.0194336920],
+        [-0.0233098275, 0.0199114159], [-0.0446404564, 0.0278676692],
+        [-0.0059950551, 0.0002244442], [-0.0280791630, -0.0215122804],
+        [-0.0048723014, -0.0391523024], [0.0026872388, -0.0502389595],
+        [-0.0262897247, -0.0458720053], [-0.0480499318, -0.0399020748],
+        [-0.0104202901, -0.0447308217], [-0.0512011957, -0.0676788888],
+        [0.0538309455, -0.0479988211], [0.0519043345, -0.0044954173],
+    ])
+    gaia = np.array([
+        [0.0055258910, 0.0592343789], [0.0021492790, 0.0524131537],
+        [-0.0368665630, 0.0428712676], [-0.0281208774, 0.0665258816],
+        [0.0511167613, 0.0340781317], [0.0297095428, 0.0073672789],
+        [0.0293852385, 0.0330358174], [0.0066211315, 0.0194380177],
+        [-0.0233051644, 0.0199170605], [-0.0446361361, 0.0278733739],
+        [-0.0059901751, 0.0002263390], [-0.0280766767, -0.0215093808],
+        [-0.0048742802, -0.0391472463], [0.0026896610, -0.0502369274],
+        [-0.0262858540, -0.0458674450], [-0.0480423997, -0.0399035311],
+        [-0.0104189538, -0.0447274679], [-0.0511938126, -0.0676739818],
+        [0.0538324773, -0.0479981482], [0.0519091772, -0.0044990479],
+    ])
+    weight = np.array([6.0, 6.0, 3.0, 3.0, 3.0, 5.0, 5.0, 6.0, 4.0, 3.0,
+                       4.0, 3.0, 5.0, 6.0, 4.0, 3.0, 4.0, 2.0, 3.0, 3.0])
+
+    _, offset = _fit_affine(cat, gaia, weight, 3, 3.0)
+
+    s_mas = offset * 3.6e6
+    assert np.hypot(s_mas[0] - 12.5, s_mas[1] - 6.6) < 4.0
 
 
 def test_empty_frames_raises():

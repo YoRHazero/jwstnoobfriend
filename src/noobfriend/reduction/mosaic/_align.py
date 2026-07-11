@@ -254,8 +254,14 @@ def _fit_affine(
     """Sigma-clipped weighted affine mapping ``im_xy`` -> ``ref_xy``.
 
     Solves ``ref ~= M @ im + s`` (a 2x2 matrix and a shift) by weighted least
-    squares, then re-solves ``nclip`` times dropping pairs beyond ``clip_sigma``
-    of the residual RMS.
+    squares, then re-solves ``nclip`` times dropping pairs whose residual norm
+    exceeds ``median + clip_sigma * (1.4826 * MAD)`` of the kept norms. The
+    center term is essential: residual norms are positive (Rayleigh-like for a
+    good fit, typical value ~1.25 sigma), so a threshold proportional to their
+    bare std sits barely above the bulk and repeatedly clips good pairs -- on a
+    ~20-anchor fit the cascade leaves a clustered subset whose 6-parameter
+    affine extrapolates a wrong offset at the fiducial (this collapsed the
+    stage-3 GAIA tie to a wrong-signed shift on real FRESCO data).
 
     Returns
     -------
@@ -282,8 +288,12 @@ def _fit_affine(
         p, *_ = np.linalg.lstsq(design, rhs, rcond=None)
         matrix, offset = np.array([[p[0], p[1]], [p[2], p[3]]]), np.array([p[4], p[5]])
         resid = np.linalg.norm(ref_xy - (im_xy @ matrix.T + offset), axis=1)
-        new_keep = resid < clip_sigma * np.std(resid[keep])
-        if new_keep.sum() == keep.sum() or new_keep.sum() < 4:
+        center = float(np.median(resid[keep]))
+        scale = 1.4826 * float(np.median(np.abs(resid[keep] - center)))
+        # <= so an exact (noiseless) fit with scale 0 keeps everything
+        new_keep = resid <= center + clip_sigma * scale
+        # a 6-parameter affine on fewer than ~8 points extrapolates poorly
+        if new_keep.sum() == keep.sum() or new_keep.sum() < 8:
             break
         keep = new_keep
     return matrix, offset
