@@ -948,6 +948,41 @@ class TestApertureNoise:
         assert enriched.background_level is None
         assert enriched.error == formal.error_uncorrelated  # uncorrelated fallback
 
+    def test_too_little_sky_uses_persisted_kernel(self) -> None:
+        from scipy.ndimage import gaussian_filter
+
+        from noobfriend.core.imgutils import noise_autocovariance
+
+        # A field kernel with real spatial correlation, estimated on ample sky.
+        rng = np.random.default_rng(7)
+        field = gaussian_filter(rng.normal(size=(64, 64)), 1.5)
+        field /= field.std()
+        kernel = noise_autocovariance(
+            field, mask=np.ones((64, 64), dtype=bool), max_lag=8
+        )
+
+        # A tiny cutout: too little sky for a local estimate, but carrying the
+        # field kernel (passed through the public band spec).
+        spec = _band(rng.normal(size=(10, 10)), error=np.ones((10, 10)))
+        spec["noise_kernel"] = kernel
+        band = normalize_band("t", spec)
+        assert band.noise_kernel is kernel
+        cov = np.zeros((10, 10))
+        cov[4:6, 4:6] = 1.0
+        formal = measure_band(band, cov, flag_bad_fraction=0.1)
+
+        enriched = measure_aperture_noise(
+            band, cov, formal, max_lag=8, other_source_dilation=2
+        )
+
+        assert enriched is not formal
+        # The persisted kernel is used (stationary), so the error is the
+        # correlation-aware value, not the uncorrelated fallback.
+        assert enriched.error != pytest.approx(formal.error_uncorrelated)
+        assert (
+            enriched.error > formal.error_uncorrelated
+        )  # positive correlation inflates
+
 
 def _photometry(
     *,

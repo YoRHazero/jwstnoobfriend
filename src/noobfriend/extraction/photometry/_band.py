@@ -13,6 +13,8 @@ from typing import Any, TypedDict
 
 import numpy as np
 
+from noobfriend.core.imgutils import NoiseAutocovariance
+
 
 class BandSpec(TypedDict, total=False):
     """One photometry band as a plain dict, with statically-checked keys.
@@ -46,6 +48,11 @@ class BandSpec(TypedDict, total=False):
         Labels from ``label_map`` allowed for aperture growth.
     allow_background : bool
         Whether growth may extend off the seed's segment into the background.
+    noise_kernel : NoiseAutocovariance or None
+        The band's field-level noise autocovariance ``C(d)`` on **this band's own
+        native grid** (e.g. ``NooBook.noise_kernel`` of the stage-3 product the
+        band was cut from). Used as the correlation-aware aperture-error fallback
+        when the cutout has too little blank sky to estimate ``C(d)`` locally.
     """
 
     data: np.ndarray
@@ -58,6 +65,7 @@ class BandSpec(TypedDict, total=False):
     label_map: np.ndarray | None
     label_allowed: Sequence[int] | None
     allow_background: bool
+    noise_kernel: NoiseAutocovariance | None
 
 
 #: Keys :func:`normalize_band` accepts; anything else is treated as a typo.
@@ -94,6 +102,11 @@ class Band:
         When a ``label_map`` is present, whether aperture growth may extend off
         the source's own segment into the background label ``0`` (blocked only
         by other sources). ``True`` by default; ignored without a ``label_map``.
+    noise_kernel : NoiseAutocovariance or None
+        Field-level noise autocovariance on this band's native grid, or ``None``.
+        The correlation-aware fallback for the aperture error when the cutout has
+        too little local sky to estimate ``C(d)`` (see
+        :func:`~noobfriend.extraction.photometry._noise.measure_aperture_noise`).
     """
 
     name: str
@@ -107,6 +120,7 @@ class Band:
     label_map: np.ndarray | None
     label_allowed: tuple[int, ...] | None
     allow_background: bool
+    noise_kernel: NoiseAutocovariance | None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -211,6 +225,13 @@ def normalize_band(
 
     allow_background = spec.get("allow_background", True)
 
+    noise_kernel = spec.get("noise_kernel")
+    if noise_kernel is not None and not isinstance(noise_kernel, NoiseAutocovariance):
+        raise ValueError(
+            f"band {name!r} noise_kernel must be a NoiseAutocovariance; "
+            f"got {type(noise_kernel).__name__}."
+        )
+
     return Band(
         name=str(name),
         data=data,
@@ -223,6 +244,7 @@ def normalize_band(
         label_map=label_map,
         label_allowed=label_allowed_out,
         allow_background=bool(allow_background),
+        noise_kernel=noise_kernel,
     )
 
 

@@ -83,8 +83,11 @@ def measure_aperture_noise(
     -------
     BandPhotometry
         ``formal`` with ``error`` (and ``error_mjy``) replaced by the
-        correlation-aware estimate, plus ``background_level`` and ``snr`` -- or
-        ``formal`` unchanged if the sky is too small to estimate the noise.
+        correlation-aware estimate, plus ``background_level`` and ``snr``. When
+        the local sky is too small to estimate ``C(d)``, the error falls back to
+        ``band.noise_kernel`` (the product's persisted field kernel, applied in
+        stationary mode) if the band carries one, else ``formal`` is returned
+        unchanged (the uncorrelated fallback).
     """
     data = np.asarray(band.data, dtype=float)
     cov = np.asarray(coverage, dtype=float)
@@ -94,10 +97,17 @@ def measure_aperture_noise(
             data, mask=sky, max_lag=max_lag, error=band.error
         )
     except ValueError:
-        return formal  # too little sky: keep the uncorrelated fallback
+        # Too little local sky to estimate C(d) here. Fall back to the product's
+        # persisted field kernel (stationary; measured on the whole mosaic's sky)
+        # when the band carries one -- still correlation-aware, unlike the plain
+        # uncorrelated formula -- otherwise keep the uncorrelated `formal`.
+        if band.noise_kernel is None:
+            return formal
+        error = float(np.sqrt(correlated_sum_variance(cov, band.noise_kernel)))
+    else:
+        error = float(np.sqrt(correlated_sum_variance(cov, autocov, error=band.error)))
 
-    error = float(np.sqrt(correlated_sum_variance(cov, autocov, error=band.error)))
-    background_level = float(np.median(data[sky]))
+    background_level = float(np.median(data[sky])) if sky.any() else 0.0
     scale = band.flux_scale_mjy
     error_mjy = None if scale is None else float(error * abs(scale))
     return replace(
