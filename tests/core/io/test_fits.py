@@ -22,6 +22,7 @@ from noobfriend.core.io.fits import (
     read_layout,
     read_meta,
     read_meta_and_gwcs,
+    read_noise,
 )
 
 
@@ -155,6 +156,60 @@ class TestExtensionMemo:
         with pytest.raises(KeyError):
             read_err(acc, layout)  # cached absence: no further header walk
         assert acc.range_calls == 0
+
+
+def _write_with_noise(path: Path, cov: np.ndarray) -> None:
+    """Write a synthetic product carrying SCI plus a NOISEKERN plane of ``cov``."""
+    rng = np.random.default_rng(2)
+    sci = (rng.standard_normal((8, 5)) * 10).astype(">f4")
+    max_lag = (cov.shape[0] - 1) // 2 if cov.ndim == 2 else 0
+    hdus = [
+        fits.PrimaryHDU(),
+        fits.ImageHDU(data=sci, name="SCI"),
+        fits.ImageHDU(data=cov.astype(">f8"), name="NOISEKERN"),
+    ]
+    buf = BytesIO()
+    asdf_in_fits.write(
+        buf, {"meta": {"noise": {"max_lag": max_lag}}}, hdulist=fits.HDUList(hdus)
+    )
+    path.write_bytes(buf.getvalue())
+
+
+class TestReadNoise:
+    """The NOISEKERN plane rebuilds a NoiseAutocovariance, max_lag from its shape."""
+
+    def test_roundtrip(self, tmp_path: Path) -> None:
+        cov = np.arange(49, dtype=float).reshape(7, 7)
+        path = tmp_path / "with_noise.fits"
+        _write_with_noise(path, cov)
+        acc = LocalAccessor(path)
+        ac = read_noise(acc, read_layout(acc))
+        assert np.array_equal(ac.cov, cov)
+        assert ac.max_lag == 3
+        assert ac.n_pairs is None
+        assert ac.error_var is None
+
+    def test_via_bytes_accessor(self, tmp_path: Path) -> None:
+        cov = np.arange(9, dtype=float).reshape(3, 3)
+        path = tmp_path / "with_noise.fits"
+        _write_with_noise(path, cov)
+        acc = BytesAccessor(path.read_bytes())
+        ac = read_noise(acc, read_layout(acc))
+        assert np.array_equal(ac.cov, cov)
+        assert ac.max_lag == 1
+
+    def test_missing_plane_raises_keyerror(self, cal_file) -> None:
+        path, _ = cal_file  # SCI/ERR/DQ, no NOISEKERN
+        acc = LocalAccessor(path)
+        with pytest.raises(KeyError):
+            read_noise(acc, read_layout(acc))
+
+    def test_even_sided_window_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad_noise.fits"
+        _write_with_noise(path, np.zeros((6, 6)))
+        acc = LocalAccessor(path)
+        with pytest.raises(ValueError):
+            read_noise(acc, read_layout(acc))
 
 
 class TestReadMeta:

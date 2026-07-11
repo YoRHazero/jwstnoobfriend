@@ -74,10 +74,12 @@ class NoiseAutocovariance:
         noise variance.
     max_lag : int
         Half-width of the lag window, in pixels.
-    n_pairs : numpy.ndarray
+    n_pairs : numpy.ndarray or None
         Number of valid sky pixel-pairs averaged at each lag (same shape as
         ``cov``); a reliability diagnostic -- small counts at the largest lags
-        mean a noisy ``C`` there.
+        mean a noisy ``C`` there. ``None`` on a model reconstituted from a
+        persisted kernel: the pair counts are a build-time diagnostic and are
+        not written to disk.
     error_var : float or None
         Mean of ``error ** 2`` over the sky, ``<err^2>``. Set only when an
         ``error`` map was supplied to :func:`noise_autocovariance`; it is the
@@ -87,7 +89,7 @@ class NoiseAutocovariance:
 
     cov: np.ndarray
     max_lag: int
-    n_pairs: np.ndarray
+    n_pairs: np.ndarray | None
     error_var: float | None
 
     @property

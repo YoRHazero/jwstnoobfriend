@@ -7,8 +7,8 @@ Each reader pulls only the bytes it needs rather than the whole file:
   embedded ASDF tree lazily, so the large image extensions it references are
   never fetched.
 * :func:`read_layout` reads the file's leading header block to locate the ``SCI``
-  extension; :func:`read_data` / :func:`read_err` / :func:`read_dq` then read just
-  that one extension's byte range.
+  extension; :func:`read_data` / :func:`read_err` / :func:`read_dq` /
+  :func:`read_noise` then read just that one extension's byte range.
 
 Decoding always goes through :mod:`astropy.io.fits` on a tiny in-memory FITS
 rebuilt from the fetched header and data (see
@@ -39,6 +39,7 @@ from gwcs import WCS
 from stdatamodels import asdf_in_fits
 
 from noobfriend.core.display import AttrView
+from noobfriend.core.imgutils import NoiseAutocovariance
 from noobfriend.core.io._layout import (
     FitsLayout,
     HduSpan,
@@ -313,6 +314,52 @@ def read_dq(acc: ByteAccessor, layout: FitsLayout) -> np.ndarray:
     if span is None:
         raise KeyError("DQ")
     return _decode_image(span.header, acc.read_range(span.data_loc, span.data_span))
+
+
+def read_noise(acc: ByteAccessor, layout: FitsLayout) -> NoiseAutocovariance:
+    """Read the ``NOISEKERN`` extension into a noise-autocovariance model.
+
+    A stage-3 coadd stores its noise autocovariance ``C(d)`` as a small,
+    square, odd-sided ``NOISEKERN`` image plane (see
+    :func:`noobfriend.reduction.mosaic.noise_kernel` and
+    :func:`write_asdf_fits`). This rebuilds the
+    :class:`~noobfriend.core.imgutils.NoiseAutocovariance` from that plane,
+    recovering ``max_lag`` from the window's half-width. The build-time
+    ``n_pairs`` diagnostic and the hybrid ``error_var`` are not persisted, so
+    both come back ``None``: the model drives the per-pixel variance and the
+    *stationary*
+    :func:`~noobfriend.core.imgutils.correlated_sum_variance`; the hybrid
+    (depth-aware) path additionally needs an ``error_var``.
+
+    Parameters
+    ----------
+    acc : ByteAccessor
+        Accessor for a JWST FITS product.
+    layout : FitsLayout
+        The product's layout, as returned by :func:`read_layout`.
+
+    Returns
+    -------
+    NoiseAutocovariance
+        With ``n_pairs`` and ``error_var`` set to ``None``.
+
+    Raises
+    ------
+    KeyError
+        The file has no ``NOISEKERN`` extension.
+    ValueError
+        The ``NOISEKERN`` plane is not a square, odd-sided lag window.
+    """
+    span = _resolve_extension(acc, layout, "NOISEKERN")
+    if span is None:
+        raise KeyError("NOISEKERN")
+    cov = _decode_image(span.header, acc.read_range(span.data_loc, span.data_span))
+    if cov.ndim != 2 or cov.shape[0] != cov.shape[1] or cov.shape[0] % 2 == 0:
+        raise ValueError(
+            f"NOISEKERN must be a square, odd-sided lag window; got shape {cov.shape}."
+        )
+    max_lag = (cov.shape[0] - 1) // 2
+    return NoiseAutocovariance(cov=cov, max_lag=max_lag, n_pairs=None, error_var=None)
 
 
 def write_asdf_fits(planes: Mapping[str, np.ndarray], tree: Mapping[str, Any]) -> bytes:

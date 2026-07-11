@@ -15,6 +15,7 @@ from noobfriend.core.io.fits import (
     read_layout,
     read_meta,
     read_meta_and_gwcs,
+    read_noise,
     write_asdf_fits,
 )
 from noobfriend.core.io.grizli_cutout import (
@@ -58,6 +59,7 @@ __all__ = [
     "read_layout",
     "read_meta",
     "read_meta_and_gwcs",
+    "read_noise",
     "remote_exists",
     "remote_makedirs",
     "write_asdf_fits",

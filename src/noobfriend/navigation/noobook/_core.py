@@ -8,6 +8,7 @@ from gwcs import WCS
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from noobfriend.core.display import AttrView
+from noobfriend.core.imgutils import NoiseAutocovariance
 from noobfriend.core.io import (
     ByteAccessor,
     BytesAccessor,
@@ -20,6 +21,7 @@ from noobfriend.core.io import (
     read_layout,
     read_meta,
     read_meta_and_gwcs,
+    read_noise,
 )
 from noobfriend.core.io._layout import FitsLayout
 from noobfriend.navigation._footprint import Footprint
@@ -430,5 +432,24 @@ class NooBook(BaseModel):
         """The ``DQ`` array, or ``None`` if the product has no ``DQ``."""
         try:
             return read_dq(self._accessor(), self._ensure_layout())
+        except KeyError:
+            return None
+
+    @property
+    def noise_kernel(self) -> NoiseAutocovariance | None:
+        """The persisted noise autocovariance, or ``None`` if the product has none.
+
+        A stage-3 coadd carries a ``NOISEKERN`` plane recording the mosaic's
+        noise autocovariance ``C(d)``
+        (:func:`noobfriend.reduction.mosaic.noise_kernel`); this reads it back as
+        a :class:`~noobfriend.core.imgutils.NoiseAutocovariance`. Products
+        without that plane (e.g. detector-stage frames) return ``None``. The
+        reconstituted model has ``n_pairs`` and ``error_var`` unset, so it drives
+        the per-pixel variance and the stationary
+        :func:`~noobfriend.core.imgutils.correlated_sum_variance`; the hybrid
+        (depth-aware) path additionally needs an ``error_var``.
+        """
+        try:
+            return read_noise(self._accessor(), self._ensure_layout())
         except KeyError:
             return None
