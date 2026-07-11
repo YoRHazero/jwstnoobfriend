@@ -20,7 +20,7 @@ This module is internal; :func:`read_wavelength_domain` is re-exported from
 from typing import Any
 
 from astropy.modeling import Model
-from gwcs import WCS
+from noobfriend.core.wcs import TransformWCS
 
 from noobfriend.extraction._wcs import world_detector_transforms
 
@@ -61,7 +61,7 @@ def _find_dispersion_model(model: Model, class_name: str) -> Model | None:
 
 
 def read_wavelength_domain(
-    wcs: WCS,
+    wcs: TransformWCS,
     ra: float,
     dec: float,
     *,
@@ -85,7 +85,7 @@ def read_wavelength_domain(
 
     Parameters
     ----------
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         A JWST WFSS grism WCS (one exposing a ``grism_detector`` frame).
     ra, dec : float
         Source world coordinates in degrees. The valid domain depends weakly on

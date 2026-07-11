@@ -1,9 +1,10 @@
-"""Internal helpers for world<->detector transforms on a JWST GWCS.
+"""Internal helpers for world<->detector transforms on a JWST WCS.
 
 The two non-obvious things this module isolates from the rest of the package:
 
 1. The forward/inverse transform pair (``world -> detector`` and
-   ``detector -> world``) for a :class:`gwcs.WCS`.
+   ``detector -> world``) for any :class:`~noobfriend.core.wcs.TransformWCS`
+   provider (a gwcs, a compiled NoobWCS, or an adapter).
 2. The JWST WFSS *grism* special case, where those frames are not reachable
    with a plain ``(ra, dec)`` / ``(x, y)`` call but require extra spectral
    inputs. Keeping the magic numbers here means no other module has to know
@@ -15,19 +16,20 @@ from typing import Any, Callable
 
 from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS as AstropyWCS
-from gwcs import WCS
+
+from noobfriend.core.wcs import TransformWCS
 
 #: A 2-D coordinate transform: ``f(a, b) -> (c, d)``. Inputs and outputs may be
 #: scalars or broadcastable arrays (e.g. when transforming a whole meshgrid).
 Transform = Callable[[Any, Any], tuple[Any, Any]]
 
 
-def world_detector_transforms(wcs: WCS) -> tuple[Transform, Transform]:
+def world_detector_transforms(wcs: TransformWCS) -> tuple[Transform, Transform]:
     """Return the ``(world_to_detector, detector_to_world)`` transform pair.
 
     Parameters
     ----------
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         The world-coordinate system to build transforms from.
 
     Returns
@@ -67,7 +69,7 @@ def world_detector_transforms(wcs: WCS) -> tuple[Transform, Transform]:
 
 
 def grism_trace_transform(
-    wcs: WCS, *, order: int = 1
+    wcs: TransformWCS, *, order: int = 1
 ) -> Callable[[Any, Any, Any], tuple[Any, Any]]:
     """Return the grism trace transform for a spectral order.
 
@@ -78,7 +80,7 @@ def grism_trace_transform(
 
     Parameters
     ----------
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         A JWST WFSS grism WCS (one exposing a ``grism_detector`` frame).
     order : int, optional
         Spectral order to trace, by default ``1``. NIRCam grisms have no 0th
@@ -100,9 +102,11 @@ def grism_trace_transform(
     only the first two outputs. Inputs may be scalars or broadcastable arrays.
     The underlying NIRCam model requires ``x0``, ``y0``, and ``wavelength`` to
     share the same shape when given arrays; ``order`` stays a scalar. When all
-    three are passed as equal-length 1-D arrays the model broadcasts them
-    outer-product style, returning a 2-D grid whose diagonal holds the
-    element-wise result (see :func:`~noobfriend.extraction.grism.source_locus`).
+    three are passed as equal-length 1-D arrays the astropy model broadcasts
+    them outer-product style, returning a 2-D grid whose diagonal holds the
+    element-wise result, while a compiled :class:`~noobfriend.core.wcs.NoobWCS`
+    evaluates element-wise directly -- callers accept either via an ``ndim``
+    check (see :func:`~noobfriend.extraction.grism.source_locus`).
     """
     raw = wcs.get_transform("detector", "grism_detector")
 
@@ -150,7 +154,7 @@ def pixel_scale_per_deg(
 
 @dataclass(frozen=True)
 class _AstropyWCSAdapter:
-    """Expose an astropy FITS WCS through noobfriend's transform protocol."""
+    """Expose an astropy FITS WCS as a :class:`~noobfriend.core.wcs.TransformWCS`."""
 
     wcs: AstropyWCS
     available_frames: tuple[str, str] = ("detector", "world")

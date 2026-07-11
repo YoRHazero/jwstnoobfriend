@@ -14,10 +14,12 @@ from ._compile import (
 )
 from ._correction import TangentCorrection, apply_correction_to_gwcs
 from ._noobwcs import NoobWCS, from_fits_wcs, from_gwcs
+from ._protocol import TransformWCS
 
 __all__ = [
     "NoobWCS",
     "TangentCorrection",
+    "TransformWCS",
     "UnsupportedTransformError",
     "apply_correction_to_gwcs",
     "compile_fits_tan",

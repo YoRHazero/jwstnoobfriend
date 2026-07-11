@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
-from gwcs import WCS
+from noobfriend.core.wcs import TransformWCS
 
 from noobfriend.extraction._wcs import (
     grism_trace_transform,
@@ -41,7 +41,7 @@ class FrameMeta:
     id : str
         Caller-chosen identifier, used to key data and outputs. Typically the
         file stem (e.g. ``pathlib.Path(path).stem``).
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         The exposure's grism WCS.
     shape : tuple[int, int]
         Detector array shape ``(H, W)``, from the FITS header. Needed for the
@@ -59,7 +59,7 @@ class FrameMeta:
     """
 
     id: str
-    wcs: WCS
+    wcs: TransformWCS
     shape: tuple[int, int]
     wavelength_range: tuple[float, float] | None = None
     group: Hashable | None = None

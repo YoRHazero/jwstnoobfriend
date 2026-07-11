@@ -8,7 +8,7 @@ pipeline stage once (see :mod:`._compile`) into flat op-list programs run by
 and full-grid evaluation is multithreaded Rust.
 
 The surface mirrors the subset of gwcs that noobfriend actually consumes
-(the ``get_transform`` protocol of :mod:`noobfriend.extraction._wcs`):
+(the :class:`~noobfriend.core.wcs.TransformWCS` protocol):
 ``available_frames`` plus ``get_transform(from_frame, to_frame)`` returning
 a callable of plain arrays / floats. Bounding boxes, units, and coordinate
 objects are deliberately absent.
@@ -136,6 +136,14 @@ class NoobWCS:
         transform = _normalized_call(WcsProgram(concat_specs(specs)))
         self._programs[key] = transform
         return transform
+
+    def __call__(self, *values: Any) -> Any:
+        """Evaluate the full forward pipeline (first frame -> last), like gwcs.
+
+        Unlike :meth:`gwcs.WCS.__call__` no bounding box is applied --
+        out-of-array inputs extrapolate instead of returning NaN.
+        """
+        return self.get_transform(self._frames[0], self._frames[-1])(*values)
 
     def __getstate__(self) -> dict[str, Any]:
         """Pickle the specs only -- built programs hold Rust objects."""

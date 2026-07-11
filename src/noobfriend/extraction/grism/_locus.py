@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
-from gwcs import WCS
+from noobfriend.core.wcs import TransformWCS
 from scipy.interpolate import CubicSpline
 
 from noobfriend.extraction._wcs import (
@@ -318,7 +318,7 @@ def _resolve_range(
 
 
 def source_locus(
-    wcs: WCS,
+    wcs: TransformWCS,
     x_line: float,
     y_line: float,
     *,
@@ -343,7 +343,7 @@ def source_locus(
 
     Parameters
     ----------
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         A JWST WFSS grism WCS (one exposing a ``grism_detector`` frame).
     x_line, y_line : float
         The dispersed pixel where the feature (e.g. emission line) sits, in the
@@ -407,7 +407,7 @@ def source_locus(
 
 
 def source_loci(
-    wcs: WCS,
+    wcs: TransformWCS,
     x_line: Sequence[float] | np.ndarray,
     y_line: Sequence[float] | np.ndarray,
     *,
@@ -426,7 +426,7 @@ def source_loci(
 
     Parameters
     ----------
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         A JWST WFSS grism WCS (one exposing a ``grism_detector`` frame).
     x_line, y_line : Sequence[float] or numpy.ndarray
         Dispersed pixel coordinates, same length, in grism detector pixels.

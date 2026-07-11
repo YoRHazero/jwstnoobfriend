@@ -175,6 +175,10 @@ def test_get_transform_accepts_gwcs_style_call_forms() -> None:
     assert isinstance(scalar_out[0], float)
     np.testing.assert_allclose(scalar_out[0], want_ra[0])
 
+    # Direct call evaluates the full forward pipeline, like gwcs.
+    called_ra, _ = noob(np.array([100.0, 200.0]), np.array([50.0, 60.0]))
+    np.testing.assert_allclose(called_ra, want_ra)
+
 
 def _grism_pair():
     """Synthetic NIRCam row-dispersion forward/backward model pair."""

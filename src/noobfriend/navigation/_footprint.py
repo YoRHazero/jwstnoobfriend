@@ -2,9 +2,9 @@
 
 from typing import Self
 
-from gwcs import WCS
 from pydantic import BaseModel
 
+from noobfriend.core.wcs import TransformWCS
 from noobfriend.extraction._wcs import world_detector_transforms
 
 
@@ -31,12 +31,12 @@ class Footprint(BaseModel):
         return cls(corners=corners)
 
     @classmethod
-    def from_wcs(cls, wcs: WCS, shape: tuple[int, ...]) -> Self:
-        """Build a footprint from a GWCS and the science array shape.
+    def from_wcs(cls, wcs: TransformWCS, shape: tuple[int, ...]) -> Self:
+        """Build a footprint from a WCS and the science array shape.
 
         Parameters
         ----------
-        wcs : gwcs.WCS
+        wcs : TransformWCS
             The product's world-coordinate system.
         shape : tuple of int
             The science array shape in NumPy order; the last two entries are

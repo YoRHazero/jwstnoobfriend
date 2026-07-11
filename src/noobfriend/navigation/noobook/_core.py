@@ -1,11 +1,14 @@
 """The user-facing :class:`NooBook`: one JWST product file as a rich object."""
 
 from collections.abc import Iterable
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 import numpy as np
 from gwcs import WCS
 from pydantic import BaseModel, ConfigDict, PrivateAttr
+
+if TYPE_CHECKING:
+    from noobfriend.core.wcs import NoobWCS
 
 from noobfriend.core.display import AttrView
 from noobfriend.core.imgutils import NoiseAutocovariance
@@ -167,6 +170,8 @@ class NooBook(BaseModel):
 
     _store: ByteStore | None = PrivateAttr(default=None)
     _layout: FitsLayout | None = PrivateAttr(default=None)
+    _noobwcs: "NoobWCS | None" = PrivateAttr(default=None)
+    _noobwcs_compiled: bool = PrivateAttr(default=False)
 
     def __eq__(self, other: object) -> bool:
         """Two NooBooks are equal when they share an :attr:`id`."""
@@ -407,12 +412,45 @@ class NooBook(BaseModel):
         return read_meta(self._accessor())
 
     @property
-    def wcs(self) -> WCS | None:
-        """The GWCS, or ``None`` if the file has no assigned WCS yet."""
+    def gwcs(self) -> WCS | None:
+        """The raw GWCS object, or ``None`` if the file has no assigned WCS yet.
+
+        Read fresh from the file on each access. Use this only where a genuine
+        :class:`gwcs.WCS` is required (handing off to ``jwst`` / ``grizli``,
+        ASDF serialization); everything that just evaluates coordinate
+        transforms should use :attr:`wcs` instead.
+        """
         try:
             return read_gwcs(self._accessor())
         except KeyError:
             return None
+
+    @property
+    def wcs(self) -> "NoobWCS | WCS | None":
+        """The WCS as a transform provider, or ``None`` without an assigned WCS.
+
+        The product's GWCS compiled onto the noobase evaluator
+        (:class:`~noobfriend.core.wcs.NoobWCS`) -- compiled once on first
+        access and cached, answering the
+        :class:`~noobfriend.core.wcs.TransformWCS` protocol hundreds of times
+        faster per call than the astropy model tree. When the transform is not
+        yet supported by the compiler
+        (:class:`~noobfriend.core.wcs.UnsupportedTransformError`, e.g. NIRSpec
+        PRISM), each access falls back to the raw :attr:`gwcs` transparently.
+        """
+        if not self._noobwcs_compiled:
+            from noobfriend.core.wcs import UnsupportedTransformError, from_gwcs
+
+            gwcs_obj = self.gwcs
+            if gwcs_obj is not None:
+                try:
+                    self._noobwcs = from_gwcs(gwcs_obj)
+                except UnsupportedTransformError:
+                    self._noobwcs = None
+            self._noobwcs_compiled = True
+        if self._noobwcs is not None:
+            return self._noobwcs
+        return self.gwcs
 
     @property
     def data(self) -> np.ndarray:

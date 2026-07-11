@@ -23,7 +23,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from gwcs import WCS
+from noobfriend.core.wcs import TransformWCS
 from noobase.image import make_pixel_corners, reproject_exact
 
 from noobfriend.extraction._wcs import world_detector_transforms
@@ -47,7 +47,7 @@ class UnionGrid:
         Offset of the union grid origin in the reference exposure's detector
         pixels: union pixel ``(ux, uy)`` is reference pixel
         ``(ux + x_off, uy + y_off)``. Either may be negative.
-    reference_wcs : gwcs.WCS
+    reference_wcs : TransformWCS
         WCS of the reference exposure (the grid is its detector frame,
         translated to cover the union), for mapping heatmap pixels to the sky.
     """
@@ -55,7 +55,7 @@ class UnionGrid:
     shape: tuple[int, int]
     x_off: int
     y_off: int
-    reference_wcs: WCS
+    reference_wcs: TransformWCS
 
 
 @dataclass(frozen=True)

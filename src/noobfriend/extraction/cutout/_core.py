@@ -1,6 +1,7 @@
 """The user-facing :class:`Cutout`.
 
-A :class:`Cutout` couples a target :class:`gwcs.WCS` with a resolved
+A :class:`Cutout` couples a target :class:`~noobfriend.core.wcs.TransformWCS`
+with a resolved
 :class:`~noobfriend.extraction.cutout._geometry.CutoutGeometry`. It is built
 through one of three explicit factory methods — :meth:`Cutout.from_pixel`,
 :meth:`Cutout.from_world`, :meth:`Cutout.from_bounds` — so every construction
@@ -23,8 +24,7 @@ from typing import Self
 
 import numpy as np
 from astropy import units as u
-from gwcs import WCS
-
+from noobfriend.core.wcs import TransformWCS
 from noobfriend.extraction._wcs import (
     pixel_scale_per_deg,
     world_detector_transforms,
@@ -47,24 +47,24 @@ class Cutout:
 
     Attributes
     ----------
-    wcs : gwcs.WCS
+    wcs : TransformWCS
         The WCS the cutout's pixel bounds are defined against.
     geometry : CutoutGeometry
         The resolved half-open integer pixel bounds.
     """
 
-    wcs: WCS
+    wcs: TransformWCS
     geometry: CutoutGeometry
 
     @classmethod
     def from_bounds(
-        cls, wcs: WCS, *, x_bounds: tuple[int, int], y_bounds: tuple[int, int]
+        cls, wcs: TransformWCS, *, x_bounds: tuple[int, int], y_bounds: tuple[int, int]
     ) -> Self:
         """Build a cutout from explicit half-open pixel bounds.
 
         Parameters
         ----------
-        wcs : gwcs.WCS
+        wcs : TransformWCS
             The target WCS.
         x_bounds, y_bounds : tuple[int, int]
             Half-open ``(start, end)`` column / row bounds.
@@ -81,7 +81,7 @@ class Cutout:
     @classmethod
     def from_pixel(
         cls,
-        wcs: WCS,
+        wcs: TransformWCS,
         x: float,
         y: float,
         *,
@@ -102,7 +102,7 @@ class Cutout:
 
         Parameters
         ----------
-        wcs : gwcs.WCS
+        wcs : TransformWCS
             The target WCS.
         x, y : float
             Center pixel coordinates.
@@ -131,7 +131,7 @@ class Cutout:
     @classmethod
     def from_world(
         cls,
-        wcs: WCS,
+        wcs: TransformWCS,
         ra: float,
         dec: float,
         *,
@@ -151,7 +151,7 @@ class Cutout:
 
         Parameters
         ----------
-        wcs : gwcs.WCS
+        wcs : TransformWCS
             The target WCS.
         ra, dec : float
             Center world coordinates in degrees.
@@ -189,7 +189,7 @@ class Cutout:
 
     @staticmethod
     def _resolve_offsets(
-        wcs: WCS,
+        wcs: TransformWCS,
         x: float,
         y: float,
         *,
@@ -242,7 +242,7 @@ class Cutout:
     def array(
         self,
         data: np.ndarray,
-        wcs: WCS | None = None,
+        wcs: TransformWCS | None = None,
         *,
         fill_value: float = np.nan,
     ) -> np.ndarray:
@@ -258,7 +258,7 @@ class Cutout:
         ----------
         data : numpy.ndarray
             The source array to cut from (a full mosaic or exposure).
-        wcs : gwcs.WCS, optional
+        wcs : TransformWCS, optional
             The WCS of ``data``. If given and different from :attr:`wcs`, the
             slice window is shifted to compensate for an integer-pixel offset
             between the two frames. If ``None``, ``data`` is assumed to share
@@ -294,7 +294,7 @@ class Cutout:
     def reproject(
         self,
         data: np.ndarray,
-        wcs: WCS,
+        wcs: TransformWCS,
         *,
         coarse_step: tuple[int, int] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -311,7 +311,7 @@ class Cutout:
             The source image. Any float dtype is accepted (JWST big-endian
             ``>f4`` included); it is coerced to native-endian float as needed.
             NaNs are treated as masked input pixels.
-        wcs : gwcs.WCS
+        wcs : TransformWCS
             The WCS of ``data`` (the source frame). Required.
         coarse_step : tuple[int, int], optional
             Evaluate the WCS on a coarse subgrid and bicubic-upsample the
