@@ -146,6 +146,36 @@ def test_spec_round_trip_rebuilds_identical_transforms() -> None:
     assert rebuilt.available_frames == noob.available_frames
 
 
+def test_pickle_round_trip_drops_program_cache() -> None:
+    import pickle
+
+    noob = from_gwcs(_synthetic_gwcs())
+    want = noob.get_transform("detector", "world")(123.4, 987.6)
+
+    # The program cache holds Rust objects; pickling must survive it.
+    rebuilt = pickle.loads(pickle.dumps(noob))
+    assert rebuilt.available_frames == noob.available_frames
+    assert rebuilt.get_transform("detector", "world")(123.4, 987.6) == want
+
+
+def test_get_transform_accepts_gwcs_style_call_forms() -> None:
+    noob = from_gwcs(_synthetic_gwcs())
+    transform = noob.get_transform("detector", "world")
+    want_ra, want_dec = transform(np.array([100.0, 200.0]), np.array([50.0, 60.0]))
+
+    # Mixed array/scalar broadcasts; int arrays, lists, and int scalars coerce.
+    mixed_ra, mixed_dec = transform(np.array([100.0, 200.0]), 50.0)
+    assert mixed_ra.shape == (2,)
+    np.testing.assert_allclose(mixed_ra[0], want_ra[0])
+    int_ra, _ = transform(np.array([100, 200]), np.array([50, 60]))
+    np.testing.assert_allclose(int_ra, want_ra)
+    list_ra, _ = transform([100.0, 200.0], [50.0, 60.0])
+    np.testing.assert_allclose(list_ra, want_ra)
+    scalar_out = transform(100, 50)
+    assert isinstance(scalar_out[0], float)
+    np.testing.assert_allclose(scalar_out[0], want_ra[0])
+
+
 def _grism_pair():
     """Synthetic NIRCam row-dispersion forward/backward model pair."""
     from stdatamodels.jwst.transforms.models import (

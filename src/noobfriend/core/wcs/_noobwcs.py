@@ -18,8 +18,9 @@ Programs are JSON-able: ``to_spec`` / ``from_spec`` round-trip a compiled
 per-file spec caching possible later.
 """
 
-from typing import Any
+from typing import Any, Callable
 
+import numpy as np
 from astropy.wcs import WCS as AstropyWCS
 from gwcs import WCS as GwcsWCS
 from noobase.image.wcs import WcsProgram
@@ -32,6 +33,28 @@ from ._correction import TangentCorrection
 _Stage = dict[str, Any]
 
 _SPEC_VERSION = 1
+
+
+def _normalized_call(program: WcsProgram) -> Callable[..., Any]:
+    """Wrap a compiled program to accept gwcs-style call forms.
+
+    :class:`noobase.image.wcs.WcsProgram` only takes same-shape ``float64``
+    arrays or all-scalar inputs, while gwcs transforms additionally allow
+    mixed scalar/array calls, broadcasting, integer dtypes, and lists. The
+    wrapper closes that gap so a compiled transform is a drop-in for its
+    gwcs counterpart; the normalisation is a no-op (and costs ~1 us) when
+    the inputs are already in program form.
+    """
+
+    def transform(*values: Any) -> Any:
+        if any(np.ndim(value) for value in values):
+            arrays = np.broadcast_arrays(
+                *(np.asarray(value, dtype=np.float64) for value in values)
+            )
+            return program(*(np.ascontiguousarray(array) for array in arrays))
+        return program(*(float(value) for value in values))
+
+    return transform
 
 
 class NoobWCS:
@@ -58,14 +81,14 @@ class NoobWCS:
             )
         self._frames = frames
         self._stages = stages
-        self._programs: dict[tuple[str, str], WcsProgram] = {}
+        self._programs: dict[tuple[str, str], Callable[..., Any]] = {}
 
     @property
     def available_frames(self) -> list[str]:
         """Frame names in pipeline order (gwcs-compatible)."""
         return list(self._frames)
 
-    def get_transform(self, from_frame: str, to_frame: str) -> WcsProgram:
+    def get_transform(self, from_frame: str, to_frame: str) -> Callable[..., Any]:
         """Return the compiled transform between two frames.
 
         Parameters
@@ -75,10 +98,11 @@ class NoobWCS:
 
         Returns
         -------
-        noobase.image.wcs.WcsProgram
-            A callable evaluating the chained stage programs. Accepts
-            ``float64`` arrays of one shared shape (returns arrays) or all
-            scalars (returns floats), like a gwcs transform.
+        Callable
+            A callable evaluating the chained stage programs. Accepts the
+            same call forms as a gwcs transform -- scalars (returns floats)
+            or broadcastable arrays of any numeric dtype (returns
+            ``float64`` arrays).
 
         Raises
         ------
@@ -109,9 +133,18 @@ class NoobWCS:
                 raise ValueError(
                     f"No inverse available along {from_frame!r} -> {to_frame!r}."
                 )
-        program = WcsProgram(concat_specs(specs))
-        self._programs[key] = program
-        return program
+        transform = _normalized_call(WcsProgram(concat_specs(specs)))
+        self._programs[key] = transform
+        return transform
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Pickle the specs only -- built programs hold Rust objects."""
+        return {"frames": self._frames, "stages": self._stages}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self._frames = state["frames"]
+        self._stages = state["stages"]
+        self._programs = {}
 
     def with_tangent_correction(self, correction: "TangentCorrection") -> "NoobWCS":
         """Return a copy with an alignment correction composed in.
