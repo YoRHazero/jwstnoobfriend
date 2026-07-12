@@ -14,10 +14,35 @@ _LEAF_REPR_LIMIT = 200
 
 _CSS = """\
 .attrview {
+    /* Light-theme defaults; the dark overrides below flip them. Declaring an
+       explicit background + text colour makes the widget self-contained, so it
+       stays legible on any host (a VS Code dark notebook does not style the
+       injected HTML for us, and the raw browns/teals below wash out on black). */
+    --av-bg: #ffffff;
+    --av-fg: #1f2328;
+    --av-key: #795e26;
+    --av-code: #0f766e;
+    --av-meta: #6e7781;
+    --av-border: #d0d7de;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 13px;
     line-height: 1.5;
     max-width: 100%;
+    background: var(--av-bg);
+    color: var(--av-fg);
+    padding: 0.5em 0.6em;
+    border: 1px solid var(--av-border);
+    border-radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+    .attrview {
+        --av-bg: #1e1e1e;
+        --av-fg: #d4d4d4;
+        --av-key: #dcdcaa;
+        --av-code: #4ec9b0;
+        --av-meta: #9d9d9d;
+        --av-border: #3c3c3c;
+    }
 }
 .attrview details,
 .attrview .leaf {
@@ -28,16 +53,16 @@ _CSS = """\
     user-select: none;
 }
 .attrview .key {
-    color: #795e26;
+    color: var(--av-key);
     font-weight: 600;
 }
 .attrview .meta {
-    color: #888;
+    color: var(--av-meta);
     margin-left: 0.4em;
 }
 .attrview code {
     background: transparent;
-    color: #0f766e;
+    color: var(--av-code);
 }
 .attrview .attrview-search {
     width: 100%;
@@ -46,7 +71,9 @@ _CSS = """\
     padding: 0.3em 0.5em;
     font-family: inherit;
     font-size: inherit;
-    border: 1px solid #ccc;
+    color: var(--av-fg);
+    background: var(--av-bg);
+    border: 1px solid var(--av-border);
     border-radius: 4px;
 }
 .attrview [data-attrview-hidden] {
