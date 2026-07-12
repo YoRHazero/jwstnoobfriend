@@ -32,42 +32,11 @@ from noobfriend.extraction.psf._build import (
     build_core,
     build_wings,
 )
+from noobfriend.extraction.psf._detections import _Detections
 from noobfriend.extraction.psf._store import Cutout, CutoutStore
 
 #: On-disk layout version for :meth:`SourceExtractor.save` / ``load``.
 _SAVE_FORMAT_VERSION: int = 1
-
-
-def _labels_to_column(labels: list[object]) -> object:
-    """Encode object labels as a masked string column (``None`` -> masked).
-
-    Labels are stored as strings; ``None`` becomes a masked entry, restored by
-    :func:`_labels_from_column`. A minimum width of one keeps a column that is
-    entirely ``None`` writable as a FITS string.
-    """
-    from astropy.table import MaskedColumn
-
-    mask = [v is None for v in labels]
-    data = np.array(["" if v is None else str(v) for v in labels], dtype=str)
-    if data.dtype.itemsize == 0:
-        data = data.astype("U1")
-    return MaskedColumn(data=data, mask=mask)
-
-
-def _labels_from_column(column: object) -> list[object]:
-    """Decode a masked string column back to labels (masked -> ``None``).
-
-    FITS character columns round-trip as byte strings, so unmasked values are
-    decoded to ``str``.
-    """
-    values = np.asarray(column)
-    mask = np.asarray(getattr(column, "mask", np.zeros(values.shape, dtype=bool)))
-    return [
-        None
-        if is_masked
-        else (v.decode() if isinstance(v, bytes | np.bytes_) else str(v))
-        for v, is_masked in zip(values, mask)
-    ]
 
 
 def _group_aggregate(
@@ -111,16 +80,47 @@ def _pixel_to_world(
 ) -> Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
     """Adapt a WCS to a ``(x, y) -> (ra_deg, dec_deg)`` callable.
 
-    Uses the APE-14 ``pixel_to_world`` method, which both :mod:`astropy.wcs` and
-    ``gwcs`` implement and which returns a :class:`~astropy.coordinates.SkyCoord`
-    -- the uniform interface that hides their other API differences.
+    Prefers the package-wide :class:`~noobfriend.core.wcs.TransformWCS` contract
+    -- ``get_transform("detector", "world")`` -- which is how every other WCS
+    consumer in noobfriend evaluates pixel -> world (see
+    :mod:`noobfriend.extraction.cutout`, which documents this as the canonical
+    path over the slower APE-14 ``pixel_to_world_values`` wrapper). That one
+    branch covers everything the package treats as a WCS: a compiled
+    :class:`~noobfriend.core.wcs.NoobWCS` (what ``NooBook.wcs`` now returns), a
+    :class:`gwcs.WCS`, and the astropy / grizli adapters that wrap a plain FITS
+    WCS as a ``TransformWCS``. The transform returns ``(ra, dec)`` in degrees
+    (first frame -> last); any extra WFSS world outputs (wavelength / order) are
+    ignored.
+
+    A bare :mod:`astropy.wcs` / ``gwcs`` object passed directly (no
+    ``get_transform``) falls back to its APE-14 ``pixel_to_world``.
     """
+    get_transform = getattr(wcs, "get_transform", None)
+    if callable(get_transform) and getattr(wcs, "available_frames", None) is not None:
+        transform = get_transform("detector", "world")
 
-    def to_world(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        sky = wcs.pixel_to_world(np.asarray(x), np.asarray(y))  # type: ignore[attr-defined]
-        return np.asarray(sky.ra.deg, dtype=float), np.asarray(sky.dec.deg, dtype=float)
+        def to_world(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            world = transform(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+            return np.asarray(world[0], dtype=float), np.asarray(world[1], dtype=float)
 
-    return to_world
+        return to_world
+
+    if hasattr(wcs, "pixel_to_world"):
+
+        def to_world(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            sky = wcs.pixel_to_world(np.asarray(x), np.asarray(y))  # type: ignore[attr-defined]
+            return (
+                np.asarray(sky.ra.deg, dtype=float),
+                np.asarray(sky.dec.deg, dtype=float),
+            )
+
+        return to_world
+
+    raise TypeError(
+        "wcs must satisfy the TransformWCS protocol (available_frames + "
+        "get_transform, e.g. NoobWCS / gwcs) or expose an APE-14 pixel_to_world "
+        f"(astropy.wcs); got {type(wcs).__name__}."
+    )
 
 
 class SourceExtractor:
@@ -178,18 +178,10 @@ class SourceExtractor:
         self.max_in_memory = max_in_memory
         self.spill_dir = spill_dir
 
-        self._parts: list[SourceCatalog] = []
-        self._index: list[int] = []
-        self._filename: list[object] = []
-        self._filter: list[object] = []
-        self._detector: list[object] = []
-        self._store = CutoutStore(
+        self._det = _Detections()
+        self._store: CutoutStore = CutoutStore(
             self.cutout_size, max_in_memory=max_in_memory, spill_dir=spill_dir
         )
-        # running per-physical-source sky position (sum / count by index)
-        self._sum_ra: list[float] = []
-        self._sum_dec: list[float] = []
-        self._count: list[int] = []
 
     def add_from_frame(
         self,
@@ -225,8 +217,13 @@ class SourceExtractor:
             recorded in each cutout's ``bad`` mask **only** -- they are *not*
             excluded from detection (the pipeline DQ is too aggressive per frame).
         wcs : object
-            A WCS (astropy or gwcs) with an APE-14 ``pixel_to_world``; required,
-            since matching is by sky position.
+            Any WCS the package accepts: a
+            :class:`~noobfriend.core.wcs.TransformWCS` (``available_frames`` +
+            ``get_transform`` -- a compiled
+            :class:`~noobfriend.core.wcs.NoobWCS`, as ``NooBook.wcs`` returns, a
+            :class:`gwcs.WCS`, or the astropy/grizli adapters), or a bare
+            :mod:`astropy.wcs` with an APE-14 ``pixel_to_world``. Required, since
+            matching is by sky position.
         mask : numpy.ndarray, optional
             Boolean array marking pixels to exclude from detection (forwarded to
             ``build_catalog``) -- the trusted bad-pixel mask, separate from ``dq``.
@@ -260,54 +257,38 @@ class SourceExtractor:
         keep = (catalogue.ellipticity <= max_ellipticity) | matched
 
         kept_rows: list[int] = []
+        kept_index: list[int] = []
         for i in np.nonzero(keep)[0]:
             cutout = self._slice_cutout(data, err, dq, catalogue.x[i], catalogue.y[i])
             if cutout is None:
                 continue  # window falls off the frame
-            index = int(match_index[i]) if matched[i] else self._new_index()
-            self._sum_ra[index] += float(catalogue.ra[i])
-            self._sum_dec[index] += float(catalogue.dec[i])
-            self._count[index] += 1
-            self._index.append(index)
-            self._filename.append(filename)
-            self._filter.append(filter)
-            self._detector.append(detector)
+            index = int(match_index[i]) if matched[i] else self._det.new_index()
+            kept_index.append(index)
             self._store.append(cutout)
             kept_rows.append(int(i))
 
-        if kept_rows:
-            self._parts.append(catalogue[np.asarray(kept_rows, dtype=int)])
-        return (
-            catalogue[np.asarray(kept_rows, dtype=int)]
-            if kept_rows
-            else SourceCatalog.empty()
+        if not kept_rows:
+            return SourceCatalog.empty()
+        rows = catalogue[np.asarray(kept_rows, dtype=int)]
+        self._det.append_frame(
+            rows, kept_index, filename=filename, filter=filter, detector=detector
         )
+        return rows
 
     def _match(self, catalogue: SourceCatalog) -> tuple[np.ndarray, np.ndarray]:
         """Return ``(matched, match_index)`` of each detection to a known source."""
         n = len(catalogue)
-        if not self._count:
+        if self._det.n_sources == 0:
             return np.zeros(n, dtype=bool), np.full(n, -1, dtype=int)
 
         from astropy.coordinates import SkyCoord
 
-        known = SkyCoord(
-            np.asarray(self._sum_ra) / np.asarray(self._count),
-            np.asarray(self._sum_dec) / np.asarray(self._count),
-            unit="deg",
-        )
+        mean_ra, mean_dec = self._det.source_means()
+        known = SkyCoord(mean_ra, mean_dec, unit="deg")
         new = SkyCoord(catalogue.ra, catalogue.dec, unit="deg")
         index, separation, _ = new.match_to_catalog_sky(known)
         matched = separation.arcsec < self.match_radius
         return matched, np.where(matched, index, -1)
-
-    def _new_index(self) -> int:
-        """Allocate a fresh physical-source index."""
-        index = len(self._count)
-        self._sum_ra.append(0.0)
-        self._sum_dec.append(0.0)
-        self._count.append(0)
-        return index
 
     def _slice_cutout(
         self,
@@ -400,11 +381,13 @@ class SourceExtractor:
             source_max = _group_aggregate(index, catalogue.ellipticity, np.max)
             keep &= np.array([source_max[i] <= max_ellipticity for i in index])
         if filter is not None:
-            keep &= _match_labels(self._filter, filter)
+            keep &= _match_labels(self._det.filters, filter)
         if detector is not None:
-            keep &= _match_labels(self._detector, detector)
+            keep &= _match_labels(self._det.detectors, detector)
         if module is not None:
-            letters = np.array([(d or "")[3:4] for d in self._detector], dtype=object)
+            letters = np.array(
+                [(d or "")[3:4] for d in self._det.detectors], dtype=object
+            )
             keep &= _match_labels(letters, module)
 
         if any(c is not None for c in (snr_min, fwhm, flux, isolation_min)):
@@ -445,23 +428,12 @@ class SourceExtractor:
         rows = np.flatnonzero(keep)
         if rows.size == 0:
             return sub
-        _, compact = np.unique(self.index[rows], return_inverse=True)
-        catalogue = self.catalog[rows]
-        sub._parts = [catalogue]
-        sub._index = compact.tolist()
-        sub._filename = [self._filename[r] for r in rows]
-        sub._filter = [self._filter[r] for r in rows]
-        sub._detector = [self._detector[r] for r in rows]
-        sub._store = self._store.subset(rows)
-        n_sources = int(compact.max()) + 1
-        sub._sum_ra = [0.0] * n_sources
-        sub._sum_dec = [0.0] * n_sources
-        sub._count = [0] * n_sources
-        for j in range(rows.size):
-            k = int(compact[j])
-            sub._sum_ra[k] += float(catalogue.ra[j])
-            sub._sum_dec[k] += float(catalogue.dec[j])
-            sub._count[k] += 1
+        sub._det = self._det.subset(rows)
+        # A lazy view over the parent store: select stays cheap (no cutout IO),
+        # and only a later build reads the selected stamps. The sub-extractor is
+        # thus bound to this extractor's cutouts -- do not close the parent while
+        # the sub-extractor is still in use.
+        sub._store = self._store.view(rows)
         return sub
 
     def build_psf_core(
@@ -563,7 +535,7 @@ class SourceExtractor:
             shutil.rmtree(path) if path.is_dir() else path.unlink()
         path.mkdir(parents=True)
 
-        self._write_catalog(path / "catalog.fits")
+        self._det.to_table().write(path / "catalog.fits", format="fits", overwrite=True)
         chunk_lens = self._store.save(path / "cutouts", chunk_size=chunk_size)
 
         meta = {
@@ -624,6 +596,8 @@ class SourceExtractor:
             )
         meta = json.loads(meta_path.read_text())
 
+        from astropy.table import Table
+
         ext = cls(
             fwhm=meta["fwhm"],
             cutout_size=meta["cutout_size"],
@@ -635,61 +609,16 @@ class SourceExtractor:
             max_in_memory=max_in_memory,
             spill_dir=spill_dir,
         )
-        catalogue, index, labels = ext._read_catalog(path / "catalog.fits")
+        ext._det = _Detections.from_table(
+            Table.read(path / "catalog.fits", format="fits")
+        )
         ext._store = CutoutStore.load(
             path / "cutouts",
             meta["cutout_size"],
             max_in_memory=max_in_memory,
             spill_dir=spill_dir,
         )
-        ext._parts = [catalogue] if len(catalogue) else []
-        ext._index = index.tolist()
-        ext._filename, ext._filter, ext._detector = labels
-        ext._rebuild_source_positions()
         return ext
-
-    def _write_catalog(self, path: Path) -> None:
-        """Write the detection table and labels as a FITS binary table."""
-        table = self.catalog.to_table()
-        table["index"] = self.index
-        table["filename"] = _labels_to_column(self._filename)
-        table["filter"] = _labels_to_column(self._filter)
-        table["detector"] = _labels_to_column(self._detector)
-        table.write(path, format="fits", overwrite=True)
-
-    @staticmethod
-    def _read_catalog(
-        path: Path,
-    ) -> tuple[
-        SourceCatalog, np.ndarray, tuple[list[object], list[object], list[object]]
-    ]:
-        """Read back the catalogue, ``index`` array, and the three label lists."""
-        from astropy.table import Table
-
-        table = Table.read(path, format="fits")
-        catalogue = SourceCatalog.from_table(table)
-        index = np.asarray(table["index"], dtype=int)
-        labels = (
-            _labels_from_column(table["filename"]),
-            _labels_from_column(table["filter"]),
-            _labels_from_column(table["detector"]),
-        )
-        return catalogue, index, labels
-
-    def _rebuild_source_positions(self) -> None:
-        """Recompute the per-source running sky-position sums from the catalogue."""
-        index = self.index
-        n_sources = int(index.max()) + 1 if index.size else 0
-        self._sum_ra = [0.0] * n_sources
-        self._sum_dec = [0.0] * n_sources
-        self._count = [0] * n_sources
-        if not index.size:
-            return
-        catalogue = self.catalog
-        for j, k in enumerate(index.tolist()):
-            self._sum_ra[k] += float(catalogue.ra[j])
-            self._sum_dec[k] += float(catalogue.dec[j])
-            self._count[k] += 1
 
     def panel(
         self,
@@ -728,7 +657,7 @@ class SourceExtractor:
 
         index = self.index
         catalogue = self.catalog
-        labels = np.asarray(self._filter, dtype=object)
+        labels = np.asarray(self._det.filters, dtype=object)
         in_band = np.ones(len(index), dtype=bool) if band is None else (labels == band)
         source_ids = np.unique(index[in_band]) if len(index) else np.empty(0, dtype=int)
 
@@ -790,17 +719,17 @@ class SourceExtractor:
     @property
     def catalog(self) -> SourceCatalog:
         """The accumulated detection catalogue (one row per kept detection)."""
-        return SourceCatalog.concat(self._parts)
+        return self._det.catalog
 
     @property
     def index(self) -> np.ndarray:
         """Physical-source index of each detection (groups rows across frames)."""
-        return np.asarray(self._index, dtype=int)
+        return self._det.index
 
     @property
     def filename(self) -> np.ndarray:
         """Provenance label of each detection's source frame."""
-        return np.asarray(self._filename, dtype=object)
+        return np.asarray(self._det.filenames, dtype=object)
 
     @property
     def cutouts(self) -> CutoutStore:
@@ -810,8 +739,8 @@ class SourceExtractor:
     @property
     def n_sources(self) -> int:
         """Number of distinct physical sources collected so far."""
-        return len(self._count)
+        return self._det.n_sources
 
     def __len__(self) -> int:
         """Return the number of detections collected so far."""
-        return len(self._index)
+        return len(self._det)

@@ -45,8 +45,8 @@ def _assert_round_trips(original: SourceExtractor, loaded: SourceExtractor) -> N
     assert len(loaded) == len(original)
     assert loaded.n_sources == original.n_sources
     assert np.array_equal(loaded.index, original.index)
-    assert list(loaded._filter) == list(original._filter)
-    assert list(loaded._detector) == list(original._detector)
+    assert list(loaded._det.filters) == list(original._det.filters)
+    assert list(loaded._det.detectors) == list(original._det.detectors)
     assert list(loaded.filename) == list(original.filename)
     for name in ("x", "y", "ra", "dec", "fwhm", "ellipticity", "flux", "snr"):
         assert np.allclose(
@@ -69,10 +69,10 @@ class TestRoundTrip:
 
     def test_none_labels_round_trip(self, tmp_path) -> None:
         ext = _two_source_extractor()  # second frame has detector=None
-        assert None in set(ext._detector)
+        assert None in set(ext._det.detectors)
         ext.save(tmp_path / "cache")
         loaded = SourceExtractor.load(tmp_path / "cache")
-        assert list(loaded._detector) == list(ext._detector)  # None preserved
+        assert list(loaded._det.detectors) == list(ext._det.detectors)  # None preserved
 
     def test_config_preserved(self, tmp_path) -> None:
         ext = SourceExtractor(fwhm=3.5, cutout_size=21, nsigma=4.0, match_radius=0.2)
@@ -105,7 +105,7 @@ class TestSelectThenSave:
         sub.save(tmp_path / "cache")
         loaded = SourceExtractor.load(tmp_path / "cache")
         _assert_round_trips(sub, loaded)
-        assert set(loaded._filter) == {"F210M"}
+        assert set(loaded._det.filters) == {"F210M"}
 
 
 class TestLoadedCacheIsSafe:

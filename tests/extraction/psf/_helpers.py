@@ -18,6 +18,31 @@ class LinearWCS:
         )
 
 
+class TransformWCS:
+    """A ``TransformWCS``-shaped fake: ``available_frames`` + ``get_transform``.
+
+    Mirrors how the package consumes ``NooBook.wcs`` (a compiled ``NoobWCS``):
+    ``get_transform("detector", "world")`` returns a ``(x, y) -> (ra, dec)``
+    transform in degrees, with no APE-14 ``pixel_to_world``.
+    """
+
+    available_frames = ("detector", "world")
+
+    def __init__(self, ra0: float = 53.0, dec0: float = -27.0, scale: float = 1e-4):
+        self.ra0, self.dec0, self.scale = ra0, dec0, scale
+
+    def get_transform(self, from_frame: str, to_frame: str):
+        assert (from_frame, to_frame) == ("detector", "world")
+
+        def transform(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            return (
+                self.ra0 + self.scale * np.asarray(x, dtype=float),
+                self.dec0 + self.scale * np.asarray(y, dtype=float),
+            )
+
+        return transform
+
+
 def make_frame(
     positions: list[tuple],
     *,

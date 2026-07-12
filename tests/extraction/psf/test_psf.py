@@ -11,11 +11,23 @@ import pytest
 
 from noobfriend.extraction.psf import SourceExtractor
 
-from ._helpers import LinearWCS, make_frame
+from ._helpers import LinearWCS, TransformWCS, make_frame
 
 
 class TestSourceExtractor:
     """Accumulating matched detections and cutouts across frames."""
+
+    def test_transform_wcs_matches_ape14(self) -> None:
+        # A TransformWCS (get_transform, no pixel_to_world -- what NooBook.wcs
+        # now is) must give the same sky positions as the APE-14 WCS, so
+        # matching works either way.
+        frame = make_frame([(40, 40), (80, 80)], seed=1)
+        ape = SourceExtractor(fwhm=4.0, cutout_size=21)
+        ape.add_from_frame(frame, wcs=LinearWCS())
+        transform = SourceExtractor(fwhm=4.0, cutout_size=21)
+        transform.add_from_frame(frame, wcs=TransformWCS())
+        assert np.allclose(ape.catalog.ra, transform.catalog.ra)
+        assert np.allclose(ape.catalog.dec, transform.catalog.dec)
 
     def test_matches_same_source_across_frames(self) -> None:
         wcs = LinearWCS()
