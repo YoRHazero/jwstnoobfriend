@@ -1,0 +1,177 @@
+"""Tests for sampling-ready spectrum models."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from noobfriend.inference.spectrum import NoobLine, NoobSpectrum, NoobSpectrumModel
+
+pm = pytest.importorskip("pymc")
+
+
+def _workspace(*, resolving_power: float | None = None):
+    obs = np.linspace(39000.0, 41000.0, 100)
+    spectrum = NoobSpectrum(
+        np.ones_like(obs),
+        np.full_like(obs, 0.1),
+        obs=obs,
+        z=7.0,
+        resolving_power=resolving_power,
+    )
+    base = NoobLine("OIII", rest=5008.24, z=7.0)
+    broad = (
+        base.derive(component="broad")
+        .center(delta_v_kms=(-200.0, 200.0))
+        .fwhm(locked=False)
+    )
+    return spectrum.prepare(
+        [base, broad], continuum_order=2, continuum_lambda_0=40000.0
+    )
+
+
+def test_workspace_model_returns_built_sampling_model() -> None:
+    workspace = _workspace()
+
+    model = workspace.model()
+    graph = model.pymc_model
+
+    assert isinstance(model, NoobSpectrumModel)
+    assert model.workspace is workspace
+    assert isinstance(graph, pm.Model)
+    assert graph.observed_RVs[0].name == "observed_flux_normalized"
+    assert "continuum__c" in graph.named_vars
+    assert "continuum__k1" in graph.named_vars
+    assert "continuum__k2" in graph.named_vars
+    for handle in workspace.handles:
+        safe_id = handle.id.replace(".", "_")
+        prefix = f"line__{handle.index}__{safe_id}"
+        assert f"{prefix}__flux" in graph.named_vars
+        assert f"{prefix}__fwhm" in graph.named_vars
+        assert f"{prefix}__center" in graph.named_vars
+        assert f"{prefix}__delta_v_kms" in graph.named_vars
+    logp = graph.compile_logp()(graph.initial_point())
+    assert np.isfinite(logp)
+
+
+def test_workspace_model_uses_data_range_flux_prior_without_mle(monkeypatch) -> None:
+    workspace = _workspace()
+
+    def reject_mle(*_args, **_kwargs):
+        raise AssertionError("model construction must not run MLE")
+
+    monkeypatch.setattr(type(workspace), "mle", reject_mle)
+    model = workspace.model()
+    priors = model.priors
+    flux_priors = [priors[component]["flux"] for component in workspace.ids]
+
+    assert priors.components == (*workspace.ids, "continuum")
+    assert all(prior.family == "halfnormal" for prior in flux_priors)
+    assert all(prior.reference > 0.0 for prior in flux_priors)
+    assert all(
+        prior.scale == pytest.approx(5.0 * prior.reference) for prior in flux_priors
+    )
+
+
+def test_workspace_model_preserves_physical_bounds_in_prior_samples() -> None:
+    obs = np.linspace(4950.0, 5050.0, 101)
+    line = (
+        NoobLine("line", obs=5000.0)
+        .flux(override=(1.0, 3.0))
+        .fwhm(override=(80.0, 240.0))
+        .center(delta_v_kms=(-20.0, 30.0))
+    )
+    workspace = NoobSpectrum(
+        np.ones_like(obs), np.full_like(obs, 0.1), obs=obs
+    ).prepare([line])
+    model = workspace.model()
+
+    with model.pymc_model:
+        prior = pm.sample_prior_predictive(draws=100, random_seed=8)
+    prefix = "line__0__line"
+    flux = np.asarray(prior.prior[f"{prefix}__flux"])
+    fwhm = np.asarray(prior.prior[f"{prefix}__fwhm"])
+    center = np.asarray(prior.prior[f"{prefix}__delta_v_kms"])
+
+    assert np.all((1.0 <= flux) & (flux <= 3.0))
+    assert np.all((80.0 <= fwhm) & (fwhm <= 240.0))
+    assert np.all((-20.0 <= center) & (center <= 30.0))
+    assert model.priors["line"]["flux"].family == "uniform"
+    assert model.priors["line"]["fwhm"].family == "loguniform"
+    assert model.priors["line"]["center"].family == "uniform"
+
+
+def test_workspace_model_reparameterizes_overlap_and_effective_fwhm() -> None:
+    obs = np.linspace(6500.0, 6630.0, 131)
+    emission = NoobLine("Ha", obs=6564.61)
+    absorption = NoobLine("Ha", obs=6564.61, contribution="absorption")
+    workspace = NoobSpectrum(
+        np.ones_like(obs),
+        np.full_like(obs, 0.1),
+        obs=obs,
+        resolving_power=2600.0,
+    ).prepare([emission, absorption])
+
+    model = workspace.model()
+    graph = model.pymc_model
+
+    assert model.reparameterized_flux_pairs == ((workspace.ids[0], workspace.ids[1]),)
+    assert model.effective_fwhm_sources == workspace.ids
+    assert "flux_pair__0__net_raw" in graph.named_vars
+    assert "flux_pair__0__cancellation_raw" in graph.named_vars
+    assert any(name.endswith("__log_effective_fwhm") for name in graph.named_vars)
+    assert np.isfinite(graph.compile_logp()(graph.initial_point()))
+
+
+def test_workspace_model_preserves_ratio_and_locked_line_semantics() -> None:
+    obs = np.linspace(4920.0, 5040.0, 121)
+    base = NoobLine("OIII5007", obs=5008.24)
+    derived = base.derive("OIII4959", obs=4960.30).flux(ratio=0.335)
+    workspace = NoobSpectrum(
+        np.ones_like(obs), np.full_like(obs, 0.1), obs=obs
+    ).prepare([base, derived])
+    model = workspace.model()
+
+    with model.pymc_model:
+        prior = pm.sample_prior_predictive(draws=30, random_seed=12)
+    base_prefix = "line__0__OIII5007"
+    derived_prefix = "line__1__OIII4959"
+
+    assert np.asarray(prior.prior[f"{derived_prefix}__flux"]) == pytest.approx(
+        0.335 * np.asarray(prior.prior[f"{base_prefix}__flux"])
+    )
+    assert np.asarray(prior.prior[f"{derived_prefix}__fwhm"]) == pytest.approx(
+        np.asarray(prior.prior[f"{base_prefix}__fwhm"])
+    )
+    assert np.asarray(prior.prior[f"{derived_prefix}__delta_v_kms"]) == pytest.approx(
+        np.asarray(prior.prior[f"{base_prefix}__delta_v_kms"])
+    )
+    assert model.priors["OIII4959"]["flux"].family == "ratio"
+    assert model.priors["OIII4959"]["flux"].target == "OIII5007"
+    assert model.priors["OIII4959"]["fwhm"].family == "locked"
+    assert model.priors["OIII4959"]["center"].family == "locked"
+
+
+def test_workspace_model_supports_non_gaussian_without_resolving_power() -> None:
+    obs = np.linspace(4900.0, 5100.0, 101)
+    workspace = NoobSpectrum(
+        np.ones_like(obs), np.full_like(obs, 0.1), obs=obs
+    ).prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+
+    model = workspace.model()
+
+    assert isinstance(model, NoobSpectrumModel)
+    assert isinstance(model.pymc_model, pm.Model)
+
+
+def test_workspace_model_rejects_non_gaussian_with_resolving_power() -> None:
+    obs = np.linspace(4900.0, 5100.0, 101)
+    workspace = NoobSpectrum(
+        np.ones_like(obs),
+        np.full_like(obs, 0.1),
+        obs=obs,
+        resolving_power=3000.0,
+    ).prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+
+    with pytest.raises(NotImplementedError, match="gaussian"):
+        workspace.model()

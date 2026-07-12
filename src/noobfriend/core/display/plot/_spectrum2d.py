@@ -29,7 +29,11 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from noobfriend.core.display.plot._norm import resolve_limits
-from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
+from noobfriend.core.display.plot._spectrum import (
+    ModelSpec,
+    draw_residual,
+    draw_spectrum,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,6 +43,7 @@ if TYPE_CHECKING:
 
 #: Total figure height as a fraction of its width (two stacked panels).
 _DEFAULT_ASPECT2D: float = 0.62
+_RESIDUAL_ASPECT2D: float = 0.78
 
 #: Colour of the collapse-window marker drawn on the 2-D panel.
 _WINDOW_COLOR: str = "#ff4d4d"
@@ -205,6 +210,11 @@ def plot_spectrum2d(
     spatial_window: Sequence[float] | None = None,
     error: ArrayLike | None = None,
     error_2d: ArrayLike | None = None,
+    residual: ArrayLike | None = None,
+    residual_error: ArrayLike | None = None,
+    residual_ylim: tuple[float, float] | None = None,
+    residual_label: str = "Residual",
+    residual_color: str = "#1A1A1A",
     label: str | None = None,
     color: str | None = None,
     models: ModelSpec | Callable | tuple | Sequence | None = None,
@@ -263,6 +273,17 @@ def plot_spectrum2d(
         flux (the ``spatial_window`` if given) to produce the 1-D error, so the
         band matches the collapsed line. Valid only with ``flux_1d`` omitted and
         ``error`` not given.
+    residual : array_like, optional
+        Residual values on ``wavelength``. When given, add a third shared-x
+        panel below the 1-D spectrum with a zero reference.
+    residual_error : array_like, optional
+        Per-point uncertainty for the residual values, rendered as vertical
+        error bars.
+    residual_ylim : tuple of float, optional
+        Explicit residual-axis limits. The default is symmetric and includes
+        every finite residual and its uncertainty.
+    residual_label, residual_color : str, optional
+        Residual-axis label and point color.
     label : str, optional
         Legend label for the 1-D line.
     color : str, optional
@@ -304,15 +325,15 @@ def plot_spectrum2d(
     Returns
     -------
     matplotlib.figure.Figure
-        The assembled two-panel figure.
+        The assembled figure, with a third panel when ``residual`` is given.
 
     Raises
     ------
     ValueError
         If ``flux_2d`` is not 2-D; if ``wavelength``/``flux_1d``/``spatial``/
-        ``error_2d`` do not match its shape; if both ``error`` and ``error_2d``
-        are given, or ``error_2d`` is given with an explicit ``flux_1d``; or if
-        ``spatial_window`` is malformed or selects no rows.
+        ``error_2d``/``residual`` do not match its shape; if both ``error`` and
+        ``error_2d`` are given, or ``error_2d`` is given with an explicit
+        ``flux_1d``; or if ``spatial_window`` is malformed or selects no rows.
     """
     import matplotlib.pyplot as plt
 
@@ -372,14 +393,25 @@ def plot_spectrum2d(
         xlim = (float(wave_edges[0]), float(wave_edges[-1]))
 
     width_in = size / 100.0
-    fig, (ax2d, ax1d) = plt.subplots(
-        2,
-        1,
-        sharex=True,
-        figsize=(width_in, width_in * _DEFAULT_ASPECT2D),
-        height_ratios=list(height_ratios),
-        layout="constrained",
-    )
+    if residual is None:
+        fig, (ax2d, ax1d) = plt.subplots(
+            2,
+            1,
+            sharex=True,
+            figsize=(width_in, width_in * _DEFAULT_ASPECT2D),
+            height_ratios=list(height_ratios),
+            layout="constrained",
+        )
+        residual_ax = None
+    else:
+        fig, (ax2d, ax1d, residual_ax) = plt.subplots(
+            3,
+            1,
+            sharex=True,
+            figsize=(width_in, width_in * _RESIDUAL_ASPECT2D),
+            height_ratios=[*height_ratios, 0.75],
+            layout="constrained",
+        )
     fig.get_layout_engine().set(hspace=0)
 
     _draw_image(
@@ -409,9 +441,21 @@ def plot_spectrum2d(
         xlim=xlim,
         ylim=ylim,
         ylog=ylog,
-        x_label=x_label,
+        x_label=x_label if residual_ax is None else "",
         y_label=y_label,
     )
+    if residual_ax is not None:
+        draw_residual(
+            residual_ax,
+            wave,
+            residual,
+            error=residual_error,
+            color=residual_color,
+            xlim=xlim,
+            ylim=residual_ylim,
+            x_label=x_label,
+            y_label=residual_label,
+        )
     if save is not None:
         fig.savefig(save, dpi=200, bbox_inches="tight")
     return fig
