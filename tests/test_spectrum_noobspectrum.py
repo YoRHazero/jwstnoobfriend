@@ -86,6 +86,31 @@ def test_spectrum_from_2d_collapses_flux_and_error() -> None:
 
     assert np.allclose(spectrum.flux, 3.0)
     assert np.allclose(spectrum.error, np.sqrt(3 * 0.2**2) * 2.0)
+    assert spectrum.source_2d is not None
+    assert spectrum.source_2d.flux.shape == (4, 5)
+    assert spectrum.source_2d.flux.flags.writeable is False
+    assert spectrum.source_2d.error.flags.writeable is False
+    assert spectrum.source_2d.spatial.tolist() == [0.0, 1.0, 2.0, 3.0]
+    assert spectrum.source_2d.spatial_window == pytest.approx((0.5, 3.5))
+
+
+def test_spectrum_from_2d_retains_column_dispersion_in_canonical_order() -> None:
+    wavelength = np.linspace(1.0, 2.0, 5)
+    flux = np.arange(20.0).reshape(5, 4)
+    error = np.full((5, 4), 0.2)
+
+    spectrum = NoobSpectrum.from_2d(
+        flux,
+        error,
+        obs=wavelength,
+        collapse_window=(1, 4),
+        dispersion="column",
+    )
+
+    assert spectrum.source_2d is not None
+    assert spectrum.source_2d.original_dispersion == "column"
+    assert spectrum.source_2d.flux.shape == (4, 5)
+    assert np.array_equal(spectrum.source_2d.flux, flux.T)
 
 
 def test_spectrum_from_2d_validates_geometry_and_noise_contract() -> None:

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace.mle import MLEFitResult
 
 type _LineEntry = tuple[str | None, NoobLine]
+_RESERVED_LINE_IDS = frozenset({"continuum"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +81,11 @@ class NoobFitWorkspace:
         raise KeyError("line is not part of this workspace.")
 
     def model(self) -> NoobSpectrumModel:
-        """Create a model contract from this prepared workspace."""
+        """Build and return one persistent spectrum model ready for sampling.
+
+        The model uses only the spectrum data and ``NoobLine`` declarations;
+        no MLE point is computed or supplied as an initial value.
+        """
         from noobfriend.inference.spectrum.model import NoobSpectrumModel
 
         return NoobSpectrumModel.from_workspace(self)
@@ -200,6 +205,10 @@ def _build_handles(
     ids = [manual_id for manual_id, _ in entries] if id_mode == "manual" else _auto_ids(resolved)
     if len(set(ids)) != len(ids):
         raise ValueError("workspace line ids must be unique.")
+    reserved = _RESERVED_LINE_IDS.intersection(ids)
+    if reserved:
+        names = ", ".join(repr(value) for value in sorted(reserved))
+        raise ValueError(f"workspace line ids are reserved for model components: {names}.")
     return tuple(
         LineHandle(
             id=line_id,

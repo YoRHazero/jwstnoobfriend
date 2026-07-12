@@ -5,12 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 from math import log
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from matplotlib.figure import Figure
+    from numpy.typing import ArrayLike
+
     from noobfriend.inference.spectrum.line import NoobLine
+    from noobfriend.inference.spectrum.data.types import DispersionAxis
     from noobfriend.inference.spectrum.workspace import LineHandle, NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.mle.selection import MLECandidate
 
@@ -46,10 +53,19 @@ class MLESolution:
     relative_likelihood: float
     cancellation: float
     cancellation_fraction: float
+    continuum_parameters: Mapping[str, float]
     continuum_flux: np.ndarray
     model_flux: np.ndarray
     residual: np.ndarray
     lines: tuple[MLELineResult, ...]
+
+    def __post_init__(self) -> None:
+        """Freeze the named continuum coefficients."""
+        object.__setattr__(
+            self,
+            "continuum_parameters",
+            MappingProxyType(dict(self.continuum_parameters)),
+        )
 
     def for_line(self, line: NoobLine) -> MLELineResult:
         """Return a line result by the original ``NoobLine`` object identity."""
@@ -76,6 +92,57 @@ class MLEFitResult:
     relative_likelihood_min: float
     random_seed: int
     elapsed_seconds: float
+
+    def plot(
+        self,
+        *,
+        solution: Literal["selected", "likelihood_optimum"] = "selected",
+        show_residuals: bool = True,
+        model_oversample: int = 8,
+        flux_2d: ArrayLike | None = None,
+        spatial: ArrayLike | None = None,
+        dispersion: DispersionAxis | None = None,
+        spatial_window: tuple[float, float] | None = None,
+        component_colors: Mapping[str, str] | None = None,
+        data_color: str = "#1A1A1A",
+        continuum_color: str = "#7F7F7F",
+        total_color: str = "#D62728",
+        cmap: str = "magma",
+        pmin: float = 1.0,
+        pmax: float = 99.0,
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        ylog: bool = False,
+        size: int = 1000,
+        title: str | None = None,
+        legend_location: str = "best",
+    ) -> Figure:
+        """Plot this fit, optionally including residuals in flux units."""
+        from noobfriend.inference.spectrum.visualization import plot_mle_fit
+
+        return plot_mle_fit(
+            self,
+            solution=solution,
+            show_residuals=show_residuals,
+            model_oversample=model_oversample,
+            flux_2d=flux_2d,
+            spatial=spatial,
+            dispersion=dispersion,
+            spatial_window=spatial_window,
+            component_colors=component_colors,
+            data_color=data_color,
+            continuum_color=continuum_color,
+            total_color=total_color,
+            cmap=cmap,
+            pmin=pmin,
+            pmax=pmax,
+            xlim=xlim,
+            ylim=ylim,
+            ylog=ylog,
+            size=size,
+            title=title,
+            legend_location=legend_location,
+        )
 
     def summary(self) -> str:
         """Return an HTML summary of fit diagnostics and selected line values."""
@@ -171,6 +238,15 @@ def build_solution(
         relative_likelihood=candidate.relative_likelihood(minimum_chi2),
         cancellation=evaluation.cancellation,
         cancellation_fraction=evaluation.cancellation_fraction,
+        continuum_parameters=MappingProxyType(
+            dict(
+                zip(
+                    workspace.continuum.parameter_names,
+                    candidate.physical[candidate.problem.continuum_slice],
+                    strict=True,
+                )
+            )
+        ),
         continuum_flux=_readonly(evaluation.continuum),
         model_flux=_readonly(evaluation.model),
         residual=_readonly(residual),

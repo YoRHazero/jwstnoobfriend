@@ -544,3 +544,78 @@ def draw_spectrum(
         ax.set_title(title)
     if has_legend:
         ax.legend()
+
+
+def draw_residual(
+    ax: Axes,
+    wavelength: ArrayLike,
+    residual: ArrayLike,
+    *,
+    error: ArrayLike | None = None,
+    color: str = "#1A1A1A",
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+    x_label: str = "Wavelength",
+    y_label: str = "Residual",
+) -> None:
+    """Draw residual samples, their optional uncertainties, and a zero line."""
+    wave = np.asarray(wavelength, dtype=float)
+    values = np.asarray(residual, dtype=float)
+    if wave.ndim != 1 or values.ndim != 1:
+        raise ValueError("residual wavelength and values must be 1-D arrays")
+    if wave.shape != values.shape:
+        raise ValueError(
+            f"residual length {values.shape} must match wavelength {wave.shape}"
+        )
+    errors = None if error is None else np.asarray(error, dtype=float)
+    if errors is not None:
+        if errors.ndim != 1 or errors.shape != values.shape:
+            raise ValueError(
+                f"residual error length {errors.shape} must match residual "
+                f"{values.shape}"
+            )
+        finite_errors = errors[np.isfinite(errors)]
+        if np.any(finite_errors < 0.0):
+            raise ValueError("residual errors must be nonnegative")
+
+    ax.axhline(0.0, color="#7F7F7F", linewidth=1.0, zorder=1)
+    if errors is None:
+        ax.plot(
+            wave,
+            values,
+            linestyle="none",
+            marker="o",
+            markersize=3.2,
+            color=color,
+            zorder=2,
+        )
+    else:
+        ax.errorbar(
+            wave,
+            values,
+            yerr=errors,
+            linestyle="none",
+            marker="o",
+            markersize=3.2,
+            color=color,
+            ecolor=color,
+            elinewidth=0.8,
+            capsize=0,
+            alpha=0.8,
+            zorder=2,
+        )
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is None:
+        extent = np.abs(values)
+        if errors is not None:
+            extent = extent + np.where(np.isfinite(errors), errors, 0.0)
+        finite = extent[np.isfinite(extent)]
+        if finite.size:
+            limit = 1.1 * float(np.max(finite))
+            if limit > 0.0:
+                ax.set_ylim(-limit, limit)
+    else:
+        ax.set_ylim(*ylim)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)

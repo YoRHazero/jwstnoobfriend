@@ -93,9 +93,49 @@ def test_workspace_mle_recovers_one_free_gaussian_line() -> None:
     assert fitted.delta_v_kms == pytest.approx(35.0, abs=8.0)
     assert result.solution.model_flux.shape == wavelength.shape
     assert result.solution.model_flux.flags.writeable is False
+    assert tuple(result.solution.continuum_parameters) == ("c", "k1")
     assert "Maximum-likelihood fit" in result.summary()
     assert "<strong>MLE AIC:</strong>" in result.summary()
     assert "<strong>MLE BIC:</strong>" in result.summary()
+
+    figure = result.plot(model_oversample=8, size=500)
+    assert len(figure.axes) == 2
+    axis = figure.axes[-2]
+    residual_axis = figure.axes[-1]
+    lines = {line.get_label(): line for line in axis.get_lines()}
+    assert lines["data"].get_color().lower() == "#1a1a1a"
+    assert lines["continuum"].get_color().lower() == "#7f7f7f"
+    assert lines["total model"].get_color().lower() == "#d62728"
+    assert lines["total model"].get_xdata().size == (wavelength.size - 1) * 8 + 1
+    assert residual_axis.get_ylabel() == "Residual"
+    residual_points = next(
+        line for line in residual_axis.get_lines() if line.get_marker() == "o"
+    )
+    assert np.allclose(
+        residual_points.get_ydata(),
+        result.solution.residual * workspace.spectrum.error,
+        equal_nan=True,
+    )
+    from matplotlib.container import ErrorbarContainer
+
+    assert any(
+        isinstance(container, ErrorbarContainer)
+        for container in residual_axis.containers
+    )
+    assert axis.get_legend() is not None
+    assert not figure.legends
+
+    external_2d = np.tile(workspace.spectrum.flux, (3, 1))
+    figure_2d = result.plot(flux_2d=external_2d, size=500)
+    assert len(figure_2d.axes) == 3
+    without_residual = result.plot(show_residuals=False, size=500)
+    assert len(without_residual.axes) == 1
+
+    import matplotlib.pyplot as plt
+
+    plt.close(figure)
+    plt.close(figure_2d)
+    plt.close(without_residual)
 
 
 def test_workspace_mle_accepts_sequence_options_and_records_normalized_values() -> None:

@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Literal
 
 from numpy.typing import ArrayLike
 
-from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
+from noobfriend.core.display.plot._spectrum import (
+    ModelSpec,
+    draw_residual,
+    draw_spectrum,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,6 +27,7 @@ if TYPE_CHECKING:
 
 #: Figure height as a fraction of its width (spectra are wide and short).
 _DEFAULT_ASPECT: float = 0.45
+_RESIDUAL_ASPECT: float = 0.62
 
 
 def plot_spectrum1d(
@@ -30,6 +35,11 @@ def plot_spectrum1d(
     flux: ArrayLike | Sequence[ArrayLike],
     *,
     error: ArrayLike | Sequence[ArrayLike | None] | None = None,
+    residual: ArrayLike | None = None,
+    residual_error: ArrayLike | None = None,
+    residual_ylim: tuple[float, float] | None = None,
+    residual_label: str = "Residual",
+    residual_color: str = "#1A1A1A",
     labels: str | Sequence[str] | None = None,
     colors: str | Sequence[str] | None = None,
     models: ModelSpec | Callable | tuple | Sequence | None = None,
@@ -65,6 +75,17 @@ def plot_spectrum1d(
         Per-line 1-sigma uncertainty (symmetric band ``flux +/- error``). For a
         single spectrum, one array; for several, a list with one array (or
         ``None``) per line, so some lines may carry no error.
+    residual : array_like, optional
+        Residual values on ``wavelength``. When given, add a shared-x residual
+        panel below the spectrum with a zero reference.
+    residual_error : array_like, optional
+        Per-point uncertainty for the residual values, rendered as vertical
+        error bars.
+    residual_ylim : tuple of float, optional
+        Explicit residual-axis limits. The default is symmetric and includes
+        every finite residual and its uncertainty.
+    residual_label, residual_color : str, optional
+        Residual-axis label and point color.
     labels : str or sequence of str, optional
         Legend labels (one per line). A bare string is allowed only for a single
         spectrum.
@@ -104,15 +125,27 @@ def plot_spectrum1d(
     ------
     ValueError
         On a bad ``drawstyle``/``error_style``, a length mismatch among
-        ``wavelength``/``flux``/``error``/``labels``/``colors``, or an invalid
-        model specification (see :meth:`_ModelCurve.from_input`).
+        ``wavelength``/``flux``/``error``/``residual``/``labels``/``colors``,
+        or an invalid model specification (see :meth:`_ModelCurve.from_input`).
     """
     import matplotlib.pyplot as plt
 
     width_in = size / 100.0
-    fig, ax = plt.subplots(
-        figsize=(width_in, width_in * _DEFAULT_ASPECT), layout="constrained"
-    )
+    if residual is None:
+        fig, ax = plt.subplots(
+            figsize=(width_in, width_in * _DEFAULT_ASPECT), layout="constrained"
+        )
+        residual_ax = None
+    else:
+        fig, (ax, residual_ax) = plt.subplots(
+            2,
+            1,
+            sharex=True,
+            figsize=(width_in, width_in * _RESIDUAL_ASPECT),
+            height_ratios=(3.0, 1.0),
+            layout="constrained",
+        )
+        fig.get_layout_engine().set(hspace=0)
     draw_spectrum(
         ax,
         wavelength,
@@ -126,10 +159,22 @@ def plot_spectrum1d(
         xlim=xlim,
         ylim=ylim,
         ylog=ylog,
-        x_label=x_label,
+        x_label=x_label if residual_ax is None else "",
         y_label=y_label,
         title=title,
     )
+    if residual_ax is not None:
+        draw_residual(
+            residual_ax,
+            wavelength,
+            residual,
+            error=residual_error,
+            color=residual_color,
+            xlim=xlim,
+            ylim=residual_ylim,
+            x_label=x_label,
+            y_label=residual_label,
+        )
     if save is not None:
         fig.savefig(save, dpi=200, bbox_inches="tight")
     return fig

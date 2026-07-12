@@ -16,6 +16,7 @@ from noobfriend.inference.spectrum.data.arrays import (
 )
 from noobfriend.inference.spectrum.data.axis import _normalize_axis
 from noobfriend.inference.spectrum.data.collapse import _collapse_to_1d
+from noobfriend.inference.spectrum.data.source2d import Spectrum2DSource
 from noobfriend.inference.spectrum.data.types import DispersionAxis, NoiseSource
 from noobfriend.inference.spectrum.types import WaveUnit
 
@@ -44,6 +45,7 @@ class NoobSpectrum:
     unit: WaveUnit = field(default="angstrom", kw_only=True)
     resolving_power: float | None = field(default=None, kw_only=True)
     mask_excluded: ArrayLike | None = field(default=None, kw_only=True)
+    source_2d: Spectrum2DSource | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
         """Validate and normalize spectrum arrays and metadata."""
@@ -52,6 +54,10 @@ class NoobSpectrum:
         resolving_power = _normalize_resolving_power(self.resolving_power)
         axis = _normalize_axis(obs=self.obs, rest=self.rest, z=z)
         arrays = _normalize_arrays(axis.obs, self.flux, self.error, self.mask_excluded)
+        if self.source_2d is not None and self.source_2d.flux.shape[1] != arrays.wavelength.size:
+            raise ValueError(
+                "source_2d wavelength extent must match the prepared 1-D spectrum."
+            )
 
         object.__setattr__(self, "flux", arrays.flux)
         object.__setattr__(self, "error", arrays.error)
@@ -81,7 +87,7 @@ class NoobSpectrum:
         source_mask: ArrayLike | None = None,
         max_lag: int = 8,
     ) -> NoobSpectrum:
-        """Collapse a 2-D spectrum into prepared 1-D data."""
+        """Collapse 2-D data and retain its canonical source for visualization."""
         parsed_z = _normalize_redshift(z)
         axis = _normalize_axis(obs=obs, rest=rest, z=parsed_z)
         wl, fl, er = _collapse_to_1d(
@@ -95,6 +101,16 @@ class NoobSpectrum:
             source_mask=source_mask,
             max_lag=max_lag,
         )
+        from noobfriend.inference.spectrum.data.source2d import (
+            build_spectrum_2d_source,
+        )
+
+        source_2d = build_spectrum_2d_source(
+            np.asarray(flux, dtype=float),
+            np.asarray(error, dtype=float),
+            collapse_window=collapse_window,
+            dispersion=dispersion,
+        )
         return cls(
             fl,
             er,
@@ -104,6 +120,7 @@ class NoobSpectrum:
             unit=unit,
             resolving_power=resolving_power,
             mask_excluded=mask_excluded,
+            source_2d=source_2d,
         )
 
     @property

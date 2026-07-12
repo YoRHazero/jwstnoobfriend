@@ -49,6 +49,16 @@ def test_prepare_mapping_uses_manual_ids() -> None:
     assert workspace.handles[1].observed_wavelength == pytest.approx(broad.observed_wavelength)
 
 
+def test_prepare_reserves_continuum_component_id() -> None:
+    line = NoobLine("line", rest=5008.24, z=7.0)
+    auto = NoobLine("continuum", rest=5008.24, z=7.0)
+
+    with pytest.raises(ValueError, match="reserved"):
+        _spectrum().prepare({"continuum": line})
+    with pytest.raises(ValueError, match="reserved"):
+        _spectrum().prepare([auto])
+
+
 def test_prepare_auto_ids_use_contribution_only_when_needed() -> None:
     emission = NoobLine("Ha", rest=6564.61, z=5.1)
     absorption = NoobLine("Ha", rest=6564.61, z=5.1, contribution="absorption")
