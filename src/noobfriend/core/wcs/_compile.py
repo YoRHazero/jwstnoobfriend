@@ -25,7 +25,7 @@ Bounding boxes and units are deliberately out of scope: programs are pure
 callables (which never apply gwcs bounding boxes).
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -496,6 +496,78 @@ def _tpoly_spec(entry: Any) -> dict[str, Any]:
             f"Grism spatial coefficient models mix degrees {sorted(degrees)}."
         )
     return {"kind": "spatial", "degree": degrees.pop(), "coeffs": coeffs}
+
+
+def _tpoly_eval(spec: dict[str, Any], x0: float, y0: float, t: float) -> float:
+    """Evaluate a :func:`_tpoly_spec` trace polynomial at ``(x0, y0, t)``."""
+    if spec["kind"] == "t":
+        return float(sum(c * t**k for k, c in enumerate(spec["coeffs"])))
+    n = int(spec["degree"]) + 1
+    value = 0.0
+    for k, dense in enumerate(spec["coeffs"]):
+        coeff = sum(
+            dense[i * n + j] * x0**i * y0**j for i in range(n) for j in range(n)
+        )
+        value += coeff * t**k
+    return float(value)
+
+
+def grism_wavelength_model(
+    spec: dict[str, Any], order: int
+) -> "Callable[[float, float, float], float] | None":
+    """Return ``lambda(x0, y0, t)`` for one order of a compiled WFSS spec.
+
+    The compiled grism dispersion ops carry the wavelength trace polynomials
+    (``lmodels``) verbatim in their spec, so a compiled
+    :class:`~noobfriend.core.wcs.NoobWCS` supports the same wavelength-domain
+    introspection as the raw gwcs model tree. This searches the stage programs
+    of a :meth:`~noobfriend.core.wcs.NoobWCS.to_spec` dict for a grism
+    dispersion op and wraps the requested order's wavelength polynomial.
+
+    Parameters
+    ----------
+    spec : dict
+        A :meth:`~noobfriend.core.wcs.NoobWCS.to_spec` dictionary.
+    order : int
+        Spectral order whose wavelength polynomial to return.
+
+    Returns
+    -------
+    Callable or None
+        ``wavelength(x0, y0, t)`` in the dispersion model's native unit
+        (microns for JWST), with ``(x0, y0)`` the undispersed detector
+        position and ``t`` the trace parameter; ``None`` when the spec has no
+        grism dispersion op.
+
+    Raises
+    ------
+    ValueError
+        If the spec has a grism dispersion op but ``order`` is not among its
+        fitted orders.
+    """
+    for stage in spec["stages"]:
+        for leg in ("forward", "backward"):
+            program = stage.get(leg)
+            if program is None:
+                continue
+            for op in program["ops"]:
+                if op["op"] not in ("grism_forward", "grism_backward"):
+                    continue
+                orders = [int(entry) for entry in op["orders"]]
+                if order not in orders:
+                    raise ValueError(
+                        f"Spectral order {order} not present in dispersion "
+                        f"model (available orders: {orders})."
+                    )
+                lmodel = op["lmodels"][orders.index(order)]
+
+                def wavelength(
+                    x0: float, y0: float, t: float, _lmodel: dict[str, Any] = lmodel
+                ) -> float:
+                    return _tpoly_eval(_lmodel, x0, y0, t)
+
+                return wavelength
+    return None
 
 
 def concat_specs(specs: Sequence[Spec]) -> Spec:

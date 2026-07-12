@@ -20,7 +20,7 @@ This module is internal; :func:`read_wavelength_domain` is re-exported from
 from typing import Any
 
 from astropy.modeling import Model
-from noobfriend.core.wcs import TransformWCS
+from noobfriend.core.wcs import TransformWCS, grism_wavelength_model
 
 from noobfriend.extraction._wcs import world_detector_transforms
 
@@ -120,6 +120,18 @@ def read_wavelength_domain(
     """
     world_to_detector, _ = world_detector_transforms(wcs)
     x0, y0 = world_to_detector(ra, dec)
+    x0, y0 = float(x0), float(y0)
+
+    to_spec = getattr(wcs, "to_spec", None)
+    if to_spec is not None:  # a compiled NoobWCS: read the op spec directly
+        wavelength = grism_wavelength_model(to_spec(), order)
+        if wavelength is None:
+            raise NotImplementedError(
+                "Unrecognised grism dispersion model; supply the wavelength "
+                "range explicitly."
+            )
+        t_lo, t_hi = t_range
+        return tuple(sorted((wavelength(x0, y0, t_lo), wavelength(x0, y0, t_hi))))
 
     transform = wcs.get_transform("detector", "grism_detector")
     model = _find_dispersion_model(transform, "NIRCAMBackwardGrismDispersion")

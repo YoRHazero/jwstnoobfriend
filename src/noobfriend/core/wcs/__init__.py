@@ -11,6 +11,7 @@ from ._compile import (
     compile_fits_tan,
     compile_transform,
     concat_specs,
+    grism_wavelength_model,
 )
 from ._correction import TangentCorrection, apply_correction_to_gwcs
 from ._noobwcs import NoobWCS, from_fits_wcs, from_gwcs
@@ -27,4 +28,5 @@ __all__ = [
     "concat_specs",
     "from_fits_wcs",
     "from_gwcs",
+    "grism_wavelength_model",
 ]
