@@ -123,3 +123,46 @@ class TestSubset:
         store.close()  # parent's files removed
         assert [c.data[0, 0] for c in sub] == [1.0, 3.0, 5.0]  # sub unaffected
         sub.close()
+
+
+class TestView:
+    """view() is a lazy, order-preserving, composable read-through of the parent."""
+
+    def _store(self, n: int = 6) -> CutoutStore:
+        store = CutoutStore(5)
+        for i in range(n):
+            store.append(_cutout(val=float(i), origin=(i, 0)))
+        return store
+
+    def test_view_in_order_and_lazy(self) -> None:
+        store = self._store()
+        view = store.view([0, 2, 4])
+        assert len(view) == 3
+        assert [c.data[0, 0] for c in view] == [0.0, 2.0, 4.0]
+        assert view[-1].origin == (4, 0)
+        assert view.cutout_size == store.cutout_size
+
+    def test_view_out_of_range_raises(self) -> None:
+        view = self._store(3).view([0, 1])
+        with pytest.raises(IndexError):
+            _ = view[2]
+
+    def test_view_of_view_composes_onto_base(self) -> None:
+        store = self._store()
+        view = store.view([0, 2, 4]).view([2, 0])  # -> base rows 4, 0
+        assert [c.data[0, 0] for c in view] == [4.0, 0.0]
+
+    def test_view_reflects_parent_spill(self, tmp_path) -> None:
+        store = CutoutStore(5, max_in_memory=2, spill_dir=tmp_path)
+        for i in range(6):
+            store.append(_cutout(val=float(i)))
+        view = store.view([1, 3, 5])  # spans sealed chunks + buffer
+        assert [c.data[0, 0] for c in view] == [1.0, 3.0, 5.0]
+        store.close()
+
+    def test_view_save_round_trips(self, tmp_path) -> None:
+        store = self._store()
+        lens = store.view([1, 3, 5]).save(tmp_path / "v", chunk_size=2)
+        assert lens == [2, 1]
+        reloaded = CutoutStore.load(tmp_path / "v", store.cutout_size)
+        assert [c.data[0, 0] for c in reloaded] == [1.0, 3.0, 5.0]

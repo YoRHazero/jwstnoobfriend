@@ -25,7 +25,7 @@ directory and is the default.
 import os
 import tempfile
 import weakref
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,6 +134,120 @@ def _read_chunk(path: Path) -> list[Cutout]:
             )
             for j in range(data.shape[0])
         ]
+
+
+def _stream_save(
+    cutouts: "Iterable[Cutout]",
+    cutout_size: int,
+    directory: str | Path,
+    chunk_size: int,
+) -> list[int]:
+    """Write an iterable of cutouts to ``directory`` as append-only ``.npz`` chunks.
+
+    Shared by :meth:`CutoutStore.save` and :meth:`_CutoutView.save`: it streams
+    the cutouts (at most one chunk resident) into ``chunk_000000.npz`` ... files
+    using the same atomic writer as the live spill, so the source's own memory or
+    view state is irrelevant. Returns the per-chunk cutout counts, in order.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    size = max(1, int(chunk_size))
+    lens: list[int] = []
+    buffer: list[Cutout] = []
+    for cut in cutouts:
+        buffer.append(cut)
+        if len(buffer) >= size:
+            _write_chunk(directory / f"chunk_{len(lens):06d}.npz", buffer, cutout_size)
+            lens.append(len(buffer))
+            buffer = []
+    if buffer:
+        _write_chunk(directory / f"chunk_{len(lens):06d}.npz", buffer, cutout_size)
+        lens.append(len(buffer))
+    return lens
+
+
+class _CutoutView:
+    """A lazy, read-only view of a :class:`CutoutStore` over a set of row indices.
+
+    A view holds no cutout data of its own -- every read passes through to the
+    parent store -- so producing one is ``O(#rows)`` in memory and defers all
+    cutout IO to build time. This is what makes
+    :meth:`~noobfriend.extraction.psf.SourceExtractor.select` cheap and
+    chainable: filtering, counting, and the panel never touch the cutouts, and
+    only :meth:`~..SourceExtractor.build_psf_core` / ``build_psf_wings`` pay to
+    read the selected stamps. Views compose -- a view over a view flattens onto
+    the base store, so chained selects never nest.
+
+    Unlike :meth:`CutoutStore.subset` (which copies into an independent store), a
+    view stays bound to its parent: it must not outlive the parent's cutouts.
+    :meth:`close` is therefore a no-op -- a view owns nothing to clean up.
+
+    Parameters
+    ----------
+    parent : CutoutStore or _CutoutView
+        The store (or view) to read through; a view parent is flattened onto its
+        own base store.
+    indices : sequence of int
+        Row indices into ``parent`` selected by this view, in order.
+    """
+
+    def __init__(self, parent: "CutoutStore | _CutoutView", indices: Sequence[int]):
+        """See the class docstring for parameters."""
+        idx = np.asarray(indices, dtype=np.int64)
+        if isinstance(parent, _CutoutView):
+            self._parent: CutoutStore = parent._parent
+            self._indices = parent._indices[idx]  # compose onto the base store
+        else:
+            self._parent = parent
+            self._indices = idx
+        self.cutout_size = self._parent.cutout_size
+
+    def __len__(self) -> int:
+        """Return the number of cutouts in the view."""
+        return int(self._indices.size)
+
+    def __getitem__(self, key: int | slice) -> "Cutout | list[Cutout]":
+        """Return the cutout at a view index (or a list for a slice)."""
+        if isinstance(key, slice):
+            return [self[i] for i in range(*key.indices(len(self)))]
+        i = int(key) + len(self) if key < 0 else int(key)
+        if not 0 <= i < len(self):
+            raise IndexError(f"cutout index {key} out of range (len {len(self)}).")
+        return self._parent[int(self._indices[i])]
+
+    def __iter__(self) -> Iterator[Cutout]:
+        """Iterate the viewed cutouts in order (in-order reads keep chunks warm)."""
+        for i in self._indices:
+            yield self._parent[int(i)]  # type: ignore[misc]
+
+    def subset(self, indices: Sequence[int]) -> "_CutoutView":
+        """Return a further lazy view (composed onto the same base store)."""
+        return _CutoutView(self, indices)
+
+    def view(self, indices: Sequence[int]) -> "_CutoutView":
+        """Alias of :meth:`subset`; return a further lazy view."""
+        return _CutoutView(self, indices)
+
+    def save(
+        self, directory: str | Path, *, chunk_size: int | None = None
+    ) -> list[int]:
+        """Materialise the viewed cutouts to ``directory`` as ``.npz`` chunks."""
+        return _stream_save(
+            self,
+            self.cutout_size,
+            directory,
+            _DEFAULT_CHUNK if chunk_size is None else chunk_size,
+        )
+
+    def close(self) -> None:
+        """No-op: a view owns nothing (the parent owns the cutouts)."""
+
+    def __enter__(self) -> "_CutoutView":
+        """Enter a context (a view has nothing to clean up on exit)."""
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        """Exit the context; a view owns nothing to release."""
 
 
 class CutoutStore:
@@ -253,7 +367,10 @@ class CutoutStore:
         The new store inherits this store's spill configuration (so a large
         subset spills too) but owns its own directory and files -- closing or
         finalising either store never affects the other. Ascending ``indices``
-        (as produced by a boolean selection) touch each chunk once.
+        (as produced by a boolean selection) touch each chunk once. Prefer
+        :meth:`view` unless the subset must survive this store being closed:
+        ``subset`` eagerly reads and copies every selected cutout, while a view
+        defers reads to build time.
         """
         sub = CutoutStore(
             self.cutout_size,
@@ -263,6 +380,16 @@ class CutoutStore:
         for index in indices:
             sub.append(self[index])  # type: ignore[arg-type]
         return sub
+
+    def view(self, indices: Sequence[int]) -> "_CutoutView":
+        """Return a lazy, read-only :class:`_CutoutView` of the cutouts at ``indices``.
+
+        Unlike :meth:`subset`, this copies no data and reads nothing now -- the
+        cutouts are fetched from this store on demand -- so it is cheap even for
+        a large selection. The view stays bound to this store and must not
+        outlive it (do not :meth:`close` this store while a view is still in use).
+        """
+        return _CutoutView(self, indices)
 
     # -- persistence ----------------------------------------------------------
 
@@ -289,25 +416,12 @@ class CutoutStore:
         list of int
             The number of cutouts in each written chunk, in order.
         """
-        directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        size = max(1, int(chunk_size if chunk_size is not None else self._chunk_size))
-        lens: list[int] = []
-        buffer: list[Cutout] = []
-        for cut in self:
-            buffer.append(cut)
-            if len(buffer) >= size:
-                _write_chunk(
-                    directory / f"chunk_{len(lens):06d}.npz", buffer, self.cutout_size
-                )
-                lens.append(len(buffer))
-                buffer = []
-        if buffer:
-            _write_chunk(
-                directory / f"chunk_{len(lens):06d}.npz", buffer, self.cutout_size
-            )
-            lens.append(len(buffer))
-        return lens
+        return _stream_save(
+            self,
+            self.cutout_size,
+            directory,
+            chunk_size if chunk_size is not None else self._chunk_size,
+        )
 
     @classmethod
     def load(
