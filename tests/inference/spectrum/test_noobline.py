@@ -74,7 +74,9 @@ def test_derive_creates_strongly_bound_line() -> None:
 
 def test_derive_can_change_component_contribution_and_profile_at_creation() -> None:
     narrow = NoobLine("Ha", rest=6564.61, z=2.0)
-    broad = narrow.derive(component="broad", contribution="absorption", profile="lorentzian")
+    broad = narrow.derive(
+        component="broad", contribution="absorption", profile="lorentzian"
+    )
 
     assert broad.linename == "Ha"
     assert broad.component == "broad"

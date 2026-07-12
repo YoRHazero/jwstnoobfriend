@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from inspect import signature
-from math import log, pi, sqrt
 
 import numpy as np
 import pytest
@@ -11,7 +10,6 @@ import pytest
 import noobfriend.inference.spectrum as spectrum_api
 import noobfriend.inference.spectrum.workspace as workspace_api
 from noobfriend.inference.spectrum import NoobLine, NoobSpectrum, NoobSpectrumModel
-from noobfriend.inference.spectrum.workspace.compiler import C_KMS
 from noobfriend.inference.spectrum.workspace.mcmc import (
     MCMCComponentPosterior,
     MCMCComponentPrior,
@@ -30,18 +28,9 @@ from noobfriend.inference.spectrum.workspace.mcmc import (
 )
 from noobfriend.inference.spectrum.workspace.mcmc.options import build_mcmc_options
 
+from ._helpers import gaussian
+
 pytest.importorskip("pymc")
-
-
-def _gaussian(
-    wavelength: np.ndarray, *, center: float, flux: float, fwhm_kms: float
-) -> np.ndarray:
-    sigma = center * fwhm_kms / C_KMS / (2.0 * sqrt(2.0 * log(2.0)))
-    return (
-        flux
-        * np.exp(-0.5 * ((wavelength - center) / sigma) ** 2)
-        / (sigma * sqrt(2.0 * pi))
-    )
 
 
 def _workspace():
@@ -53,7 +42,7 @@ def _workspace():
         .center(delta_v_kms=0.0)
     )
     error = np.full_like(wavelength, 0.1)
-    data = 0.5 + _gaussian(wavelength, center=5000.0, flux=8.0, fwhm_kms=180.0)
+    data = 0.5 + gaussian(wavelength, center=5000.0, flux=8.0, fwhm_kms=180.0)
     return NoobSpectrum(data, error, obs=wavelength).prepare(
         [line], continuum_order=0
     ), line

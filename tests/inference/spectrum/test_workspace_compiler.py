@@ -57,9 +57,9 @@ def test_compile_line_graph_resolves_flux_ratio_and_locked_shape_rules() -> None
 
 def test_compile_line_graph_uses_only_noobline_center_rules() -> None:
     emission = NoobLine("OIII5007", rest=5008.24, z=7.0)
-    absorption = NoobLine("OIII5007", rest=5008.24, z=7.0, contribution="absorption").center(
-        delta_v_kms=(-250.0, 250.0)
-    )
+    absorption = NoobLine(
+        "OIII5007", rest=5008.24, z=7.0, contribution="absorption"
+    ).center(delta_v_kms=(-250.0, 250.0))
     workspace = _spectrum().prepare({"em": emission, "abs": absorption})
 
     compiled = compile_line_graph(workspace)
@@ -73,7 +73,11 @@ def test_compile_line_graph_uses_only_noobline_center_rules() -> None:
 
 
 def test_compiler_fixed_template_helpers_follow_rules() -> None:
-    base = NoobLine("OIII5007", rest=5008.24, z=7.0).center(delta_v_kms=50.0).fwhm(override=320.0)
+    base = (
+        NoobLine("OIII5007", rest=5008.24, z=7.0)
+        .center(delta_v_kms=50.0)
+        .fwhm(override=320.0)
+    )
     derived = base.derive("OIII4959", rest=4960.30)
     workspace = _spectrum().prepare({"base": base, "derived": derived})
     compiled = compile_line_graph(workspace)
@@ -88,7 +92,9 @@ def test_compiler_fixed_template_helpers_follow_rules() -> None:
         derived_handle.observed_wavelength * (1.0 + 50.0 / 299792.458)
     )
     assert line_fwhm_kms(base_handle, compiled.handle_by_line) == pytest.approx(320.0)
-    assert line_fwhm_kms(derived_handle, compiled.handle_by_line) == pytest.approx(320.0)
+    assert line_fwhm_kms(derived_handle, compiled.handle_by_line) == pytest.approx(
+        320.0
+    )
 
 
 def test_pack_parameter_specs_returns_optimizer_arrays() -> None:
@@ -96,7 +102,9 @@ def test_pack_parameter_specs_returns_optimizer_arrays() -> None:
     workspace = _spectrum().prepare([line])
     compiled = compile_line_graph(workspace)
 
-    lower, upper, initial, scale = pack_parameter_specs(tuple(compiled.center_sources.values()), tuple(compiled.fwhm_sources.values()))
+    lower, upper, initial, scale = pack_parameter_specs(
+        tuple(compiled.center_sources.values()), tuple(compiled.fwhm_sources.values())
+    )
 
     assert lower.tolist() == pytest.approx([-300.0, 800.0])
     assert upper.tolist() == pytest.approx([300.0, 5000.0])
@@ -109,8 +117,18 @@ def test_profile_template_supports_declared_profiles() -> None:
     center = 5000.0
 
     for profile in ("gaussian", "lorentzian", "exponential"):
-        handle = _local_spectrum().prepare([NoobLine("line", obs=center, profile=profile)]).handles[0]
-        template = profile_template(wavelength, handle=handle, center=center, fwhm_kms=200.0, resolving_power=None)
+        handle = (
+            _local_spectrum()
+            .prepare([NoobLine("line", obs=center, profile=profile)])
+            .handles[0]
+        )
+        template = profile_template(
+            wavelength,
+            handle=handle,
+            center=center,
+            fwhm_kms=200.0,
+            resolving_power=None,
+        )
 
         assert np.all(np.isfinite(template))
         assert np.all(template >= 0.0)
@@ -120,7 +138,17 @@ def test_profile_template_supports_declared_profiles() -> None:
 
 def test_profile_template_rejects_non_gaussian_lsf_convolution() -> None:
     wavelength = np.linspace(4900.0, 5100.0, 4001)
-    handle = _local_spectrum().prepare([NoobLine("line", obs=5000.0, profile="lorentzian")]).handles[0]
+    handle = (
+        _local_spectrum()
+        .prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+        .handles[0]
+    )
 
     with pytest.raises(NotImplementedError, match="gaussian"):
-        profile_template(wavelength, handle=handle, center=5000.0, fwhm_kms=200.0, resolving_power=3000.0)
+        profile_template(
+            wavelength,
+            handle=handle,
+            center=5000.0,
+            fwhm_kms=200.0,
+            resolving_power=3000.0,
+        )

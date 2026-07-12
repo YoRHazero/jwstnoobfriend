@@ -31,7 +31,10 @@ def test_prepare_sequence_assigns_auto_ids_and_handles() -> None:
     assert workspace.handle_for(base).line is base
     assert workspace.roots[0].line is base
     assert len(workspace.derived) == 2
-    assert {(handle.component, handle.contribution, handle.profile) for handle in workspace.handles} == {
+    assert {
+        (handle.component, handle.contribution, handle.profile)
+        for handle in workspace.handles
+    } == {
         ("narrow", "emission", "gaussian"),
         ("broad", "emission", "gaussian"),
         ("broad", "emission", "lorentzian"),
@@ -46,7 +49,9 @@ def test_prepare_mapping_uses_manual_ids() -> None:
 
     assert workspace.id_mode == "manual"
     assert workspace.ids == ("core", "wide")
-    assert workspace.handles[1].observed_wavelength == pytest.approx(broad.observed_wavelength)
+    assert workspace.handles[1].observed_wavelength == pytest.approx(
+        broad.observed_wavelength
+    )
 
 
 def test_prepare_reserves_continuum_component_id() -> None:
@@ -69,7 +74,10 @@ def test_prepare_auto_ids_use_contribution_only_when_needed() -> None:
         obs=np.linspace(39000.0, 41000.0, 100),
     ).prepare([emission, absorption])
 
-    assert workspace.ids == ("Ha.narrow.gaussian.emission", "Ha.narrow.gaussian.absorption")
+    assert workspace.ids == (
+        "Ha.narrow.gaussian.emission",
+        "Ha.narrow.gaussian.absorption",
+    )
     assert workspace.handles[1].contribution == "absorption"
 
 
@@ -77,7 +85,9 @@ def test_prepare_resolves_continuum_options() -> None:
     base = NoobLine("OIII", rest=5008.24, z=7.0)
 
     default = _spectrum().prepare([base])
-    explicit = _spectrum().prepare([base], continuum_order=2, continuum_lambda_0=40000.0)
+    explicit = _spectrum().prepare(
+        [base], continuum_order=2, continuum_lambda_0=40000.0
+    )
 
     assert default.continuum.order == 1
     assert default.continuum.lambda_0 == pytest.approx(base.observed_wavelength)
@@ -91,7 +101,11 @@ def test_workspace_summary_renders_prepared_plan_as_html() -> None:
     base = NoobLine("O&III", rest=5008.24, z=7.0).center(delta_v_kms=(-100.0, 100.0))
     broad = base.derive(component="broad").flux(ratio=0.335)
 
-    html = _spectrum().prepare({"core": base, "wide": broad}, continuum_lambda_0=40000.0).summary()
+    html = (
+        _spectrum()
+        .prepare({"core": base, "wide": broad}, continuum_lambda_0=40000.0)
+        .summary()
+    )
 
     assert html.startswith("<section")
     assert "NoobFitWorkspace" in html

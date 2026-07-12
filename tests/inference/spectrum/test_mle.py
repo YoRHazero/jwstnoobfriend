@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from inspect import Parameter, signature
-from math import log, pi, sqrt
+from math import log
 
 import numpy as np
 import pytest
@@ -12,29 +12,15 @@ import noobfriend.inference.spectrum as spectrum_api
 import noobfriend.inference.spectrum.workspace as workspace_api
 from noobfriend.inference.spectrum import NoobLine, NoobSpectrum
 from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
-from noobfriend.inference.spectrum.workspace.compiler import C_KMS
-from noobfriend.inference.spectrum.workspace.mle import MLEFitResult, MLELineResult, MLESolution
+from noobfriend.inference.spectrum.workspace.mle import (
+    MLEFitResult,
+    MLELineResult,
+    MLESolution,
+)
 from noobfriend.inference.spectrum.workspace.mle.fit import fit_workspace_mle
 from noobfriend.inference.spectrum.workspace.mle.options import build_mle_options
 
-
-def _gaussian(
-    wavelength: np.ndarray,
-    *,
-    center: float,
-    flux: float,
-    fwhm_kms: float,
-    delta_v_kms: float = 0.0,
-    resolving_power: float | None = None,
-) -> np.ndarray:
-    shifted_center = center * (1.0 + delta_v_kms / C_KMS)
-    effective_fwhm = fwhm_kms
-    if resolving_power is not None:
-        effective_fwhm = sqrt(fwhm_kms**2 + (C_KMS / resolving_power) ** 2)
-    fwhm_wavelength = shifted_center * effective_fwhm / C_KMS
-    sigma = fwhm_wavelength / (2.0 * sqrt(2.0 * log(2.0)))
-    template = np.exp(-0.5 * ((wavelength - shifted_center) / sigma) ** 2) / (sigma * sqrt(2.0 * pi))
-    return flux * template
+from ._helpers import gaussian
 
 
 def test_workspace_mle_is_the_only_default_value_source() -> None:
@@ -69,10 +55,14 @@ def test_workspace_mle_recovers_one_free_gaussian_line() -> None:
     wavelength = np.linspace(6500.0, 6630.0, 261)
     line = NoobLine("Ha", obs=6564.61)
     continuum = 1.7e-17 + 2.0e-20 * (wavelength - 6564.61)
-    signal = _gaussian(wavelength, center=6564.61, flux=3.2e-15, fwhm_kms=240.0, delta_v_kms=35.0)
+    signal = gaussian(
+        wavelength, center=6564.61, flux=3.2e-15, fwhm_kms=240.0, delta_v_kms=35.0
+    )
     error = np.full_like(wavelength, 1.0e-18)
     noise = np.random.default_rng(4).normal(0.0, error)
-    workspace = NoobSpectrum(continuum + signal + noise, error, obs=wavelength).prepare([line])
+    workspace = NoobSpectrum(continuum + signal + noise, error, obs=wavelength).prepare(
+        [line]
+    )
 
     result = workspace.mle()
     fitted = result.solution.for_line(line)
@@ -87,7 +77,9 @@ def test_workspace_mle_recovers_one_free_gaussian_line() -> None:
     assert result.random_seed == 1729
     assert not hasattr(result, "selected_solution")
     assert result.solution.aic == pytest.approx(result.solution.chi2 + 2.0 * 5)
-    assert result.solution.bic == pytest.approx(result.solution.chi2 + 5.0 * log(wavelength.size))
+    assert result.solution.bic == pytest.approx(
+        result.solution.chi2 + 5.0 * log(wavelength.size)
+    )
     assert fitted.flux == pytest.approx(3.2e-15, rel=0.05)
     assert fitted.fwhm == pytest.approx(240.0, rel=0.08)
     assert fitted.delta_v_kms == pytest.approx(35.0, abs=8.0)
@@ -142,9 +134,11 @@ def test_workspace_mle_accepts_sequence_options_and_records_normalized_values() 
     wavelength = np.linspace(6530.0, 6600.0, 141)
     absorption = NoobLine("Ha", obs=6564.61, contribution="absorption")
     continuum = np.full_like(wavelength, 2.0e-17)
-    signal = _gaussian(wavelength, center=6564.61, flux=1.0e-15, fwhm_kms=180.0)
+    signal = gaussian(wavelength, center=6564.61, flux=1.0e-15, fwhm_kms=180.0)
     error = np.full_like(wavelength, 1.0e-18)
-    workspace = NoobSpectrum(continuum - signal, error, obs=wavelength).prepare([absorption])
+    workspace = NoobSpectrum(continuum - signal, error, obs=wavelength).prepare(
+        [absorption]
+    )
 
     result = workspace.mle(
         absorption_bound_multipliers=[2.0, 0.5],
@@ -171,13 +165,25 @@ def test_workspace_mle_accepts_sequence_options_and_records_normalized_values() 
 
 def test_workspace_mle_keeps_fixed_and_ratio_rules() -> None:
     wavelength = np.linspace(4920.0, 5040.0, 241)
-    base = NoobLine("OIII5007", obs=5008.24).center(delta_v_kms=20.0).fwhm(override=280.0)
+    base = (
+        NoobLine("OIII5007", obs=5008.24).center(delta_v_kms=20.0).fwhm(override=280.0)
+    )
     derived = base.derive("OIII4959", obs=4960.30).flux(ratio=0.335)
     continuum = np.full_like(wavelength, 2.0e-17)
-    signal = _gaussian(wavelength, center=5008.24, flux=2.5e-15, fwhm_kms=280.0, delta_v_kms=20.0)
-    signal += _gaussian(wavelength, center=4960.30, flux=0.335 * 2.5e-15, fwhm_kms=280.0, delta_v_kms=20.0)
+    signal = gaussian(
+        wavelength, center=5008.24, flux=2.5e-15, fwhm_kms=280.0, delta_v_kms=20.0
+    )
+    signal += gaussian(
+        wavelength,
+        center=4960.30,
+        flux=0.335 * 2.5e-15,
+        fwhm_kms=280.0,
+        delta_v_kms=20.0,
+    )
     error = np.full_like(wavelength, 1.0e-18)
-    workspace = NoobSpectrum(continuum + signal, error, obs=wavelength).prepare([base, derived])
+    workspace = NoobSpectrum(continuum + signal, error, obs=wavelength).prepare(
+        [base, derived]
+    )
 
     result = workspace.mle()
     base_fit = result.solution.for_line(base)
@@ -196,9 +202,11 @@ def test_workspace_mle_preserves_explicit_absorption_flux_bounds() -> None:
         override=(0.0, 1.5e-15)
     )
     continuum = np.full_like(wavelength, 2.0e-17)
-    signal = _gaussian(wavelength, center=6564.61, flux=1.0e-15, fwhm_kms=180.0)
+    signal = gaussian(wavelength, center=6564.61, flux=1.0e-15, fwhm_kms=180.0)
     error = np.full_like(wavelength, 1.0e-18)
-    workspace = NoobSpectrum(continuum - signal, error, obs=wavelength).prepare([absorption])
+    workspace = NoobSpectrum(continuum - signal, error, obs=wavelength).prepare(
+        [absorption]
+    )
 
     result = workspace.mle()
     fitted = result.solution.for_line(absorption)
@@ -216,21 +224,21 @@ def test_workspace_mle_fits_halpha_nii_broad_and_close_absorption() -> None:
     nii6583_center = 6585.27 * (1.0 + z)
     nii6548_center = 6549.86 * (1.0 + z)
     continuum = 3.0e-19 + 1.5e-22 * (wavelength - ha_center)
-    signal = _gaussian(
+    signal = gaussian(
         wavelength,
         center=ha_center,
         flux=6.5e-17,
         fwhm_kms=320.0,
         resolving_power=resolving_power,
     )
-    signal += _gaussian(
+    signal += gaussian(
         wavelength,
         center=ha_center,
         flux=8.8e-17,
         fwhm_kms=1600.0,
         resolving_power=resolving_power,
     )
-    signal -= _gaussian(
+    signal -= gaussian(
         wavelength,
         center=ha_center,
         flux=2.8e-17,
@@ -238,14 +246,14 @@ def test_workspace_mle_fits_halpha_nii_broad_and_close_absorption() -> None:
         delta_v_kms=-10.0,
         resolving_power=resolving_power,
     )
-    signal += _gaussian(
+    signal += gaussian(
         wavelength,
         center=nii6583_center,
         flux=4.8e-17,
         fwhm_kms=260.0,
         resolving_power=resolving_power,
     )
-    signal += _gaussian(
+    signal += gaussian(
         wavelength,
         center=nii6548_center,
         flux=0.335 * 4.8e-17,
@@ -285,7 +293,13 @@ def test_workspace_mle_fits_halpha_nii_broad_and_close_absorption() -> None:
     assert solution.for_line(ha_broad).flux == pytest.approx(8.8e-17, rel=0.7)
     assert solution.for_line(ha_absorption).flux == pytest.approx(2.8e-17, rel=0.8)
     assert abs(solution.for_line(ha_narrow).delta_v_kms) < 50.0
-    assert abs(solution.for_line(nii6583).delta_v_kms - solution.for_line(ha_narrow).delta_v_kms) < 1e-8
+    assert (
+        abs(
+            solution.for_line(nii6583).delta_v_kms
+            - solution.for_line(ha_narrow).delta_v_kms
+        )
+        < 1e-8
+    )
 
     no_refinement = workspace.mle(
         absorption_bound_multipliers=(1.0,),

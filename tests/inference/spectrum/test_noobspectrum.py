@@ -14,7 +14,15 @@ def test_spectrum_prepares_1d_arrays_and_valid_mask() -> None:
     error = np.array([1.0, 1.0, 0.0, 2.0])
     mask = np.array([False, False, False, True])
 
-    spectrum = NoobSpectrum(flux, error, obs=obs, unit="um", z=7.0, resolving_power=1000.0, mask_excluded=mask)
+    spectrum = NoobSpectrum(
+        flux,
+        error,
+        obs=obs,
+        unit="um",
+        z=7.0,
+        resolving_power=1000.0,
+        mask_excluded=mask,
+    )
 
     assert spectrum.unit == "um"
     assert spectrum.z == 7.0
@@ -119,16 +127,27 @@ def test_spectrum_from_2d_validates_geometry_and_noise_contract() -> None:
     error = np.full((4, 5), 0.2)
 
     with pytest.raises(ValueError, match="dispersion"):
-        NoobSpectrum.from_2d(flux, error, obs=wavelength, collapse_window=(1, 3), dispersion="diagonal")  # type: ignore[arg-type]
+        NoobSpectrum.from_2d(
+            flux, error, obs=wavelength, collapse_window=(1, 3), dispersion="diagonal"
+        )  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="obs length"):
-        NoobSpectrum.from_2d(flux, error, obs=np.linspace(1.0, 2.0, 4), collapse_window=(1, 3))
+        NoobSpectrum.from_2d(
+            flux, error, obs=np.linspace(1.0, 2.0, 4), collapse_window=(1, 3)
+        )
 
     with pytest.raises(ValueError, match="out of range"):
         NoobSpectrum.from_2d(flux, error, obs=wavelength, collapse_window=(3, 5))
 
     with pytest.raises(ValueError, match="only used"):
-        NoobSpectrum.from_2d(flux, error, obs=wavelength, collapse_window=(1, 3), noise="continuum", error_boost=2.0)
+        NoobSpectrum.from_2d(
+            flux,
+            error,
+            obs=wavelength,
+            collapse_window=(1, 3),
+            noise="continuum",
+            error_boost=2.0,
+        )
 
 
 def test_spectrum_calibrate_error_rescales_underquoted_errors() -> None:
