@@ -119,3 +119,49 @@ def test_component_color_overrides_use_public_component_ids() -> None:
     assert colors["Ha.broad"] == "pink"
     with pytest.raises(KeyError, match="valid components"):
         resolve_component_colors(("Ha.narrow",), {"missing": "red"})
+
+
+def test_prediction_view_changes_components_but_not_total() -> None:
+    pytest.importorskip("pymc")
+    from noobfriend.inference.spectrum import NoobLine, NoobSpectrum
+    from noobfriend.inference.spectrum.line import kernels
+    from noobfriend.inference.spectrum.visualization.prediction import (
+        build_mcmc_prediction,
+    )
+
+    wavelength = np.linspace(4980.0, 5020.0, 81)
+    line = (
+        NoobLine("b", obs=5000.0, component="broad")
+        .fwhm(override=(800.0, 3000.0))
+        .convolve(kernels.laplace, fwhm=(400.0, 4000.0))
+    )
+    data = 0.1 + 5.0 * np.exp(-0.5 * ((wavelength - 5000.0) / 8.0) ** 2)
+    spectrum = NoobSpectrum(data, np.full_like(wavelength, 0.05), obs=wavelength)
+    result = (
+        spectrum.prepare([line], continuum_order=0)
+        .model()
+        .sample(draws=40, tune=60, chains=2, cores=1, progressbar=False)
+    )
+
+    kwargs = dict(
+        hdi_probability=0.9, posterior_draws=20, random_seed=1, model_oversample=2
+    )
+    observed = build_mcmc_prediction(result, view="observed", **kwargs)
+    intrinsic = build_mcmc_prediction(result, view="intrinsic", **kwargs)
+
+    assert np.allclose(observed.total.value, intrinsic.total.value)
+    continuum = observed.continuum.value
+    peak_observed = float(np.max(observed.components["b"].value - continuum))
+    peak_intrinsic = float(np.max(intrinsic.components["b"].value - continuum))
+    assert peak_intrinsic > peak_observed
+
+    with pytest.raises(ValueError, match="view must be"):
+        build_mcmc_prediction(result, view="bogus", **kwargs)
+
+    figure = result.plot(posterior_draws=20, view="intrinsic", size=400)
+    axis = figure.axes[0]
+    labels = {line.get_label() for line in axis.get_lines()}
+    assert "b (intrinsic)" in labels
+    import matplotlib.pyplot as plt
+
+    plt.close(figure)

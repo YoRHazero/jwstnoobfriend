@@ -10,6 +10,7 @@ from numpy.typing import ArrayLike
 
 from noobfriend.core.display.plot import ModelSpec, plot_spectrum1d, plot_spectrum2d
 from noobfriend.inference.spectrum.visualization.prediction import (
+    ModelView,
     FitPrediction,
     build_mcmc_prediction,
     build_mle_prediction,
@@ -119,15 +120,32 @@ def plot_mcmc_fit(
     size: int = 1000,
     title: str | None = None,
     legend_location: str = "best",
+    view: ModelView = "observed",
 ) -> Figure:
-    """Plot posterior model summaries with a pointwise total-model HDI."""
+    """Plot posterior model summaries with a pointwise total-model HDI.
+
+    ``view`` controls the per-component curves only (``"observed"``,
+    ``"emergent"``, or ``"intrinsic"``); the total model, its HDI band, and
+    the residual panel are always evaluated in the observed view.
+    """
     prediction = build_mcmc_prediction(
         result,
         hdi_probability=hdi_probability,
         posterior_draws=posterior_draws,
         random_seed=random_seed,
         model_oversample=model_oversample,
+        view=view,
     )
+    if view != "observed":
+        prediction = FitPrediction(
+            wavelength=prediction.wavelength,
+            continuum=prediction.continuum,
+            components={
+                f"{name} ({view})": curve
+                for name, curve in prediction.components.items()
+            },
+            total=prediction.total,
+        )
     return _plot_fit_prediction(
         prediction,
         spectrum=result.inputs.data,

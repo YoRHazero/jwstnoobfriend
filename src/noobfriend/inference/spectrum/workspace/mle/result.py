@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 from math import log
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+
+from noobfriend.inference.spectrum.workspace.compiler import evaluate_expression
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -24,7 +26,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class MLELineResult:
-    """Fitted physical quantities and signed model for one workspace line."""
+    """Fitted physical quantities and signed model for one workspace line.
+
+    ``shapes`` holds the fitted values of extra named shape parameters
+    (convolution-kernel widths and fractions), keyed like the posterior
+    surface (e.g. ``"laplace__fwhm"``); empty for kernel-free lines.
+    """
 
     handle: LineHandle
     flux: float
@@ -32,6 +39,7 @@ class MLELineResult:
     center: float
     delta_v_kms: float
     model_flux: np.ndarray
+    shapes: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,8 +165,14 @@ class MLEFitResult:
             for line in self.solution.lines
         )
         refinement = "yes" if self.refinement_applied else "no"
-        threshold = "None" if self.cancellation_threshold is None else f"{self.cancellation_threshold:.8g}"
-        multipliers = ", ".join(f"{value:.8g}" for value in self.absorption_bound_multipliers)
+        threshold = (
+            "None"
+            if self.cancellation_threshold is None
+            else f"{self.cancellation_threshold:.8g}"
+        )
+        multipliers = ", ".join(
+            f"{value:.8g}" for value in self.absorption_bound_multipliers
+        )
         return f"""<section class="noob-mle-summary">
   <h2>Maximum-likelihood fit</h2>
   <p>
@@ -211,6 +225,8 @@ def build_solution(
         spectrum.flux[spectrum.valid_mask] - evaluation.model[spectrum.valid_mask]
     ) / spectrum.error[spectrum.valid_mask]
 
+    shape_values = candidate.problem.shape_values(candidate.physical)
+    graph = candidate.problem.graph
     lines = tuple(
         MLELineResult(
             handle=handle,
@@ -219,6 +235,13 @@ def build_solution(
             center=center,
             delta_v_kms=velocity,
             model_flux=_readonly(model),
+            shapes={
+                name: evaluate_expression(
+                    graph.shape_expressions[handle.index][name], shape_values[name]
+                )
+                for kernel in handle.line.kernels
+                for name in kernel.shape_names()
+            },
         )
         for handle, flux, fwhm, center, velocity, model in zip(
             workspace.handles,

@@ -15,7 +15,9 @@ _ANGSTROM_PER_UNIT = {
 }
 
 
-def convert_wavelength(value: float, *, from_unit: WaveUnit, to_unit: WaveUnit) -> float:
+def convert_wavelength(
+    value: float, *, from_unit: WaveUnit, to_unit: WaveUnit
+) -> float:
     """Convert a wavelength between supported units."""
     _check_unit(from_unit)
     _check_unit(to_unit)
@@ -24,7 +26,10 @@ def convert_wavelength(value: float, *, from_unit: WaveUnit, to_unit: WaveUnit) 
 
 def _check_unit(unit: WaveUnit) -> None:
     if unit not in VALID_WAVE_UNITS:
-        raise ValueError(f"unit {unit!r} must be one of {tuple(sorted(VALID_WAVE_UNITS))}.")
+        raise ValueError(
+            f"unit {unit!r} must be one of {tuple(sorted(VALID_WAVE_UNITS))}."
+        )
+
 
 __all__ = [
     "WaveUnit",

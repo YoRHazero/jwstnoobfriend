@@ -12,11 +12,15 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from noobfriend.inference.spectrum.workspace.compiler import (
+    BASE_SHAPE,
     C_KMS,
     contribution_sign,
     evaluate_expression,
     flux_bounds,
     profile_template,
+)
+from noobfriend.inference.spectrum.workspace.compiler.expressions import (
+    line_kernels_kms,
 )
 from noobfriend.inference.spectrum.workspace.mcmc.posterior import CONTINUUM_COMPONENT
 
@@ -229,15 +233,15 @@ def build_flux_source_priors(
         for source_id, spec in graph.fwhm_sources.items()
     }
     templates = {source_id: np.zeros_like(wavelength) for source_id in source_ids}
-    for handle, flux_expression, center_expression, fwhm_expression in zip(
+    for handle, flux_expression, center_expression, shapes in zip(
         workspace.handles,
         graph.flux_expressions,
         graph.center_expressions,
-        graph.fwhm_expressions,
+        graph.shape_expressions,
         strict=True,
     ):
         velocity = evaluate_expression(center_expression, center_values)
-        fwhm = evaluate_expression(fwhm_expression, fwhm_values)
+        fwhm = evaluate_expression(shapes[BASE_SHAPE], fwhm_values)
         center = handle.observed_wavelength * (1.0 + velocity / C_KMS)
         template = contribution_sign(handle) * profile_template(
             wavelength,
@@ -245,6 +249,7 @@ def build_flux_source_priors(
             center=center,
             fwhm_kms=fwhm,
             resolving_power=workspace.spectrum.resolving_power,
+            kernels=line_kernels_kms(handle, shapes),
         )
         for source_id, coefficient in flux_expression.terms.items():
             templates[source_id] += coefficient * template
@@ -294,20 +299,21 @@ def build_translated_priors(
     """Translate declarations into line and continuum physical prior metadata."""
     flux_by_source = {prior.source_id: prior for prior in flux_sources}
     components: dict[str, MCMCComponentPrior] = {}
-    for handle, center_expression, fwhm_expression in zip(
+    for handle, center_expression, shapes in zip(
         workspace.handles,
         graph.center_expressions,
-        graph.fwhm_expressions,
+        graph.shape_expressions,
         strict=True,
     ):
-        components[handle.id] = MCMCComponentPrior(
-            name=handle.id,
-            _values={
-                "flux": _line_flux_prior(handle, graph, flux_by_source),
-                "fwhm": _line_fwhm_prior(handle, graph, fwhm_expression),
-                "center": _line_center_prior(handle, graph, center_expression),
-            },
-        )
+        values = {
+            "flux": _line_flux_prior(handle, graph, flux_by_source),
+            "fwhm": _line_fwhm_prior(handle, graph, shapes[BASE_SHAPE]),
+            "center": _line_center_prior(handle, graph, center_expression),
+        }
+        for kernel in handle.line.kernels:
+            for name in kernel.shape_names():
+                values[name] = _kernel_shape_prior(name, shapes[name])
+        components[handle.id] = MCMCComponentPrior(name=handle.id, _values=values)
     components[CONTINUUM_COMPONENT] = MCMCComponentPrior(
         name=CONTINUUM_COMPONENT,
         _values={
@@ -390,3 +396,15 @@ def _line_center_prior(
         handle.observed_wavelength * (1.0 + spec.upper / C_KMS),
     )
     return MCMCParameterPrior(name="center", family="uniform", bounds=bounds)
+
+
+def _kernel_shape_prior(
+    name: str, expression: ParameterExpression
+) -> MCMCParameterPrior:
+    """Translate one kernel shape expression into prior metadata."""
+    if not expression.terms:
+        return MCMCParameterPrior(name=name, family="fixed", value=expression.fixed)
+    spec = next(iter(expression.specs.values()))
+    return MCMCParameterPrior(
+        name=name, family="loguniform", bounds=(spec.lower, spec.upper)
+    )

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from noobfriend.inference.spectrum.line import ComponentName, ContributionName, NoobLine, ProfileName
+from noobfriend.inference.spectrum.line import (
+    ComponentName,
+    ContributionName,
+    NoobLine,
+    ProfileName,
+)
 
 
 @dataclass(frozen=True, slots=True)

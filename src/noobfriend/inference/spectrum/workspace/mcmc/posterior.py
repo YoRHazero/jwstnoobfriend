@@ -180,14 +180,14 @@ def build_mcmc_posterior(
     components: dict[str, MCMCComponentPosterior] = {}
     for handle in workspace.handles:
         names = metadata.line_variables[id(handle.line)]
-        components[handle.id] = MCMCComponentPosterior(
-            name=handle.id,
-            _values={
-                "flux": _parameter(idata, names.flux, name="flux"),
-                "fwhm": _parameter(idata, names.fwhm, name="fwhm"),
-                "center": _parameter(idata, names.center, name="center"),
-            },
-        )
+        values = {
+            "flux": _parameter(idata, names.flux, name="flux"),
+            "fwhm": _parameter(idata, names.fwhm, name="fwhm"),
+            "center": _parameter(idata, names.center, name="center"),
+        }
+        for label, variable_name in names.shapes:
+            values[label] = _parameter(idata, variable_name, name=label)
+        components[handle.id] = MCMCComponentPosterior(name=handle.id, _values=values)
     components[CONTINUUM_COMPONENT] = MCMCComponentPosterior(
         name=CONTINUUM_COMPONENT,
         _values={

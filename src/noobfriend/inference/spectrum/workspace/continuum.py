@@ -24,7 +24,11 @@ class ContinuumSpec:
 
     def __post_init__(self) -> None:
         """Normalize and validate continuum inputs."""
-        if isinstance(self.order, bool) or not isinstance(self.order, int) or self.order < 0:
+        if (
+            isinstance(self.order, bool)
+            or not isinstance(self.order, int)
+            or self.order < 0
+        ):
             raise ValueError("continuum_order must be a nonnegative integer.")
         lambda_0 = float(self.lambda_0)
         if not isfinite(lambda_0):
@@ -57,6 +61,8 @@ def build_continuum(
     """Resolve prepare-time continuum options into a concrete spec."""
     if continuum_lambda_0 is None:
         if not handles:
-            raise ValueError("continuum_lambda_0 can only be omitted when at least one line is prepared.")
+            raise ValueError(
+                "continuum_lambda_0 can only be omitted when at least one line is prepared."
+            )
         continuum_lambda_0 = handles[0].observed_wavelength
     return ContinuumSpec(lambda_0=continuum_lambda_0, order=continuum_order)

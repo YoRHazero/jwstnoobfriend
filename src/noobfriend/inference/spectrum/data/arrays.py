@@ -20,7 +20,12 @@ class _SpectrumArrays:
 
     @property
     def valid_mask(self) -> np.ndarray:
-        valid = np.isfinite(self.wavelength) & np.isfinite(self.flux) & np.isfinite(self.error) & (self.error > 0)
+        valid = (
+            np.isfinite(self.wavelength)
+            & np.isfinite(self.flux)
+            & np.isfinite(self.error)
+            & (self.error > 0)
+        )
         if self.mask_excluded is not None:
             valid &= ~self.mask_excluded
         valid.setflags(write=False)
@@ -37,7 +42,9 @@ def _normalize_arrays(
     fl = _as_1d_float(flux, name="flux")
     er = _as_1d_float(error, name="error")
     if not (wl.shape == fl.shape == er.shape):
-        raise ValueError(f"obs {wl.shape}, flux {fl.shape}, error {er.shape} must have equal length.")
+        raise ValueError(
+            f"obs {wl.shape}, flux {fl.shape}, error {er.shape} must have equal length."
+        )
     if wl.size == 0:
         raise ValueError("NoobSpectrum requires at least one pixel.")
 
@@ -56,19 +63,25 @@ def _as_1d_float(value: ArrayLike, *, name: str) -> np.ndarray:
     return array
 
 
-def _normalize_mask(mask: ArrayLike | None, wavelength: np.ndarray) -> np.ndarray | None:
+def _normalize_mask(
+    mask: ArrayLike | None, wavelength: np.ndarray
+) -> np.ndarray | None:
     if mask is None:
         return None
     out = np.array(mask, dtype=bool, copy=True)
     if out.shape != wavelength.shape:
-        raise ValueError(f"mask_excluded shape {out.shape} must match wavelength {wavelength.shape}.")
+        raise ValueError(
+            f"mask_excluded shape {out.shape} must match wavelength {wavelength.shape}."
+        )
     out.setflags(write=False)
     return out
 
 
 def _normalize_unit(unit: WaveUnit) -> WaveUnit:
     if unit not in VALID_WAVE_UNITS:
-        raise ValueError(f"unit {unit!r} must be one of {tuple(sorted(VALID_WAVE_UNITS))}.")
+        raise ValueError(
+            f"unit {unit!r} must be one of {tuple(sorted(VALID_WAVE_UNITS))}."
+        )
     return unit
 
 

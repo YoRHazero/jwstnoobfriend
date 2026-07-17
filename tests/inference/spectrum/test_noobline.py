@@ -161,3 +161,44 @@ def test_flux_override_and_ratio_rules() -> None:
         base.flux(ratio=1.0)
     with pytest.raises(TypeError, match="finite number"):
         derived.flux(ratio=(0.32, 0.35))  # type: ignore[arg-type]
+
+
+def test_convolve_appends_kernel_with_validated_rules() -> None:
+    from noobfriend.inference.spectrum.line import kernels
+
+    line = NoobLine("b", obs=5000.0, component="broad").convolve(
+        kernels.laplace, fwhm=(200.0, 8000.0)
+    )
+    (kernel,) = line.kernels
+    assert kernel.kind == "laplace"
+    assert kernel.shape_names() == ("laplace__fwhm", "laplace__fraction")
+    assert kernel.rules[1][1].is_fixed  # fraction defaults to fixed 1.0
+    assert kernel.rules[0][1].is_bounded
+
+    fixed = NoobLine("b", obs=5000.0).convolve(kernels.gaussian, fwhm=300.0)
+    assert fixed.kernels[0].rules[0][1].is_fixed
+
+    with pytest.raises(TypeError, match="built-in kernel"):
+        NoobLine("b", obs=5000.0).convolve(lambda x, s: x, s=1.0)
+    with pytest.raises(ValueError, match="missing rules"):
+        NoobLine("b", obs=5000.0).convolve(kernels.laplace)
+    with pytest.raises(ValueError, match="unknown kernel shape"):
+        NoobLine("b", obs=5000.0).convolve(kernels.laplace, fwhm=1.0, extra=2.0)
+    with pytest.raises(ValueError, match="unique"):
+        NoobLine("b", obs=5000.0).convolve(kernels.laplace, fwhm=1.0).convolve(
+            kernels.laplace, fwhm=2.0
+        )
+    with pytest.raises(ValueError, match=r"fraction.*\(0, 1\]|positive"):
+        NoobLine("b", obs=5000.0).convolve(kernels.laplace, fwhm=1.0, fraction=1.5)
+    with pytest.raises(NotImplementedError, match="gaussian base"):
+        NoobLine("b", obs=5000.0, profile="lorentzian").convolve(
+            kernels.laplace, fwhm=1.0
+        )
+
+
+def test_derive_propagates_kernels() -> None:
+    from noobfriend.inference.spectrum.line import kernels
+
+    base = NoobLine("b", obs=5000.0).convolve(kernels.laplace, fwhm=(100.0, 500.0))
+    derived = base.derive("d", obs=5010.0)
+    assert derived.kernels == base.kernels

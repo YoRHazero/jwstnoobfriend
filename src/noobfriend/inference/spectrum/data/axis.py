@@ -15,7 +15,9 @@ class _SpectrumAxis:
     rest: np.ndarray | None
 
 
-def _normalize_axis(*, obs: ArrayLike | None, rest: ArrayLike | None, z: float | None) -> _SpectrumAxis:
+def _normalize_axis(
+    *, obs: ArrayLike | None, rest: ArrayLike | None, z: float | None
+) -> _SpectrumAxis:
     obs_array = _optional_1d_float(obs, name="obs")
     rest_array = _optional_1d_float(rest, name="rest")
 
@@ -27,7 +29,9 @@ def _normalize_axis(*, obs: ArrayLike | None, rest: ArrayLike | None, z: float |
         obs_array = np.array(rest_array * (1.0 + z), dtype=float, copy=True)
         obs_array.setflags(write=False)
     if rest_array is not None and obs_array.shape != rest_array.shape:
-        raise ValueError(f"rest shape {rest_array.shape} must match obs {obs_array.shape}.")
+        raise ValueError(
+            f"rest shape {rest_array.shape} must match obs {obs_array.shape}."
+        )
     if rest_array is not None and z is not None:
         expected_obs = rest_array * (1.0 + z)
         if not np.allclose(obs_array, expected_obs, rtol=1e-8, atol=1e-8):

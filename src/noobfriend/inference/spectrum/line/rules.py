@@ -43,7 +43,9 @@ class _ParameterRule:
         return cls(_ParameterMode.LOCKED, target=target)
 
     @classmethod
-    def fixed(cls, value: float, *, offset_unit: Literal["km/s", "wavelength"] | None = None) -> _ParameterRule:
+    def fixed(
+        cls, value: float, *, offset_unit: Literal["km/s", "wavelength"] | None = None
+    ) -> _ParameterRule:
         return cls(_ParameterMode.FIXED, value=value, offset_unit=offset_unit)
 
     @classmethod
@@ -89,7 +91,9 @@ def _rule_from_fixed_or_bounded(
     nonnegative: bool = False,
 ) -> _ParameterRule:
     """Build a fixed or bounded rule from the public value contract."""
-    mode, parsed = _parse_fixed_or_bounded(value, name, positive=positive, nonnegative=nonnegative)
+    mode, parsed = _parse_fixed_or_bounded(
+        value, name, positive=positive, nonnegative=nonnegative
+    )
     if mode is _ParameterMode.FIXED:
         return _ParameterRule.fixed(parsed, offset_unit=offset_unit)
     return _ParameterRule.bounded(parsed, offset_unit=offset_unit)

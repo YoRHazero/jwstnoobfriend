@@ -351,3 +351,53 @@ def test_workspace_mle_validates_advanced_options(options, error, message) -> No
 
     with pytest.raises(error, match=message):
         workspace.mle(**options)
+
+
+def test_mle_problem_shape_block_layout_matches_named_groups() -> None:
+    from noobfriend.inference.spectrum.workspace.compiler import BASE_SHAPE
+    from noobfriend.inference.spectrum.workspace.mle.problem import build_mle_problem
+
+    wavelength = np.linspace(4900.0, 5100.0, 120)
+    spectrum = NoobSpectrum(
+        np.ones_like(wavelength), np.full_like(wavelength, 0.1), obs=wavelength
+    )
+    narrow = NoobLine("narrow", obs=5000.0)
+    broad = NoobLine("broad", obs=5000.0, component="broad")
+    workspace = spectrum.prepare([narrow, broad])
+    problem = build_mle_problem(workspace, absorption_bound_multiplier=1.0)
+
+    assert tuple(problem.shape_source_ids) == (BASE_SHAPE,)
+    assert problem.shape_slices[BASE_SHAPE] == problem.fwhm_slice
+    assert problem.shapes_slice == slice(problem.offsets.shapes, problem.size)
+    assert problem.fwhm_slice.stop == problem.size
+    assert len(problem.fwhm_source_ids) == 2
+    values = problem.shape_values(problem.initial)
+    assert set(values) == {BASE_SHAPE}
+    assert set(values[BASE_SHAPE]) == {id(narrow), id(broad)}
+
+
+def test_mle_result_surfaces_kernel_shapes_and_prediction_runs() -> None:
+    from noobfriend.inference.spectrum.line import kernels
+    from noobfriend.inference.spectrum.visualization.prediction import (
+        build_mle_prediction,
+    )
+
+    wavelength = np.linspace(4900.0, 5100.0, 220)
+    line = (
+        NoobLine("b", obs=5000.0, component="broad")
+        .fwhm(override=(600.0, 4000.0))
+        .convolve(kernels.laplace, fwhm=(300.0, 5000.0), fraction=(0.2, 1.0))
+    )
+    signal = 6.0 * np.exp(-0.5 * ((wavelength - 5000.0) / 12.0) ** 2)
+    spectrum = NoobSpectrum(
+        0.2 + signal, np.full_like(wavelength, 0.05), obs=wavelength
+    )
+    result = spectrum.prepare([line], continuum_order=0).mle()
+
+    fitted = result.solution.lines[0]
+    assert set(fitted.shapes) == {"laplace__fwhm", "laplace__fraction"}
+    assert 300.0 <= fitted.shapes["laplace__fwhm"] <= 5000.0
+    assert 0.2 <= fitted.shapes["laplace__fraction"] <= 1.0
+
+    prediction = build_mle_prediction(result, solution="selected", model_oversample=2)
+    assert np.all(np.isfinite(prediction.total.value))

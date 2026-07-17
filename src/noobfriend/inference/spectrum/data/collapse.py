@@ -23,7 +23,9 @@ def _collapse_to_1d(
     if dispersion not in ("row", "column"):
         raise ValueError(f"dispersion must be 'row' or 'column', got {dispersion!r}.")
     if noise not in ("manual", "continuum", "background"):
-        raise ValueError(f"noise must be 'manual', 'continuum', or 'background', got {noise!r}.")
+        raise ValueError(
+            f"noise must be 'manual', 'continuum', or 'background', got {noise!r}."
+        )
     if not np.isfinite(error_boost) or error_boost <= 0:
         raise ValueError("error_boost must be positive.")
     if noise != "manual" and error_boost != 1.0:
@@ -46,7 +48,9 @@ def _collapse_to_1d(
 
     lo, hi = int(collapse_window[0]), int(collapse_window[1])
     if not 0 <= lo < hi <= fl.shape[cross_axis]:
-        raise ValueError(f"collapse_window {collapse_window} out of range for cross-dispersion extent {fl.shape[cross_axis]}.")
+        raise ValueError(
+            f"collapse_window {collapse_window} out of range for cross-dispersion extent {fl.shape[cross_axis]}."
+        )
 
     from noobfriend.core.specutils import collapse
 

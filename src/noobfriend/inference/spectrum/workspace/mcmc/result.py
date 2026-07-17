@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from noobfriend.inference.spectrum.workspace.mcmc.criteria import (
     MCMCCriteria,
@@ -78,8 +78,14 @@ class MCMCFitResult:
         size: int = 1000,
         title: str | None = None,
         legend_location: str = "best",
+        view: Literal["observed", "emergent", "intrinsic"] = "observed",
     ) -> Figure:
-        """Plot posterior model summaries and optional residuals in flux units."""
+        """Plot posterior model summaries and optional residuals in flux units.
+
+        ``view`` selects the convolution layers of the component curves
+        (observed = kernels + LSF, emergent = kernels only, intrinsic =
+        bare profile); the total model and residuals stay observed.
+        """
         from noobfriend.inference.spectrum.visualization import plot_mcmc_fit
 
         return plot_mcmc_fit(
@@ -106,6 +112,7 @@ class MCMCFitResult:
             size=size,
             title=title,
             legend_location=legend_location,
+            view=view,
         )
 
     def plot_corner(

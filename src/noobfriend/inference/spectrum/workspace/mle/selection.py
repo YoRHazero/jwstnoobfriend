@@ -8,7 +8,10 @@ from math import exp, log
 import numpy as np
 from scipy.optimize import least_squares, minimize
 
-from noobfriend.inference.spectrum.workspace.mle.problem import MLEProblem, ModelEvaluation
+from noobfriend.inference.spectrum.workspace.mle.problem import (
+    MLEProblem,
+    ModelEvaluation,
+)
 from noobfriend.inference.spectrum.workspace.mle.starts import MLEStart
 
 
@@ -97,10 +100,15 @@ def select_candidates(
         raise RuntimeError("MLE did not produce any converged candidates.")
     optimum = min(candidates, key=lambda candidate: candidate.chi2)
     chi2_limit = optimum.chi2 - 2.0 * log(relative_likelihood_min)
-    eligible = tuple(candidate for candidate in candidates if candidate.chi2 <= chi2_limit + 1e-9)
+    eligible = tuple(
+        candidate for candidate in candidates if candidate.chi2 <= chi2_limit + 1e-9
+    )
     selected = min(
         eligible,
-        key=lambda candidate: (candidate.evaluation.cancellation_fraction, candidate.chi2),
+        key=lambda candidate: (
+            candidate.evaluation.cancellation_fraction,
+            candidate.chi2,
+        ),
     )
     return CandidateSelection(
         likelihood_optimum=optimum,
@@ -117,8 +125,13 @@ def refine_cancellation(
 ) -> RefinementSelection:
     """Conditionally minimize cancellation inside the relative-likelihood region."""
     selected = selection.selected
-    if cancellation_threshold is None or selected.evaluation.cancellation_fraction < cancellation_threshold:
-        return RefinementSelection(applied=False, selected=selected, attempted=0, converged=0)
+    if (
+        cancellation_threshold is None
+        or selected.evaluation.cancellation_fraction < cancellation_threshold
+    ):
+        return RefinementSelection(
+            applied=False, selected=selected, attempted=0, converged=0
+        )
 
     widest_problem = max(
         (candidate.problem for candidate in selection.converged),
@@ -138,7 +151,10 @@ def refine_cancellation(
             refined.append(output)
     final = min(
         (selected, *refined),
-        key=lambda candidate: (candidate.evaluation.cancellation_fraction, candidate.chi2),
+        key=lambda candidate: (
+            candidate.evaluation.cancellation_fraction,
+            candidate.chi2,
+        ),
     )
     return RefinementSelection(
         applied=True,
@@ -148,8 +164,14 @@ def refine_cancellation(
     )
 
 
-def _refinement_starts(selection: CandidateSelection, *, chi2_limit: float) -> tuple[MLECandidate, ...]:
-    eligible = [candidate for candidate in selection.converged if candidate.chi2 <= chi2_limit + 1e-9]
+def _refinement_starts(
+    selection: CandidateSelection, *, chi2_limit: float
+) -> tuple[MLECandidate, ...]:
+    eligible = [
+        candidate
+        for candidate in selection.converged
+        if candidate.chi2 <= chi2_limit + 1e-9
+    ]
     by_multiplier: dict[float, MLECandidate] = {}
     for candidate in eligible:
         multiplier = candidate.problem.absorption_bound_multiplier
@@ -166,7 +188,10 @@ def _refinement_starts(selection: CandidateSelection, *, chi2_limit: float) -> t
     starts = [selection.likelihood_optimum, *by_multiplier.values()]
     unique: list[MLECandidate] = []
     for candidate in starts:
-        if any(np.allclose(candidate.physical, item.physical, rtol=1e-9, atol=1e-12) for item in unique):
+        if any(
+            np.allclose(candidate.physical, item.physical, rtol=1e-9, atol=1e-12)
+            for item in unique
+        ):
             continue
         unique.append(candidate)
     return tuple(unique)

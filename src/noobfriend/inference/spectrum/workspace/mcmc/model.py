@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from noobfriend.inference.spectrum.workspace.compiler import (
+    BASE_SHAPE,
     C_KMS,
     compile_line_graph,
     contribution_sign,
@@ -36,12 +37,17 @@ _SQRT2 = sqrt(2.0)
 
 @dataclass(frozen=True, slots=True)
 class LineVariableNames:
-    """Posterior variable names for one line's physical parameters."""
+    """Posterior variable names for one line's physical parameters.
+
+    ``shapes`` lists extra named shape parameters (convolution-kernel
+    widths) as ``(label, variable_name)`` pairs in declaration order.
+    """
 
     flux: str
     fwhm: str
     center: str
     delta_v_kms: str
+    shapes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,60 +187,80 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                 upper=spec.upper,
             )
 
-        fwhm_values: dict[int, Any] = {}
+        shape_values: dict[str, dict[int, Any]] = {
+            name: {} for name in graph.shape_sources
+        }
         instrumental_fwhm = (
             None
             if workspace.spectrum.resolving_power is None
             else C_KMS / workspace.spectrum.resolving_power
         )
-        for source_id, spec in graph.fwhm_sources.items():
-            handle = graph.handle_by_line[source_id]
-            prefix = f"source__{handle.index}__{_safe_name(handle.id)}"
-            if instrumental_fwhm is None:
-                log_fwhm = pm.Uniform(
-                    f"{prefix}__log_fwhm",
-                    lower=log(spec.lower),
-                    upper=log(spec.upper),
+        for shape_name, sources in graph.shape_sources.items():
+            for source_id, spec in sources.items():
+                handle = graph.handle_by_line[source_id]
+                prefix = f"source__{handle.index}__{_safe_name(handle.id)}"
+                if shape_name != BASE_SHAPE or instrumental_fwhm is None:
+                    log_value = pm.Uniform(
+                        f"{prefix}__log_{shape_name}",
+                        lower=log(spec.lower),
+                        upper=log(spec.upper),
+                    )
+                    shape_values[shape_name][source_id] = pt.exp(log_value)
+                    continue
+                effective_lower = sqrt(spec.lower**2 + instrumental_fwhm**2)
+                effective_upper = sqrt(spec.upper**2 + instrumental_fwhm**2)
+                log_effective = pm.Uniform(
+                    f"{prefix}__log_effective_fwhm",
+                    lower=log(effective_lower),
+                    upper=log(effective_upper),
                 )
-                fwhm_values[source_id] = pt.exp(log_fwhm)
-                continue
-            effective_lower = sqrt(spec.lower**2 + instrumental_fwhm**2)
-            effective_upper = sqrt(spec.upper**2 + instrumental_fwhm**2)
-            log_effective = pm.Uniform(
-                f"{prefix}__log_effective_fwhm",
-                lower=log(effective_lower),
-                upper=log(effective_upper),
-            )
-            effective = pt.exp(log_effective)
-            intrinsic = pt.sqrt(effective**2 - instrumental_fwhm**2)
-            pm.Potential(
-                f"{prefix}__effective_fwhm_jacobian",
-                2.0 * log_effective - 2.0 * pt.log(intrinsic),
-            )
-            fwhm_values[source_id] = intrinsic
-            effective_sources.append(handle.id)
+                effective = pt.exp(log_effective)
+                intrinsic = pt.sqrt(effective**2 - instrumental_fwhm**2)
+                pm.Potential(
+                    f"{prefix}__effective_fwhm_jacobian",
+                    2.0 * log_effective - 2.0 * pt.log(intrinsic),
+                )
+                shape_values[shape_name][source_id] = intrinsic
+                effective_sources.append(handle.id)
 
         line_total = pt.zeros_like(pt.as_tensor_variable(wavelength))
-        for handle, flux_expression, center_expression, fwhm_expression in zip(
+        for handle, flux_expression, center_expression, shapes in zip(
             workspace.handles,
             graph.flux_expressions,
             graph.center_expressions,
-            graph.fwhm_expressions,
+            graph.shape_expressions,
             strict=True,
         ):
             flux = _symbolic_expression(flux_expression, flux_values, pt)
             velocity = _symbolic_expression(center_expression, center_values, pt)
-            fwhm = _symbolic_expression(fwhm_expression, fwhm_values, pt)
+            fwhm = _symbolic_expression(
+                shapes[BASE_SHAPE], shape_values[BASE_SHAPE], pt
+            )
             center = handle.observed_wavelength * (1.0 + velocity / C_KMS)
             effective_fwhm = fwhm
             if instrumental_fwhm is not None:
                 effective_fwhm = pt.sqrt(fwhm**2 + instrumental_fwhm**2)
+            shape_tensors = tuple(
+                (name, _symbolic_expression(shapes[name], shape_values[name], pt))
+                for kernel in handle.line.kernels
+                for name in kernel.shape_names()
+            )
+            tensor_by_name = dict(shape_tensors)
+            kernel_triples = tuple(
+                (
+                    kernel.kind,
+                    tensor_by_name[kernel.shape_name("fwhm")],
+                    tensor_by_name[kernel.shape_name("fraction")],
+                )
+                for kernel in handle.line.kernels
+            )
             template = _symbolic_profile(
                 wavelength,
                 profile=handle.profile,
                 center=center,
                 fwhm_kms=effective_fwhm,
                 pt=pt,
+                kernels=kernel_triples,
             )
             line_total = (
                 line_total + contribution_sign(handle) * flux * template / model_scale
@@ -246,12 +272,17 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                 fwhm=f"{prefix}__fwhm",
                 center=f"{prefix}__center",
                 delta_v_kms=f"{prefix}__delta_v_kms",
+                shapes=tuple((name, f"{prefix}__{name}") for name, _ in shape_tensors),
             )
             line_variables[id(handle.line)] = names
             pm.Deterministic(names.flux, flux)
             pm.Deterministic(names.fwhm, fwhm)
             pm.Deterministic(names.center, center)
             pm.Deterministic(names.delta_v_kms, velocity)
+            for (label, variable_name), (_, value) in zip(
+                names.shapes, shape_tensors, strict=True
+            ):
+                pm.Deterministic(variable_name, value)
 
         pm.Normal(
             "observed_flux_normalized",
@@ -348,14 +379,61 @@ def _symbolic_expression(
 
 
 def _symbolic_profile(
-    wavelength: np.ndarray, *, profile: str, center: Any, fwhm_kms: Any, pt: Any
+    wavelength: np.ndarray,
+    *,
+    profile: str,
+    center: Any,
+    fwhm_kms: Any,
+    pt: Any,
+    kernels: tuple[tuple[str, Any, Any], ...] = (),
 ) -> Any:
-    fwhm_wavelength = center * fwhm_kms / C_KMS
+    if kernels:
+        if profile != "gaussian":
+            raise NotImplementedError(
+                "convolution kernels currently require a gaussian base profile."
+            )
+        if sum(1 for kind, _, _ in kernels if kind == "laplace") > 1:
+            raise NotImplementedError(
+                "at most one laplace convolution kernel is supported."
+            )
+
     if profile == "gaussian":
-        sigma = fwhm_wavelength / _GAUSSIAN_FWHM_TO_SIGMA
-        return pt.exp(-0.5 * ((wavelength - center) / sigma) ** 2) / (
-            sigma * sqrt(2.0 * pi)
-        )
+        delta = wavelength - center
+        branches: list[tuple[Any, Any, Any | None]] = [(1.0, fwhm_kms, None)]
+        for kind, width, fraction in kernels:
+            updated: list[tuple[Any, Any, Any | None]] = []
+            for weight, gauss_fwhm, laplace_fwhm in branches:
+                updated.append((weight * (1.0 - fraction), gauss_fwhm, laplace_fwhm))
+                if kind == "gaussian":
+                    updated.append(
+                        (
+                            weight * fraction,
+                            pt.sqrt(gauss_fwhm**2 + width**2),
+                            laplace_fwhm,
+                        )
+                    )
+                else:
+                    updated.append((weight * fraction, gauss_fwhm, width))
+            branches = updated
+        total: Any = 0.0
+        for weight, gauss_fwhm, laplace_fwhm in branches:
+            sigma = center * gauss_fwhm / C_KMS / _GAUSSIAN_FWHM_TO_SIGMA
+            if laplace_fwhm is None:
+                total = total + weight * pt.exp(-0.5 * (delta / sigma) ** 2) / (
+                    sigma * sqrt(2.0 * pi)
+                )
+            else:
+                scale = center * laplace_fwhm / C_KMS / (2.0 * log(2.0))
+                u_plus = (sigma / scale + delta / sigma) / sqrt(2.0)
+                u_minus = (sigma / scale - delta / sigma) / sqrt(2.0)
+                total = total + weight * (
+                    pt.exp(-0.5 * (delta / sigma) ** 2)
+                    / (4.0 * scale)
+                    * (pt.erfcx(u_plus) + pt.erfcx(u_minus))
+                )
+        return total
+
+    fwhm_wavelength = center * fwhm_kms / C_KMS
     if profile == "lorentzian":
         gamma = 0.5 * fwhm_wavelength
         return (gamma / pi) / ((wavelength - center) ** 2 + gamma**2)

@@ -54,7 +54,10 @@ class NoobSpectrum:
         resolving_power = _normalize_resolving_power(self.resolving_power)
         axis = _normalize_axis(obs=self.obs, rest=self.rest, z=z)
         arrays = _normalize_arrays(axis.obs, self.flux, self.error, self.mask_excluded)
-        if self.source_2d is not None and self.source_2d.flux.shape[1] != arrays.wavelength.size:
+        if (
+            self.source_2d is not None
+            and self.source_2d.flux.shape[1] != arrays.wavelength.size
+        ):
             raise ValueError(
                 "source_2d wavelength extent must match the prepared 1-D spectrum."
             )
@@ -127,13 +130,20 @@ class NoobSpectrum:
     def wavelength(self) -> np.ndarray:
         """Observed-frame wavelength, kept as a data-view alias."""
         if self.obs is None:
-            raise RuntimeError("NoobSpectrum invariant violated: missing observed wavelength.")
+            raise RuntimeError(
+                "NoobSpectrum invariant violated: missing observed wavelength."
+            )
         return self.obs
 
     @property
     def valid_mask(self) -> np.ndarray:
         """Pixels usable by fitting after finite/error/mask filtering."""
-        valid = np.isfinite(self.obs) & np.isfinite(self.flux) & np.isfinite(self.error) & (self.error > 0)
+        valid = (
+            np.isfinite(self.obs)
+            & np.isfinite(self.flux)
+            & np.isfinite(self.error)
+            & (self.error > 0)
+        )
         if self.mask_excluded is not None:
             valid &= ~self.mask_excluded
         valid.setflags(write=False)
@@ -162,7 +172,9 @@ class NoobSpectrum:
         """Return a copy with additional excluded pixels OR-ed into the mask."""
         new_mask = np.asarray(mask_excluded, dtype=bool)
         if new_mask.shape != self.obs.shape:
-            raise ValueError(f"mask_excluded shape {new_mask.shape} must match obs {self.obs.shape}.")
+            raise ValueError(
+                f"mask_excluded shape {new_mask.shape} must match obs {self.obs.shape}."
+            )
         if self.mask_excluded is not None:
             new_mask = np.asarray(self.mask_excluded, dtype=bool) | new_mask
         return replace(self, mask_excluded=new_mask)
@@ -218,7 +230,9 @@ class NoobSpectrum:
         lo = float(self.obs[0]) if n else float("nan")
         hi = float(self.obs[-1]) if n else float("nan")
         z = "None" if self.z is None else f"{self.z:g}"
-        resolving_power = "None" if self.resolving_power is None else f"{self.resolving_power:g}"
+        resolving_power = (
+            "None" if self.resolving_power is None else f"{self.resolving_power:g}"
+        )
         return (
             f"NoobSpectrum(n={n}, unit={self.unit!r}, z={z}, "
             f"range=[{lo:g}, {hi:g}], resolving_power={resolving_power})"

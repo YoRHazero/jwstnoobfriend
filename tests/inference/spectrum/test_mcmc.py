@@ -267,3 +267,44 @@ def test_workspace_has_no_parallel_mcmc_entrypoint() -> None:
     workspace, _ = _workspace()
 
     assert not hasattr(workspace, "mcmc")
+
+
+def test_kernel_line_builds_graph_variables_and_prior_surface() -> None:
+    from noobfriend.inference.spectrum.line import kernels
+
+    wavelength = np.linspace(4900.0, 5100.0, 201)
+    narrow = NoobLine("n", obs=5000.0)
+    broad = (
+        NoobLine("b", obs=5000.0, component="broad")
+        .fwhm(override=(800.0, 5000.0))
+        .convolve(kernels.laplace, fwhm=(200.0, 8000.0))
+    )
+    spectrum = NoobSpectrum(
+        np.ones_like(wavelength),
+        np.full_like(wavelength, 0.1),
+        obs=wavelength,
+        resolving_power=1600.0,
+    )
+    model = spectrum.prepare([narrow, broad]).model()
+
+    names = {variable.name for variable in model.pymc_model.free_RVs}
+    assert "source__1__b__log_laplace__fwhm" in names
+    assert "source__1__b__log_effective_fwhm" in names
+    assert "source__1__b__log_laplace__fraction" not in names  # fixed 1.0 default
+
+    bounded = (
+        NoobLine("b2", obs=5000.0, component="broad")
+        .fwhm(override=(800.0, 5000.0))
+        .convolve(kernels.laplace, fwhm=(200.0, 8000.0), fraction=(0.2, 1.0))
+    )
+    model2 = spectrum.prepare([narrow, bounded]).model()
+    names2 = {variable.name for variable in model2.pymc_model.free_RVs}
+    assert "source__1__b2__log_laplace__fraction" in names2
+    prior = model2.priors["b2"]["laplace__fraction"]
+    assert prior.family == "loguniform"
+    assert prior.bounds == (0.2, 1.0)
+
+    prior = model.priors["b"]["laplace__fwhm"]
+    assert prior.family == "loguniform"
+    assert prior.bounds == (200.0, 8000.0)
+    assert "laplace__fwhm" in model.priors["b"].parameters

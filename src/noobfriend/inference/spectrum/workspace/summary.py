@@ -18,7 +18,9 @@ def render_workspace_summary(workspace: NoobFitWorkspace) -> str:
     target_ids = {id(handle.line): handle.id for handle in workspace.handles}
     rows = "\n".join(_line_row(handle, target_ids) for handle in workspace.handles)
     continuum_formula = _continuum_formula(workspace.continuum.order)
-    resolving_power = "None" if spectrum.resolving_power is None else _fmt(spectrum.resolving_power)
+    resolving_power = (
+        "None" if spectrum.resolving_power is None else _fmt(spectrum.resolving_power)
+    )
     z = "None" if spectrum.z is None else _fmt(spectrum.z)
     wavelength_range = f"{_fmt(float(spectrum.obs[0]))} - {_fmt(float(spectrum.obs[-1]))} {spectrum.unit}"
 
@@ -84,7 +86,7 @@ def _line_row(handle: LineHandle, target_ids: dict[int, str]) -> str:
     line = handle.line
     linename = "<anonymous>" if line.linename is None else line.linename
     rest = "None" if handle.rest_wavelength is None else _fmt(handle.rest_wavelength)
-    line_label = f"{_html(linename)}<br><span class=\"note\">rest={_html(rest)}</span>"
+    line_label = f'{_html(linename)}<br><span class="note">rest={_html(rest)}</span>'
     base = "None" if line.base is None else target_ids[id(line.base)]
     return f"""      <tr>
         <td><code>{_html(handle.id)}</code></td>
@@ -100,7 +102,9 @@ def _line_row(handle: LineHandle, target_ids: dict[int, str]) -> str:
       </tr>"""
 
 
-def _rule_text(rule: _ParameterRule, target_ids: dict[int, str], *, owner: NoobLine, kind: str) -> str:
+def _rule_text(
+    rule: _ParameterRule, target_ids: dict[int, str], *, owner: NoobLine, kind: str
+) -> str:
     if rule.is_free:
         return "free"
     if rule.is_locked:
@@ -115,7 +119,9 @@ def _rule_text(rule: _ParameterRule, target_ids: dict[int, str], *, owner: NoobL
     if rule.is_fixed:
         if rule.value is None:
             raise RuntimeError("fixed rule invariant violated: missing value.")
-        return f"fixed {_rule_value(rule.value, kind=kind, offset_unit=rule.offset_unit)}"
+        return (
+            f"fixed {_rule_value(rule.value, kind=kind, offset_unit=rule.offset_unit)}"
+        )
     if rule.is_bounded:
         if rule.bounds is None:
             raise RuntimeError("bounded rule invariant violated: missing bounds.")
@@ -123,7 +129,9 @@ def _rule_text(rule: _ParameterRule, target_ids: dict[int, str], *, owner: NoobL
     raise RuntimeError("unsupported parameter rule.")
 
 
-def _rule_value(value: float | tuple[float, float], *, kind: str, offset_unit: str | None) -> str:
+def _rule_value(
+    value: float | tuple[float, float], *, kind: str, offset_unit: str | None
+) -> str:
     if isinstance(value, tuple):
         text = _bounds(value)
     else:
@@ -147,7 +155,13 @@ def _target_id(rule: _ParameterRule, target_ids: dict[int, str]) -> str:
 def _continuum_formula(order: int) -> str:
     if order == 0:
         return "c"
-    terms = ["c", *(f"k{degree} * (lambda - lambda_0)^{degree}" for degree in range(1, order + 1))]
+    terms = [
+        "c",
+        *(
+            f"k{degree} * (lambda - lambda_0)^{degree}"
+            for degree in range(1, order + 1)
+        ),
+    ]
     terms[1] = "k1 * (lambda - lambda_0)"
     return " + ".join(terms)
 

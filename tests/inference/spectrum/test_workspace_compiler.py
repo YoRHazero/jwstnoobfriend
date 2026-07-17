@@ -7,6 +7,7 @@ import pytest
 
 from noobfriend.inference.spectrum import NoobLine, NoobSpectrum
 from noobfriend.inference.spectrum.workspace.compiler import (
+    BASE_SHAPE,
     compile_line_graph,
     evaluate_expression,
     flux_bounds,
@@ -152,3 +153,101 @@ def test_profile_template_rejects_non_gaussian_lsf_convolution() -> None:
             fwhm_kms=200.0,
             resolving_power=3000.0,
         )
+
+
+def test_compile_line_graph_groups_shape_parameters_by_name() -> None:
+    base = NoobLine("OIII5007", rest=5008.24, z=7.0)
+    derived = base.derive("OIII4959", rest=4960.30).flux(ratio=0.335)
+    workspace = _spectrum().prepare({"base": base, "derived": derived})
+
+    compiled = compile_line_graph(workspace)
+
+    assert tuple(compiled.shape_sources) == (BASE_SHAPE,)
+    assert all(tuple(shapes) == (BASE_SHAPE,) for shapes in compiled.shape_expressions)
+    base_shapes, derived_shapes = compiled.shape_expressions
+    assert base_shapes[BASE_SHAPE] is compiled.fwhm_expressions[0]
+    assert derived_shapes[BASE_SHAPE] is compiled.fwhm_expressions[1]
+    assert compiled.shape_sources[BASE_SHAPE] is compiled.fwhm_sources
+
+
+def test_kernel_shapes_compile_and_emg_matches_numerical_convolution() -> None:
+    from scipy.signal import fftconvolve
+
+    from noobfriend.inference.spectrum.line import kernels
+    from noobfriend.inference.spectrum.workspace.compiler.expressions import (
+        line_kernels_kms,
+    )
+
+    wavelength = np.linspace(4900.0, 5100.0, 8001)
+    line = (
+        NoobLine("b", obs=5000.0, component="broad")
+        .fwhm(override=(800.0, 5000.0))
+        .convolve(kernels.laplace, fwhm=(200.0, 8000.0))
+    )
+    spectrum = NoobSpectrum(
+        np.ones_like(wavelength), np.full_like(wavelength, 0.1), obs=wavelength
+    )
+    compiled = compile_line_graph(spectrum.prepare([line]))
+
+    shapes = compiled.shape_expressions[0]
+    assert tuple(shapes) == (BASE_SHAPE, "laplace__fwhm", "laplace__fraction")
+    spec = next(iter(shapes["laplace__fwhm"].specs.values()))
+    assert spec.initial == pytest.approx(np.sqrt(200.0 * 8000.0))
+
+    handle = compiled.workspace.handles[0]
+    resolved = line_kernels_kms(handle, shapes)
+    assert resolved == (("laplace", pytest.approx(np.sqrt(200.0 * 8000.0)), 1.0),)
+
+    emg = profile_template(
+        wavelength,
+        handle=handle,
+        center=5000.0,
+        fwhm_kms=1500.0,
+        resolving_power=None,
+        kernels=(("laplace", 1000.0, 1.0),),
+    )
+    gauss = profile_template(
+        wavelength, handle=handle, center=5000.0, fwhm_kms=1500.0, resolving_power=None
+    )
+    dv = float(np.mean(np.diff(wavelength))) / 5000.0 * 299792.458
+    vgrid = np.arange(-12000, 12001) * dv
+    kernel_values = kernels.laplace(vgrid, 1000.0) * dv
+    brute = fftconvolve(gauss, kernel_values, mode="same")
+    core = np.abs(wavelength - 5000.0) < 60.0
+    assert np.max(np.abs(emg[core] - brute[core])) / np.max(brute) < 2e-3
+
+    folded = profile_template(
+        wavelength,
+        handle=handle,
+        center=5000.0,
+        fwhm_kms=1500.0,
+        resolving_power=None,
+        kernels=(("gaussian", 900.0, 1.0),),
+    )
+    direct = profile_template(
+        wavelength,
+        handle=handle,
+        center=5000.0,
+        fwhm_kms=float(np.hypot(1500.0, 900.0)),
+        resolving_power=None,
+    )
+    assert np.allclose(folded, direct)
+
+
+def test_fraction_mixes_convolved_and_bare_branches() -> None:
+    from noobfriend.inference.spectrum.line import kernels as _k
+
+    wavelength = np.linspace(4900.0, 5100.0, 2001)
+    line = NoobLine("b", obs=5000.0, component="broad").convolve(
+        _k.laplace, fwhm=1000.0
+    )
+    handle = compile_line_graph(
+        NoobSpectrum(
+            np.ones_like(wavelength), np.full_like(wavelength, 0.1), obs=wavelength
+        ).prepare([line])
+    ).workspace.handles[0]
+    common = dict(handle=handle, center=5000.0, fwhm_kms=1500.0, resolving_power=None)
+    bare = profile_template(wavelength, **common)
+    full = profile_template(wavelength, kernels=(("laplace", 1000.0, 1.0),), **common)
+    mixed = profile_template(wavelength, kernels=(("laplace", 1000.0, 0.3),), **common)
+    assert np.allclose(mixed, 0.7 * bare + 0.3 * full)

@@ -7,7 +7,10 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 from noobfriend.inference.spectrum.workspace.mle.options import build_mle_options
-from noobfriend.inference.spectrum.workspace.mle.result import MLEFitResult, build_solution
+from noobfriend.inference.spectrum.workspace.mle.result import (
+    MLEFitResult,
+    build_solution,
+)
 from noobfriend.inference.spectrum.workspace.mle.selection import (
     optimize_start,
     refine_cancellation,
@@ -36,8 +39,14 @@ def fit_workspace_mle(
         random_seed=random_seed,
     )
     starts = build_mle_starts(workspace, options)
-    candidates = tuple(candidate for start in starts if (candidate := optimize_start(start)) is not None)
-    selection = select_candidates(candidates, relative_likelihood_min=options.relative_likelihood_min)
+    candidates = tuple(
+        candidate
+        for start in starts
+        if (candidate := optimize_start(start)) is not None
+    )
+    selection = select_candidates(
+        candidates, relative_likelihood_min=options.relative_likelihood_min
+    )
     refinement = refine_cancellation(
         selection,
         cancellation_threshold=options.cancellation_threshold,

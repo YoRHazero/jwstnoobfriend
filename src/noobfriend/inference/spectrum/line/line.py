@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from noobfriend.inference.spectrum.line.rules import _ParameterRule, _required_float, _rule_from_fixed_or_bounded
+from inspect import signature
+
+from noobfriend.inference.spectrum.line.kernels import KERNEL_KINDS, LineKernel
+from noobfriend.inference.spectrum.line.rules import (
+    _ParameterRule,
+    _required_float,
+    _rule_from_fixed_or_bounded,
+)
 from noobfriend.inference.spectrum.line.types import (
     DEFAULT_CENTER_RANGE_KMS,
     DEFAULT_FWHM_RANGES,
@@ -59,6 +66,7 @@ class NoobLine:
     contribution: ContributionName = "emission"
     profile: ProfileName = "gaussian"
     base: NoobLine | None = None
+    kernels: tuple[LineKernel, ...] = ()
     _center_rule: _ParameterRule | None = field(default=None, repr=False, compare=False)
     _fwhm_rule: _ParameterRule | None = field(default=None, repr=False, compare=False)
     _flux_rule: _ParameterRule | None = field(default=None, repr=False, compare=False)
@@ -71,17 +79,40 @@ class NoobLine:
             raise ValueError(f"Unsupported contribution: {self.contribution!r}.")
         if self.profile not in VALID_PROFILES:
             raise ValueError(f"Unsupported profile: {self.profile!r}.")
+        if self.kernels:
+            if self.profile != "gaussian":
+                raise NotImplementedError(
+                    "convolution kernels currently require a gaussian base profile."
+                )
+            names = [k.name for k in self.kernels]
+            if len(set(names)) != len(names):
+                raise ValueError("convolution kernel names must be unique per line.")
+            non_gaussian = [k for k in self.kernels if k.kind != "gaussian"]
+            if len(non_gaussian) > 1:
+                raise NotImplementedError(
+                    "at most one non-gaussian convolution kernel is supported."
+                )
 
-        wavelength = Wavelength.normalize(z=self.z, rest=self.rest, obs=self.obs, unit=self.unit)
+        wavelength = Wavelength.normalize(
+            z=self.z, rest=self.rest, obs=self.obs, unit=self.unit
+        )
         object.__setattr__(self, "z", wavelength.z)
         object.__setattr__(self, "rest", wavelength.rest)
         object.__setattr__(self, "obs", wavelength.obs)
 
         if self._center_rule is None:
-            center_rule = _ParameterRule.locked(self.base) if self.base is not None else _default_center_rule()
+            center_rule = (
+                _ParameterRule.locked(self.base)
+                if self.base is not None
+                else _default_center_rule()
+            )
             object.__setattr__(self, "_center_rule", center_rule)
         if self._fwhm_rule is None:
-            fwhm_rule = _ParameterRule.locked(self.base) if self.base is not None else _default_fwhm_rule(self.component)
+            fwhm_rule = (
+                _ParameterRule.locked(self.base)
+                if self.base is not None
+                else _default_fwhm_rule(self.component)
+            )
             object.__setattr__(self, "_fwhm_rule", fwhm_rule)
         if self._flux_rule is None:
             object.__setattr__(self, "_flux_rule", _ParameterRule.free())
@@ -89,7 +120,9 @@ class NoobLine:
     @property
     def observed_wavelength(self) -> float:
         """Observed-frame wavelength in ``unit``."""
-        return Wavelength(z=self.z, rest=self.rest, obs=self.obs, unit=self.unit).observed
+        return Wavelength(
+            z=self.z, rest=self.rest, obs=self.obs, unit=self.unit
+        ).observed
 
     @property
     def center_rule(self) -> _ParameterRule:
@@ -139,6 +172,7 @@ class NoobLine:
             contribution=self.contribution if contribution is None else contribution,
             profile=self.profile if profile is None else profile,
             base=self,
+            kernels=self.kernels,
         )
 
     def center(
@@ -156,12 +190,21 @@ class NoobLine:
             raise ValueError("Provide exactly one of delta_v_kms or delta_wavelength.")
 
         if delta_v_kms is not None:
-            rule = _rule_from_fixed_or_bounded(delta_v_kms, "delta_v_kms", offset_unit="km/s")
+            rule = _rule_from_fixed_or_bounded(
+                delta_v_kms, "delta_v_kms", offset_unit="km/s"
+            )
         else:
-            rule = _rule_from_fixed_or_bounded(delta_wavelength, "delta_wavelength", offset_unit="wavelength")
+            rule = _rule_from_fixed_or_bounded(
+                delta_wavelength, "delta_wavelength", offset_unit="wavelength"
+            )
         return replace(self, _center_rule=rule)
 
-    def fwhm(self, *, override: FixedOrBounded | None = None, locked: bool | NoobLine | None = None) -> NoobLine:
+    def fwhm(
+        self,
+        *,
+        override: FixedOrBounded | None = None,
+        locked: bool | NoobLine | None = None,
+    ) -> NoobLine:
         """Return a copy with an explicit FWHM rule.
 
         ``override`` is interpreted as FWHM in km/s. ``locked=True`` locks to
@@ -181,7 +224,9 @@ class NoobLine:
             return replace(self, _fwhm_rule=_ParameterRule.locked(self.base))
         return replace(self, _fwhm_rule=_default_fwhm_rule(self.component))
 
-    def flux(self, *, override: FixedOrBounded | None = None, ratio: float | None = None) -> NoobLine:
+    def flux(
+        self, *, override: FixedOrBounded | None = None, ratio: float | None = None
+    ) -> NoobLine:
         """Return a copy with an explicit flux rule.
 
         ``override`` is an absolute integrated flux. ``ratio`` is relative to
@@ -191,7 +236,9 @@ class NoobLine:
         if (override is None) == (ratio is None):
             raise ValueError("Provide exactly one of override or ratio.")
         if override is not None:
-            rule = _rule_from_fixed_or_bounded(override, "flux.override", nonnegative=True)
+            rule = _rule_from_fixed_or_bounded(
+                override, "flux.override", nonnegative=True
+            )
             return replace(self, _flux_rule=rule)
         if self.base is None:
             raise ValueError("ratio requires a derived line with base.")
@@ -199,6 +246,73 @@ class NoobLine:
         if value < 0:
             raise ValueError("flux.ratio must be nonnegative.")
         return replace(self, _flux_rule=_ParameterRule.ratio(value))
+
+    def convolve(self, kernel: object, **shape_rules: FixedOrBounded) -> NoobLine:
+        """Return a copy convolved with a built-in kernel.
+
+        The kernel is one of the functions in
+        :mod:`noobfriend.inference.spectrum.line.kernels`, defined in
+        zero-centred velocity space (km/s). Its signature after the first
+        (``x``) argument names the kernel's shape parameters; each must be
+        given here as a fixed value or ``(lower, upper)`` bounds in km/s.
+
+        Parameters
+        ----------
+        kernel
+            A registered kernel function, e.g. ``kernels.laplace``.
+        **shape_rules
+            One fixed-or-bounded rule per kernel shape parameter. The
+            reserved ``fraction`` key (default: fixed ``1.0``) sets the
+            convolved fraction: the profile becomes
+            ``(1 - fraction) * base + fraction * base (x) kernel``. Fixed
+            values and bounds must lie in ``(0, 1]``.
+
+        Returns
+        -------
+        NoobLine
+            A copy with the kernel appended to :attr:`kernels`.
+        """
+        fraction = shape_rules.pop("fraction", 1.0)
+        kind = KERNEL_KINDS.get(kernel)
+        if kind is None:
+            raise TypeError(
+                "convolve expects a built-in kernel from "
+                "noobfriend.inference.spectrum.line.kernels; arbitrary "
+                "functions require the numerical convolution backend, "
+                "which is not implemented yet."
+            )
+        parameters = tuple(signature(kernel).parameters)[1:]
+        unknown = set(shape_rules) - set(parameters)
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(f"unknown kernel shape parameters: {names}.")
+        missing = [name for name in parameters if name not in shape_rules]
+        if missing:
+            names = ", ".join(missing)
+            raise ValueError(f"kernel shape parameters missing rules: {names}.")
+        rules = tuple(
+            (
+                name,
+                _rule_from_fixed_or_bounded(
+                    shape_rules[name], f"convolve.{name}", positive=True
+                ),
+            )
+            for name in parameters
+        )
+        fraction_rule = _rule_from_fixed_or_bounded(
+            fraction, "convolve.fraction", positive=True
+        )
+        if fraction_rule.is_fixed:
+            if fraction_rule.value is None or not 0.0 < fraction_rule.value <= 1.0:
+                raise ValueError("convolve.fraction must lie in (0, 1].")
+        elif fraction_rule.bounds is not None:
+            lower, upper = fraction_rule.bounds
+            if not 0.0 < lower < upper <= 1.0:
+                raise ValueError("convolve.fraction bounds must lie in (0, 1].")
+        appended = LineKernel(
+            kind=kind, name=kind, rules=(*rules, ("fraction", fraction_rule))
+        )
+        return replace(self, kernels=(*self.kernels, appended))
 
 
 def _default_center_rule() -> _ParameterRule:

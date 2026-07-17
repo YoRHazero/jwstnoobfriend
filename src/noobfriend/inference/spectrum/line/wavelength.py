@@ -55,7 +55,9 @@ class Wavelength:
         if self.obs is not None:
             return self.obs
         if self.rest is None or self.z is None:
-            raise RuntimeError("Wavelength invariant violated: missing observed wavelength.")
+            raise RuntimeError(
+                "Wavelength invariant violated: missing observed wavelength."
+            )
         return self.rest * (1.0 + self.z)
 
 

@@ -15,6 +15,8 @@ from noobfriend.inference.spectrum.workspace.compiler import (
     profile_template,
 )
 
+type ModelView = Literal["observed", "emergent", "intrinsic"]
+
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace.mcmc import MCMCFitResult
     from noobfriend.inference.spectrum.workspace.mle import MLEFitResult, MLESolution
@@ -65,6 +67,14 @@ def build_mle_prediction(
     components: dict[str, CurvePrediction] = {}
     for fitted in selected.lines:
         handle = fitted.handle
+        fitted_kernels = tuple(
+            (
+                kernel.kind,
+                fitted.shapes[kernel.shape_name("fwhm")],
+                fitted.shapes[kernel.shape_name("fraction")],
+            )
+            for kernel in handle.line.kernels
+        )
         signed = (
             contribution_sign(handle)
             * fitted.flux
@@ -74,6 +84,7 @@ def build_mle_prediction(
                 center=fitted.center,
                 fwhm_kms=fitted.fwhm,
                 resolving_power=workspace.spectrum.resolving_power,
+                kernels=fitted_kernels,
             )
         )
         total += signed
@@ -93,8 +104,21 @@ def build_mcmc_prediction(
     posterior_draws: int | None,
     random_seed: int,
     model_oversample: int,
+    view: ModelView = "observed",
 ) -> FitPrediction:
-    """Evaluate physical posterior draws and summarize them pointwise."""
+    """Evaluate physical posterior draws and summarize them pointwise.
+
+    ``view`` selects the convolution layers drawn for the per-line component
+    curves: ``"observed"`` applies convolution kernels and the instrumental
+    LSF, ``"emergent"`` applies kernels only (the source's emergent
+    spectrum), and ``"intrinsic"`` shows the bare base profile. The total
+    model (and therefore the residual reference) is always evaluated in the
+    observed view, because only that is comparable with the data.
+    """
+    if view not in ("observed", "emergent", "intrinsic"):
+        raise ValueError(
+            f"view must be 'observed', 'emergent', or 'intrinsic'; got {view!r}."
+        )
     probability = _validate_probability(hdi_probability)
     workspace = result.inputs.workspace
     wavelength = dense_wavelength(workspace.spectrum.obs, model_oversample)
@@ -120,9 +144,22 @@ def build_mcmc_prediction(
         flux = posterior["flux"].samples.reshape(-1)[indices]
         fwhm = posterior["fwhm"].samples.reshape(-1)[indices]
         center = posterior["center"].samples.reshape(-1)[indices]
+        kernel_draws = tuple(
+            (
+                kernel.kind,
+                posterior[kernel.shape_name("fwhm")].samples.reshape(-1)[indices],
+                posterior[kernel.shape_name("fraction")].samples.reshape(-1)[indices],
+            )
+            for kernel in handle.line.kernels
+        )
         line_draws = np.empty_like(continuum_draws)
+        view_draws = line_draws if view == "observed" else np.empty_like(line_draws)
         sign = contribution_sign(handle)
         for draw_index in range(n_draws):
+            draw_kernels = tuple(
+                (kind, widths[draw_index], fractions[draw_index])
+                for kind, widths, fractions in kernel_draws
+            )
             line_draws[draw_index] = (
                 sign
                 * flux[draw_index]
@@ -132,11 +169,25 @@ def build_mcmc_prediction(
                     center=center[draw_index],
                     fwhm_kms=fwhm[draw_index],
                     resolving_power=workspace.spectrum.resolving_power,
+                    kernels=draw_kernels,
                 )
             )
+            if view != "observed":
+                view_draws[draw_index] = (
+                    sign
+                    * flux[draw_index]
+                    * profile_template(
+                        wavelength,
+                        handle=handle,
+                        center=center[draw_index],
+                        fwhm_kms=fwhm[draw_index],
+                        resolving_power=None,
+                        kernels=draw_kernels if view == "emergent" else (),
+                    )
+                )
         total_draws += line_draws
         components[handle.id] = CurvePrediction(
-            value=np.median(continuum_draws + line_draws, axis=0)
+            value=np.median(continuum_draws + view_draws, axis=0)
         )
 
     lower, upper = _pointwise_hdi(total_draws, probability=probability)

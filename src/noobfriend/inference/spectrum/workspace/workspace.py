@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Literal
 from noobfriend.inference.spectrum.data.axis import _format_center_label
 from noobfriend.inference.spectrum.line import NoobLine
 from noobfriend.inference.spectrum.types import convert_wavelength
-from noobfriend.inference.spectrum.workspace.continuum import ContinuumSpec, build_continuum
+from noobfriend.inference.spectrum.workspace.continuum import (
+    ContinuumSpec,
+    build_continuum,
+)
 from noobfriend.inference.spectrum.workspace.handles import LineHandle
 
 if TYPE_CHECKING:
@@ -51,7 +54,9 @@ class NoobFitWorkspace:
             continuum_order=continuum_order,
             continuum_lambda_0=continuum_lambda_0,
         )
-        return cls(spectrum=spectrum, handles=handles, id_mode=id_mode, continuum=continuum)
+        return cls(
+            spectrum=spectrum, handles=handles, id_mode=id_mode, continuum=continuum
+        )
 
     @property
     def lines(self) -> tuple[NoobLine, ...]:
@@ -128,7 +133,9 @@ class NoobFitWorkspace:
 
     def summary(self) -> str:
         """Return an HTML summary of this prepared fit plan."""
-        from noobfriend.inference.spectrum.workspace.summary import render_workspace_summary
+        from noobfriend.inference.spectrum.workspace.summary import (
+            render_workspace_summary,
+        )
 
         return render_workspace_summary(self)
 
@@ -141,7 +148,9 @@ class NoobFitWorkspace:
         return len(self.handles)
 
 
-def _normalize_line_entries(lines: Sequence[NoobLine] | Mapping[str, NoobLine]) -> tuple[Literal["auto", "manual"], tuple[_LineEntry, ...]]:
+def _normalize_line_entries(
+    lines: Sequence[NoobLine] | Mapping[str, NoobLine],
+) -> tuple[Literal["auto", "manual"], tuple[_LineEntry, ...]]:
     if isinstance(lines, Mapping):
         entries: list[_LineEntry] = []
         for key, line in lines.items():
@@ -153,7 +162,9 @@ def _normalize_line_entries(lines: Sequence[NoobLine] | Mapping[str, NoobLine]) 
         return "manual", tuple(entries)
 
     if isinstance(lines, (str, bytes)) or not isinstance(lines, Sequence):
-        raise TypeError("prepare expects a sequence of NoobLine or a mapping of id to NoobLine.")
+        raise TypeError(
+            "prepare expects a sequence of NoobLine or a mapping of id to NoobLine."
+        )
     entries = tuple((None, line) for line in lines)
     if not entries:
         raise ValueError("prepare requires at least one line.")
@@ -167,7 +178,9 @@ def _validate_line_objects(entries: tuple[_LineEntry, ...]) -> None:
             raise TypeError("prepare entries must be NoobLine instances.")
         identity = id(line)
         if identity in seen:
-            raise ValueError("the same NoobLine object cannot appear twice in one workspace.")
+            raise ValueError(
+                "the same NoobLine object cannot appear twice in one workspace."
+            )
         seen[identity] = index
 
 
@@ -178,9 +191,15 @@ def _validate_line_graph(entries: tuple[_LineEntry, ...]) -> None:
             raise ValueError("derived line base is not in the workspace line list.")
         for rule in (line.center_rule, line.fwhm_rule, line.flux_rule):
             if rule.target is not None and id(rule.target) not in identities:
-                raise ValueError("locked rule target is not in the workspace line list.")
-        if line.flux_rule.is_ratio and (line.base is None or id(line.base) not in identities):
-            raise ValueError("flux ratio requires its base line in the workspace line list.")
+                raise ValueError(
+                    "locked rule target is not in the workspace line list."
+                )
+        if line.flux_rule.is_ratio and (
+            line.base is None or id(line.base) not in identities
+        ):
+            raise ValueError(
+                "flux ratio requires its base line in the workspace line list."
+            )
         _check_base_cycle(line)
 
 
@@ -202,13 +221,19 @@ def _build_handles(
     id_mode: Literal["auto", "manual"],
 ) -> tuple[LineHandle, ...]:
     resolved = [_resolve_line(spectrum, line) for _, line in entries]
-    ids = [manual_id for manual_id, _ in entries] if id_mode == "manual" else _auto_ids(resolved)
+    ids = (
+        [manual_id for manual_id, _ in entries]
+        if id_mode == "manual"
+        else _auto_ids(resolved)
+    )
     if len(set(ids)) != len(ids):
         raise ValueError("workspace line ids must be unique.")
     reserved = _RESERVED_LINE_IDS.intersection(ids)
     if reserved:
         names = ", ".join(repr(value) for value in sorted(reserved))
-        raise ValueError(f"workspace line ids are reserved for model components: {names}.")
+        raise ValueError(
+            f"workspace line ids are reserved for model components: {names}."
+        )
     return tuple(
         LineHandle(
             id=line_id,
@@ -220,20 +245,36 @@ def _build_handles(
             contribution=line.contribution,
             profile=line.profile,
         )
-        for index, (line_id, (line, center, rest)) in enumerate(zip(ids, resolved, strict=True))
+        for index, (line_id, (line, center, rest)) in enumerate(
+            zip(ids, resolved, strict=True)
+        )
     )
 
 
-def _resolve_line(spectrum: NoobSpectrum, line: NoobLine) -> tuple[NoobLine, float, float | None]:
-    if spectrum.z is not None and line.z is not None and not isclose(spectrum.z, line.z, rel_tol=1e-10, abs_tol=1e-12):
+def _resolve_line(
+    spectrum: NoobSpectrum, line: NoobLine
+) -> tuple[NoobLine, float, float | None]:
+    if (
+        spectrum.z is not None
+        and line.z is not None
+        and not isclose(spectrum.z, line.z, rel_tol=1e-10, abs_tol=1e-12)
+    ):
         raise ValueError("line z is inconsistent with spectrum z.")
 
-    center = convert_wavelength(line.observed_wavelength, from_unit=line.unit, to_unit=spectrum.unit)
-    rest = None if line.rest is None else convert_wavelength(line.rest, from_unit=line.unit, to_unit=spectrum.unit)
+    center = convert_wavelength(
+        line.observed_wavelength, from_unit=line.unit, to_unit=spectrum.unit
+    )
+    rest = (
+        None
+        if line.rest is None
+        else convert_wavelength(line.rest, from_unit=line.unit, to_unit=spectrum.unit)
+    )
     if spectrum.z is not None and line.z is None and rest is not None:
         expected = rest * (1.0 + spectrum.z)
         if not isclose(center, expected, rel_tol=1e-8, abs_tol=1e-8):
-            raise ValueError("line rest/obs wavelengths are inconsistent with spectrum z.")
+            raise ValueError(
+                "line rest/obs wavelengths are inconsistent with spectrum z."
+            )
     if center < float(spectrum.obs[0]) or center > float(spectrum.obs[-1]):
         raise ValueError("line observed wavelength is outside the spectrum range.")
     return line, center, rest
@@ -256,7 +297,9 @@ def _auto_ids(resolved: list[tuple[NoobLine, float, float | None]]) -> list[str]
     profile_counts = Counter(profile_candidates)
 
     contribution_candidates = [
-        candidate if profile_counts[candidate] == 1 else f"{candidate}.{line.contribution}"
+        candidate
+        if profile_counts[candidate] == 1
+        else f"{candidate}.{line.contribution}"
         for candidate, (line, _, _) in zip(profile_candidates, resolved, strict=True)
     ]
     contribution_counts = Counter(contribution_candidates)

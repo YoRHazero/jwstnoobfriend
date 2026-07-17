@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from noobfriend.inference.spectrum.workspace.mle.problem import MLEProblem, build_mle_problem
+from noobfriend.inference.spectrum.workspace.mle.problem import (
+    MLEProblem,
+    build_mle_problem,
+)
 
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
@@ -29,15 +32,23 @@ class MLEStart:
     physical: np.ndarray
 
 
-def build_mle_starts(workspace: NoobFitWorkspace, options: MLEOptions) -> tuple[MLEStart, ...]:
+def build_mle_starts(
+    workspace: NoobFitWorkspace, options: MLEOptions
+) -> tuple[MLEStart, ...]:
     """Build all structured, random, and broad exploration starts."""
     probe = build_mle_problem(workspace, absorption_bound_multiplier=1.0)
-    multipliers = options.absorption_bound_multipliers if probe.has_free_absorption else (1.0,)
+    multipliers = (
+        options.absorption_bound_multipliers if probe.has_free_absorption else (1.0,)
+    )
     starts: list[MLEStart] = []
     for variant_index, multiplier in enumerate(multipliers):
-        problem = probe if multiplier == 1.0 else build_mle_problem(
-            workspace,
-            absorption_bound_multiplier=multiplier,
+        problem = (
+            probe
+            if multiplier == 1.0
+            else build_mle_problem(
+                workspace,
+                absorption_bound_multiplier=multiplier,
+            )
         )
         starts.extend(_structured_starts(problem))
         starts.extend(_random_starts(problem, seed=options.random_seed + variant_index))
@@ -48,16 +59,25 @@ def build_mle_starts(workspace: NoobFitWorkspace, options: MLEOptions) -> tuple[
 
 
 def _structured_starts(problem: MLEProblem) -> tuple[MLEStart, ...]:
-    anchors = [_fwhm_anchors(problem.lower[index], problem.upper[index]) for index in _indices(problem.fwhm_slice)]
+    anchors = [
+        _width_anchors(problem.lower[index], problem.upper[index])
+        for index in _indices(problem.shapes_slice)
+    ]
     starts: list[MLEStart] = []
     for start_index in range(_STRUCTURED_STARTS):
         physical = problem.initial.copy()
         for local_index, index in enumerate(_indices(problem.center_slice)):
             physical[index] = np.clip(0.0, problem.lower[index], problem.upper[index])
-        for local_index, index in enumerate(_indices(problem.fwhm_slice)):
-            physical[index] = anchors[local_index][(start_index + local_index) % _STRUCTURED_STARTS]
+        for local_index, index in enumerate(_indices(problem.shapes_slice)):
+            physical[index] = anchors[local_index][
+                (start_index + local_index) % _STRUCTURED_STARTS
+            ]
         physical = problem.linearized_start(physical)
-        starts.append(MLEStart(problem=problem, kind=f"structured_{start_index}", physical=physical))
+        starts.append(
+            MLEStart(
+                problem=problem, kind=f"structured_{start_index}", physical=physical
+            )
+        )
     return tuple(starts)
 
 
@@ -67,12 +87,14 @@ def _random_starts(problem: MLEProblem, *, seed: int) -> tuple[MLEStart, ...]:
     for start_index in range(_RANDOM_STARTS):
         physical = problem.initial.copy()
         continuum = physical[problem.continuum_slice]
-        physical[problem.continuum_slice] = continuum + rng.normal(0.0, 0.25, continuum.size) * problem.scale[
-            problem.continuum_slice
-        ]
+        physical[problem.continuum_slice] = (
+            continuum
+            + rng.normal(0.0, 0.25, continuum.size)
+            * problem.scale[problem.continuum_slice]
+        )
         for index in _indices(problem.center_slice):
             physical[index] = rng.uniform(problem.lower[index], problem.upper[index])
-        for index in _indices(problem.fwhm_slice):
+        for index in _indices(problem.shapes_slice):
             lower = problem.lower[index]
             upper = problem.upper[index]
             physical[index] = np.exp(rng.uniform(np.log(lower), np.log(upper)))
@@ -105,10 +127,11 @@ def _broad_upper_high_peak_start(problem: MLEProblem) -> MLEStart | None:
     physical = problem.initial.copy()
     for index in _indices(problem.center_slice):
         physical[index] = np.clip(0.0, problem.lower[index], problem.upper[index])
-    for index in _indices(problem.fwhm_slice):
-        source_id = problem.fwhm_source_ids[index - problem.offsets.fwhm]
+    for source_id, index in zip(
+        problem.fwhm_source_ids, _indices(problem.fwhm_slice), strict=True
+    ):
         handle = problem.source_handle(source_id)
-        anchors = _fwhm_anchors(problem.lower[index], problem.upper[index])
+        anchors = _width_anchors(problem.lower[index], problem.upper[index])
         physical[index] = anchors[-1] if handle.component == "broad" else anchors[2]
     physical = problem.linearized_start(physical)
     for local_index, source_id in enumerate(problem.flux_source_ids):
@@ -122,17 +145,23 @@ def _broad_upper_high_peak_start(problem: MLEProblem) -> MLEStart | None:
             fwhm_kms=fwhm,
             peak_fraction=_BROAD_HIGH_PEAK_FRACTION,
         )
-    return MLEStart(problem=problem, kind="broad_upper_high_peak", physical=problem.clip(physical))
+    return MLEStart(
+        problem=problem, kind="broad_upper_high_peak", physical=problem.clip(physical)
+    )
 
 
 def _source_fwhm(problem: MLEProblem, source_id: int, physical: np.ndarray) -> float:
     handle = problem.source_handle(source_id)
     expression = problem.graph.fwhm_expressions[handle.index]
-    values = dict(zip(problem.fwhm_source_ids, physical[problem.fwhm_slice], strict=True))
-    return expression.fixed + sum(scale * values[key] for key, scale in expression.terms.items())
+    values = dict(
+        zip(problem.fwhm_source_ids, physical[problem.fwhm_slice], strict=True)
+    )
+    return expression.fixed + sum(
+        scale * values[key] for key, scale in expression.terms.items()
+    )
 
 
-def _fwhm_anchors(lower: float, upper: float) -> tuple[float, ...]:
+def _width_anchors(lower: float, upper: float) -> tuple[float, ...]:
     span = upper - lower
     near_lower = lower + 0.05 * span
     near_upper = upper - 0.05 * span
