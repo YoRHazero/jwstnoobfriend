@@ -10,15 +10,16 @@ from typing import TYPE_CHECKING, Literal
 
 from noobfriend.inference.spectrum.data.axis import _format_center_label
 from noobfriend.inference.spectrum.line import NoobLine
-from noobfriend.inference.spectrum.types import convert_wavelength
+from noobfriend.inference.spectrum.types import WaveUnit, convert_wavelength
 from noobfriend.inference.spectrum.workspace.continuum import (
+    ContinuumSharing,
     ContinuumSpec,
     build_continuum,
 )
 from noobfriend.inference.spectrum.workspace.handles import LineHandle
 
 if TYPE_CHECKING:
-    from noobfriend.inference.spectrum.data import NoobSpectrum
+    from noobfriend.inference.spectrum.data import NoobSpectrum, NoobSpectrumSet
     from noobfriend.inference.spectrum.model import NoobSpectrumModel
     from noobfriend.inference.spectrum.workspace.mle import MLEFitResult
 
@@ -28,9 +29,15 @@ _RESERVED_LINE_IDS = frozenset({"continuum"})
 
 @dataclass(frozen=True, slots=True)
 class NoobFitWorkspace:
-    """A prepared spectrum plus one resolved line combination."""
+    """One or more same-source frames plus one resolved line combination.
 
-    spectrum: NoobSpectrum
+    A single-frame workspace behaves exactly as before. A multi-frame
+    workspace shares its line parameters across frames while keeping the
+    continuum (and other instrumental nuisances) per frame.
+    """
+
+    spectra: tuple[NoobSpectrum, ...]
+    frame_ids: tuple[str, ...]
     handles: tuple[LineHandle, ...]
     id_mode: Literal["auto", "manual"]
     continuum: ContinuumSpec
@@ -38,25 +45,63 @@ class NoobFitWorkspace:
     @classmethod
     def build(
         cls,
-        spectrum: NoobSpectrum,
+        data: NoobSpectrum | NoobSpectrumSet,
         lines: Sequence[NoobLine] | Mapping[str, NoobLine],
         *,
         continuum_order: int = 1,
         continuum_lambda_0: float | None = None,
+        continuum_sharing: ContinuumSharing = "pooled",
     ) -> NoobFitWorkspace:
-        """Build a workspace from either auto-id or manual-id input."""
+        """Build a workspace from one spectrum or a joint set of frames."""
+        spectra, frame_ids = _normalize_spectrum_input(data)
         id_mode, entries = _normalize_line_entries(lines)
         _validate_line_objects(entries)
         _validate_line_graph(entries)
-        handles = _build_handles(spectrum, entries, id_mode=id_mode)
+        handles = _build_handles(spectra, entries, id_mode=id_mode)
         continuum = build_continuum(
             handles,
             continuum_order=continuum_order,
             continuum_lambda_0=continuum_lambda_0,
+            continuum_sharing=continuum_sharing,
         )
         return cls(
-            spectrum=spectrum, handles=handles, id_mode=id_mode, continuum=continuum
+            spectra=spectra,
+            frame_ids=frame_ids,
+            handles=handles,
+            id_mode=id_mode,
+            continuum=continuum,
         )
+
+    @property
+    def spectrum(self) -> NoobSpectrum:
+        """The single frame of a single-frame workspace.
+
+        Raises
+        ------
+        RuntimeError
+            If the workspace holds more than one frame; use :attr:`spectra`.
+        """
+        if len(self.spectra) != 1:
+            raise RuntimeError(
+                f"this workspace holds {len(self.spectra)} frames; "
+                "use .spectra or iterate frames instead of .spectrum."
+            )
+        return self.spectra[0]
+
+    @property
+    def n_frames(self) -> int:
+        """Number of frames prepared in this workspace."""
+        return len(self.spectra)
+
+    @property
+    def unit(self) -> WaveUnit:
+        """Shared wavelength unit across frames."""
+        return self.spectra[0].unit
+
+    @property
+    def z(self) -> float | None:
+        """Shared source redshift across frames, if any."""
+        return self.spectra[0].z
 
     @property
     def lines(self) -> tuple[NoobLine, ...]:
@@ -89,7 +134,9 @@ class NoobFitWorkspace:
         """Build and return one persistent spectrum model ready for sampling.
 
         The model uses only the spectrum data and ``NoobLine`` declarations;
-        no MLE point is computed or supplied as an initial value.
+        no MLE point is computed or supplied as an initial value. Multi-frame
+        workspaces build one joint model with shared line parameters and
+        per-frame continuum.
         """
         from noobfriend.inference.spectrum.model import NoobSpectrumModel
 
@@ -121,6 +168,7 @@ class NoobFitWorkspace:
             Nonnegative seed used by random starts. Structured starts are
             deterministic and do not depend on this value.
         """
+        _require_single_frame(self, "joint multi-frame MLE")
         from noobfriend.inference.spectrum.workspace.mle.fit import fit_workspace_mle
 
         return fit_workspace_mle(
@@ -133,6 +181,7 @@ class NoobFitWorkspace:
 
     def summary(self) -> str:
         """Return an HTML summary of this prepared fit plan."""
+        _require_single_frame(self, "multi-frame workspace summary")
         from noobfriend.inference.spectrum.workspace.summary import (
             render_workspace_summary,
         )
@@ -146,6 +195,26 @@ class NoobFitWorkspace:
     def __len__(self) -> int:
         """Return the number of prepared line handles."""
         return len(self.handles)
+
+
+def _normalize_spectrum_input(
+    data: NoobSpectrum | NoobSpectrumSet,
+) -> tuple[tuple[NoobSpectrum, ...], tuple[str, ...]]:
+    from noobfriend.inference.spectrum.data import NoobSpectrum, NoobSpectrumSet
+
+    if isinstance(data, NoobSpectrumSet):
+        return data.frames, data.frame_ids
+    if isinstance(data, NoobSpectrum):
+        return (data,), ("frame_0",)
+    raise TypeError("prepare expects a NoobSpectrum or NoobSpectrumSet.")
+
+
+def _require_single_frame(workspace: NoobFitWorkspace, feature: str) -> None:
+    if workspace.n_frames > 1:
+        raise NotImplementedError(
+            f"{feature} is not available yet; the joint multi-frame path arrives "
+            f"in a later phase. This workspace holds {workspace.n_frames} frames."
+        )
 
 
 def _normalize_line_entries(
@@ -215,12 +284,12 @@ def _check_base_cycle(line: NoobLine) -> None:
 
 
 def _build_handles(
-    spectrum: NoobSpectrum,
+    spectra: tuple[NoobSpectrum, ...],
     entries: tuple[_LineEntry, ...],
     *,
     id_mode: Literal["auto", "manual"],
 ) -> tuple[LineHandle, ...]:
-    resolved = [_resolve_line(spectrum, line) for _, line in entries]
+    resolved = [_resolve_line(spectra, line) for _, line in entries]
     ids = (
         [manual_id for manual_id, _ in entries]
         if id_mode == "manual"
@@ -252,31 +321,38 @@ def _build_handles(
 
 
 def _resolve_line(
-    spectrum: NoobSpectrum, line: NoobLine
+    spectra: tuple[NoobSpectrum, ...], line: NoobLine
 ) -> tuple[NoobLine, float, float | None]:
+    # Unit and redshift are frame-invariant (validated equal on the set), so the
+    # first frame is a sound reference for both.
+    reference = spectra[0]
     if (
-        spectrum.z is not None
+        reference.z is not None
         and line.z is not None
-        and not isclose(spectrum.z, line.z, rel_tol=1e-10, abs_tol=1e-12)
+        and not isclose(reference.z, line.z, rel_tol=1e-10, abs_tol=1e-12)
     ):
         raise ValueError("line z is inconsistent with spectrum z.")
 
     center = convert_wavelength(
-        line.observed_wavelength, from_unit=line.unit, to_unit=spectrum.unit
+        line.observed_wavelength, from_unit=line.unit, to_unit=reference.unit
     )
     rest = (
         None
         if line.rest is None
-        else convert_wavelength(line.rest, from_unit=line.unit, to_unit=spectrum.unit)
+        else convert_wavelength(line.rest, from_unit=line.unit, to_unit=reference.unit)
     )
-    if spectrum.z is not None and line.z is None and rest is not None:
-        expected = rest * (1.0 + spectrum.z)
+    if reference.z is not None and line.z is None and rest is not None:
+        expected = rest * (1.0 + reference.z)
         if not isclose(center, expected, rel_tol=1e-8, abs_tol=1e-8):
             raise ValueError(
                 "line rest/obs wavelengths are inconsistent with spectrum z."
             )
-    if center < float(spectrum.obs[0]) or center > float(spectrum.obs[-1]):
-        raise ValueError("line observed wavelength is outside the spectrum range.")
+    covered = any(
+        float(spectrum.obs[0]) <= center <= float(spectrum.obs[-1])
+        for spectrum in spectra
+    )
+    if not covered:
+        raise ValueError("line observed wavelength is outside every frame's range.")
     return line, center, rest
 
 

@@ -53,8 +53,10 @@ class NoobLine:
     profile
         Profile family used by this line's component model.
     base
-        Parent line this line is derived from. Derived lines default to locked
-        center and FWHM rules against their base.
+        Parent line this line is derived from. Derived lines default to a
+        locked center against their base. FWHM is locked to the base only when
+        the derived line shares the base's component; deriving a different
+        component frees the FWHM to that component's default range.
     """
 
     linename: str | None = None
@@ -108,11 +110,13 @@ class NoobLine:
             )
             object.__setattr__(self, "_center_rule", center_rule)
         if self._fwhm_rule is None:
-            fwhm_rule = (
-                _ParameterRule.locked(self.base)
-                if self.base is not None
-                else _default_fwhm_rule(self.component)
-            )
+            # A derived line locks its FWHM to the base only when it shares the
+            # base's component; deriving a different component (e.g. narrow ->
+            # broad) frees the FWHM to that component's default range instead.
+            if self.base is not None and self.base.component == self.component:
+                fwhm_rule = _ParameterRule.locked(self.base)
+            else:
+                fwhm_rule = _default_fwhm_rule(self.component)
             object.__setattr__(self, "_fwhm_rule", fwhm_rule)
         if self._flux_rule is None:
             object.__setattr__(self, "_flux_rule", _ParameterRule.free())
@@ -161,7 +165,16 @@ class NoobLine:
         contribution: ContributionName | None = None,
         profile: ProfileName | None = None,
     ) -> NoobLine:
-        """Create a line that is strongly bound to this line as its base."""
+        """Create a line strongly bound to this line as its base.
+
+        The derived line defaults to a **locked center** against the base. Its
+        **FWHM locks to the base only when the component matches**; deriving a
+        different component (e.g. a broad component off a narrow base) instead
+        frees the FWHM to that component's default range. Flux defaults to
+        free. Loosen or tighten any axis explicitly with :meth:`center`,
+        :meth:`fwhm`, and :meth:`flux` — e.g. give a broad component its own
+        velocity with ``center(delta_v_kms=...)``.
+        """
         return NoobLine(
             linename=linename if linename is not None else self.linename,
             z=self.z if z is None else z,

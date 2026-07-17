@@ -17,12 +17,14 @@ from noobfriend.inference.spectrum.workspace.compiler import (
 )
 from noobfriend.inference.spectrum.workspace.mcmc.priors import (
     CONTINUUM_PRIOR_SIGMA,
+    CONTINUUM_TAU_SIGMA,
     MCMCPriors,
     build_flux_source_priors,
     build_translated_priors,
 )
 
 if TYPE_CHECKING:
+    from noobfriend.inference.spectrum.data import NoobSpectrum
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.compiler import (
         CompiledLineGraph,
@@ -51,6 +53,23 @@ class LineVariableNames:
 
 
 @dataclass(frozen=True, slots=True)
+class ContinuumVariableSpec:
+    """How one continuum coefficient is exposed in the posterior.
+
+    ``value_variable`` names the physical Deterministic (a scalar for a
+    single-frame or ``"shared"`` continuum, a frame-indexed vector otherwise).
+    ``mu_variable``/``tau_variable`` name the pooling hyperparameters and are
+    set only for ``"pooled"`` continua.
+    """
+
+    parameter_name: str
+    value_variable: str
+    per_frame: bool
+    mu_variable: str | None = None
+    tau_variable: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class MCMCModelMetadata:
     """Metadata needed to materialize physical results after sampling."""
 
@@ -58,7 +77,9 @@ class MCMCModelMetadata:
     flux_amplitude: float
     wavelength_scale: float
     line_variables: dict[int, LineVariableNames]
-    continuum_variables: tuple[str, ...]
+    continuum_layout: tuple[ContinuumVariableSpec, ...]
+    frame_ids: tuple[str, ...]
+    frame_index: np.ndarray
     diagnostic_variables: tuple[str, ...]
     priors: MCMCPriors
     reparameterized_flux_pairs: tuple[tuple[str, str], ...]
@@ -85,14 +106,31 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
 
     graph = compile_line_graph(workspace)
     _validate_profiles(workspace)
-    wavelength = np.asarray(workspace.spectrum.valid_wavelength, dtype=float)
-    data = np.asarray(workspace.spectrum.valid_flux, dtype=float)
-    error = np.asarray(workspace.spectrum.valid_error, dtype=float)
+    frames = workspace.spectra
+    _validate_homogeneous_resolving_power(frames)
+    n_frames = len(frames)
+
+    wavelength_parts: list[np.ndarray] = []
+    data_parts: list[np.ndarray] = []
+    error_parts: list[np.ndarray] = []
+    frame_index_parts: list[np.ndarray] = []
+    for index, frame in enumerate(frames):
+        frame_wavelength = np.asarray(frame.valid_wavelength, dtype=float)
+        wavelength_parts.append(frame_wavelength)
+        data_parts.append(np.asarray(frame.valid_flux, dtype=float))
+        error_parts.append(np.asarray(frame.valid_error, dtype=float))
+        frame_index_parts.append(np.full(frame_wavelength.size, index, dtype=int))
+    wavelength = np.concatenate(wavelength_parts)
+    data = np.concatenate(data_parts)
+    error = np.concatenate(error_parts)
+    frame_index = np.concatenate(frame_index_parts)
+
     flux_amplitude = max(float(np.ptp(data)), float(np.median(error)))
     model_scale = max(
         flux_amplitude, float(np.median(np.abs(data))), float(np.median(error))
     )
     wavelength_scale = max(float(np.ptp(wavelength)) / 2.0, 1.0)
+    resolving_power = frames[0].resolving_power
 
     flux_source_ids = tuple(
         dict.fromkeys(
@@ -102,35 +140,31 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         )
     )
     flux_sources = build_flux_source_priors(
-        workspace, graph, flux_source_ids, flux_amplitude
+        workspace,
+        graph,
+        flux_source_ids,
+        flux_amplitude,
+        wavelength=wavelength,
+        resolving_power=resolving_power,
     )
     prior_by_source = {prior.source_id: prior for prior in flux_sources}
     flux_pairs = _find_flux_pairs(graph, flux_source_ids)
     paired_source_ids = {source_id for pair in flux_pairs for source_id in pair}
     line_variables: dict[int, LineVariableNames] = {}
-    continuum_variables: list[str] = []
     effective_sources: list[str] = []
 
-    with pm.Model() as model:
-        continuum = pt.zeros_like(pt.as_tensor_variable(wavelength))
-        for degree, parameter_name in enumerate(workspace.continuum.parameter_names):
-            raw = pm.Normal(
-                f"continuum__{parameter_name}__normalized",
-                mu=0.0,
-                sigma=CONTINUUM_PRIOR_SIGMA,
-            )
-            physical_name = f"continuum__{parameter_name}"
-            physical = pm.Deterministic(
-                physical_name,
-                raw * model_scale / wavelength_scale**degree,
-            )
-            continuum_variables.append(physical_name)
-            continuum = (
-                continuum
-                + physical
-                * (wavelength - workspace.continuum.lambda_0) ** degree
-                / model_scale
-            )
+    coords = None if n_frames == 1 else {"frame": list(workspace.frame_ids)}
+    with pm.Model(coords=coords) as model:
+        continuum, continuum_layout = _build_continuum(
+            pm,
+            pt,
+            workspace,
+            wavelength=wavelength,
+            frame_index=frame_index,
+            model_scale=model_scale,
+            wavelength_scale=wavelength_scale,
+            n_frames=n_frames,
+        )
 
         flux_values: dict[int, Any] = {}
         for pair_index, (emission_id, absorption_id) in enumerate(flux_pairs):
@@ -190,11 +224,7 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         shape_values: dict[str, dict[int, Any]] = {
             name: {} for name in graph.shape_sources
         }
-        instrumental_fwhm = (
-            None
-            if workspace.spectrum.resolving_power is None
-            else C_KMS / workspace.spectrum.resolving_power
-        )
+        instrumental_fwhm = None if resolving_power is None else C_KMS / resolving_power
         for shape_name, sources in graph.shape_sources.items():
             for source_id, spec in sources.items():
                 handle = graph.handle_by_line[source_id]
@@ -303,7 +333,9 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         flux_amplitude=flux_amplitude,
         wavelength_scale=wavelength_scale,
         line_variables=line_variables,
-        continuum_variables=tuple(continuum_variables),
+        continuum_layout=tuple(continuum_layout),
+        frame_ids=workspace.frame_ids,
+        frame_index=frame_index,
         diagnostic_variables=tuple(variable.name for variable in model.free_RVs),
         priors=translated_priors,
         reparameterized_flux_pairs=tuple(
@@ -316,12 +348,115 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
 
 
 def _validate_profiles(workspace: NoobFitWorkspace) -> None:
-    if workspace.spectrum.resolving_power is None:
+    if workspace.spectra[0].resolving_power is None:
         return
     if any(handle.profile != "gaussian" for handle in workspace.handles):
         raise NotImplementedError(
             "resolving_power is only implemented for gaussian line profiles."
         )
+
+
+def _validate_homogeneous_resolving_power(
+    frames: tuple[NoobSpectrum, ...],
+) -> None:
+    """Require every frame to share one spectral resolution.
+
+    Per-frame resolving power (heterogeneous LSF) changes the sampled FWHM
+    coordinate and is deferred to a later phase; a joint fit therefore needs a
+    single instrumental width shared across frames.
+    """
+    resolving_powers = {frame.resolving_power for frame in frames}
+    if len(resolving_powers) > 1:
+        raise NotImplementedError(
+            "joint fits currently require one shared resolving_power across "
+            f"frames; got {sorted(value for value in resolving_powers if value is not None)}"
+            " (heterogeneous-resolution fitting arrives in a later phase)."
+        )
+
+
+def _build_continuum(
+    pm: Any,
+    pt: Any,
+    workspace: NoobFitWorkspace,
+    *,
+    wavelength: np.ndarray,
+    frame_index: np.ndarray,
+    model_scale: float,
+    wavelength_scale: float,
+    n_frames: int,
+) -> tuple[Any, list[ContinuumVariableSpec]]:
+    """Build the per-pixel continuum tensor and its posterior layout.
+
+    A single-frame or ``"shared"`` continuum keeps one scalar coefficient per
+    degree (byte-identical to the single-spectrum model). ``"independent"``
+    gives each frame a free coefficient; ``"pooled"`` draws each frame's
+    coefficient from a non-centered ``mu + tau * z`` hyperprior.
+    """
+    spec = workspace.continuum
+    powers = [
+        (wavelength - spec.lambda_0) ** degree for degree in range(spec.order + 1)
+    ]
+    continuum = pt.zeros_like(pt.as_tensor_variable(wavelength))
+    layout: list[ContinuumVariableSpec] = []
+    scalar = n_frames == 1 or spec.sharing == "shared"
+    for degree, name in enumerate(spec.parameter_names):
+        factor = model_scale / wavelength_scale**degree
+        if scalar:
+            raw = pm.Normal(
+                f"continuum__{name}__normalized", mu=0.0, sigma=CONTINUUM_PRIOR_SIGMA
+            )
+            physical = pm.Deterministic(f"continuum__{name}", raw * factor)
+            continuum = continuum + physical * powers[degree] / model_scale
+            layout.append(
+                ContinuumVariableSpec(
+                    parameter_name=name,
+                    value_variable=f"continuum__{name}",
+                    per_frame=False,
+                )
+            )
+            continue
+
+        if spec.sharing == "independent":
+            raw = pm.Normal(
+                f"continuum__{name}__normalized",
+                mu=0.0,
+                sigma=CONTINUUM_PRIOR_SIGMA,
+                dims="frame",
+            )
+            physical = pm.Deterministic(
+                f"continuum__{name}", raw * factor, dims="frame"
+            )
+            layout.append(
+                ContinuumVariableSpec(
+                    parameter_name=name,
+                    value_variable=f"continuum__{name}",
+                    per_frame=True,
+                )
+            )
+        else:
+            mu = pm.Normal(
+                f"continuum__{name}__mu_normalized", mu=0.0, sigma=CONTINUUM_PRIOR_SIGMA
+            )
+            tau = pm.HalfNormal(
+                f"continuum__{name}__tau_normalized", sigma=CONTINUUM_TAU_SIGMA
+            )
+            z = pm.Normal(f"continuum__{name}__z", mu=0.0, sigma=1.0, dims="frame")
+            pm.Deterministic(f"continuum__{name}__mu", mu * factor)
+            pm.Deterministic(f"continuum__{name}__tau", tau * factor)
+            physical = pm.Deterministic(
+                f"continuum__{name}", (mu + tau * z) * factor, dims="frame"
+            )
+            layout.append(
+                ContinuumVariableSpec(
+                    parameter_name=name,
+                    value_variable=f"continuum__{name}",
+                    per_frame=True,
+                    mu_variable=f"continuum__{name}__mu",
+                    tau_variable=f"continuum__{name}__tau",
+                )
+            )
+        continuum = continuum + physical[frame_index] * powers[degree] / model_scale
+    return continuum, layout
 
 
 def _find_flux_pairs(

@@ -26,18 +26,23 @@ if TYPE_CHECKING:
     from matplotlib.figure import Figure
     from numpy.typing import ArrayLike
 
-    from noobfriend.inference.spectrum.data import NoobSpectrum
+    from noobfriend.inference.spectrum.data import NoobSpectrum, NoobSpectrumSet
     from noobfriend.inference.spectrum.data.types import DispersionAxis
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
+    from noobfriend.inference.spectrum.workspace.mcmc.frames import FrameFit
     from noobfriend.inference.spectrum.workspace.mcmc.model import MCMCModelMetadata
     from noobfriend.inference.spectrum.workspace.mcmc.options import MCMCOptions
 
 
 @dataclass(frozen=True, slots=True)
 class MCMCInputs:
-    """Input data, declarations, sampling options, and translated priors."""
+    """Input data, declarations, sampling options, and translated priors.
 
-    data: NoobSpectrum
+    ``data`` is the single :class:`NoobSpectrum` for a single-frame fit or the
+    :class:`NoobSpectrumSet` of frames for a joint fit.
+    """
+
+    data: NoobSpectrum | NoobSpectrumSet
     workspace: NoobFitWorkspace
     options: MCMCOptions
     priors: MCMCPriors
@@ -85,7 +90,33 @@ class MCMCFitResult:
         ``view`` selects the convolution layers of the component curves
         (observed = kernels + LSF, emergent = kernels only, intrinsic =
         bare profile); the total model and residuals stay observed.
+
+        A joint multi-frame fit renders per-frame panels through
+        :meth:`plot_frames` instead; the 2-D overlay arguments
+        (``flux_2d``/``spatial``/``dispersion``/``spatial_window``) are
+        single-frame only and raise if supplied for a joint fit.
         """
+        if self.inputs.workspace.n_frames > 1:
+            if any(
+                argument is not None
+                for argument in (flux_2d, spatial, dispersion, spatial_window)
+            ):
+                raise ValueError(
+                    "2-D overlays are single-frame only; a joint fit renders "
+                    "per-frame panels. Call .plot_frames() or drop flux_2d, "
+                    "spatial, dispersion, and spatial_window."
+                )
+            return self.plot_frames(
+                component_colors=component_colors,
+                data_color=data_color,
+                continuum_color=continuum_color,
+                total_color=total_color,
+                xlim=xlim,
+                ylim=ylim,
+                ylog=ylog,
+                size=size,
+                title=title,
+            )
         from noobfriend.inference.spectrum.visualization import plot_mcmc_fit
 
         return plot_mcmc_fit(
@@ -145,6 +176,57 @@ class MCMCFitResult:
 
         return plot_mcmc_pareto_k(self, size=size, title=title)
 
+    def plot_frames(
+        self,
+        *,
+        show_components: bool = True,
+        show_chi_square: bool = True,
+        component_colors: Mapping[str, str] | None = None,
+        data_color: str = "#1A1A1A",
+        continuum_color: str = "#7F7F7F",
+        total_color: str = "#D62728",
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        ylog: bool = False,
+        size: int = 1000,
+        title: str | None = None,
+    ) -> Figure:
+        """Plot the posterior-median model over each frame as stacked panels.
+
+        Works for any fit; a single-frame fit yields one panel. Each panel is
+        annotated with its chi-square per pixel so inter-visit systematics are
+        visible.
+        """
+        from noobfriend.inference.spectrum.visualization import plot_mcmc_frames
+
+        return plot_mcmc_frames(
+            self,
+            show_components=show_components,
+            show_chi_square=show_chi_square,
+            component_colors=component_colors,
+            data_color=data_color,
+            continuum_color=continuum_color,
+            total_color=total_color,
+            xlim=xlim,
+            ylim=ylim,
+            ylog=ylog,
+            size=size,
+            title=title,
+        )
+
+    def frame_fits(self) -> tuple[FrameFit, ...]:
+        """Return the posterior-median model and chi-square for each frame.
+
+        A single-frame fit yields one entry; a joint fit yields one entry per
+        frame in workspace order. Comparing ``chi_square_per_pixel`` across
+        frames exposes inter-visit systematics under the shared line model.
+        """
+        from noobfriend.inference.spectrum.workspace.mcmc.frames import (
+            build_frame_fits,
+        )
+
+        return build_frame_fits(self)
+
     def __repr__(self) -> str:
         """Return a compact representation without expanding posterior arrays."""
         diagnostics = self.sampling.diagnostics
@@ -187,7 +269,7 @@ def build_mcmc_result(
     return MCMCFitResult(
         posterior=build_mcmc_posterior(workspace, idata, metadata),
         inputs=MCMCInputs(
-            data=workspace.spectrum,
+            data=_provenance_data(workspace),
             workspace=workspace,
             options=options,
             priors=metadata.priors,
@@ -198,4 +280,17 @@ def build_mcmc_result(
         ),
         criteria=build_mcmc_criteria(idata),
         idata=idata,
+    )
+
+
+def _provenance_data(
+    workspace: NoobFitWorkspace,
+) -> NoobSpectrum | NoobSpectrumSet:
+    """Return the single spectrum or the joined frame set used for the fit."""
+    if workspace.n_frames == 1:
+        return workspace.spectrum
+    from noobfriend.inference.spectrum.data import NoobSpectrumSet
+
+    return NoobSpectrumSet(
+        dict(zip(workspace.frame_ids, workspace.spectra, strict=True))
     )

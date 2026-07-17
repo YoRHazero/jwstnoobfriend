@@ -86,6 +86,24 @@ def test_derive_can_change_component_contribution_and_profile_at_creation() -> N
     assert broad.observed_wavelength == narrow.observed_wavelength
 
 
+def test_cross_component_derive_frees_fwhm_but_keeps_center_locked() -> None:
+    narrow = NoobLine("Ha", rest=6564.61, z=2.0)
+    cross = narrow.derive(component="broad")
+    same = narrow.derive("Ha_b", rest=6564.61)
+
+    # Deriving a different component frees the FWHM to that component's range
+    # while the center stays locked to the base.
+    assert cross.fwhm_rule.is_bounded
+    assert cross.fwhm_rule.bounds == DEFAULT_FWHM_RANGES["broad"]
+    assert cross.center_rule.is_locked
+    assert cross.center_rule.target is narrow
+
+    # A same-component derive still locks the FWHM to the base.
+    assert same.component == "narrow"
+    assert same.fwhm_rule.is_locked
+    assert same.fwhm_rule.target is narrow
+
+
 def test_default_fwhm_range_tracks_component() -> None:
     narrow = NoobLine("Ha", obs=1.0)
     broad = NoobLine("Ha", obs=1.0, component="broad")

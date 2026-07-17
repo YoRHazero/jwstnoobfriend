@@ -10,6 +10,7 @@ from noobfriend.inference.spectrum.workspace.mcmc.diagnostics import (
     MCMCDivergenceWarning,
     MCMCSampling,
 )
+from noobfriend.inference.spectrum.workspace.mcmc.frames import FrameFit
 from noobfriend.inference.spectrum.workspace.mcmc.posterior import (
     MCMCComponentPosterior,
     MCMCParameterPosterior,
@@ -29,6 +30,7 @@ __all__ = [
     "MCMCComponentPosterior",
     "MCMCComponentPrior",
     "MCMCCriteria",
+    "FrameFit",
     "MCMCDiagnostics",
     "MCMCDivergenceWarning",
     "MCMCFitResult",

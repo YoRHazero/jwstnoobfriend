@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 
 FLUX_PRIOR_MULTIPLIER = 5.0
 CONTINUUM_PRIOR_SIGMA = 5.0
+# Half-normal scale (normalized units) for the per-coefficient pooling spread in
+# a multi-frame continuum; validated on GN-4014 (tau reproduces inter-frame scatter).
+CONTINUUM_TAU_SIGMA = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,9 +225,16 @@ def build_flux_source_priors(
     graph: CompiledLineGraph,
     source_ids: tuple[int, ...],
     data_amplitude: float,
+    *,
+    wavelength: np.ndarray,
+    resolving_power: float | None,
 ) -> tuple[FluxSourcePrior, ...]:
-    """Resolve data-scaled priors for independent flux sources."""
-    wavelength = np.asarray(workspace.spectrum.valid_wavelength, dtype=float)
+    """Resolve data-scaled priors for independent flux sources.
+
+    ``wavelength`` and ``resolving_power`` describe the (concatenated) fitting
+    pixels; the shared line flux scale is set from the peak response there.
+    """
+    wavelength = np.asarray(wavelength, dtype=float)
     center_values = {
         source_id: spec.initial for source_id, spec in graph.center_sources.items()
     }
@@ -248,7 +258,7 @@ def build_flux_source_priors(
             handle=handle,
             center=center,
             fwhm_kms=fwhm,
-            resolving_power=workspace.spectrum.resolving_power,
+            resolving_power=resolving_power,
             kernels=line_kernels_kms(handle, shapes),
         )
         for source_id, coefficient in flux_expression.terms.items():
@@ -309,6 +319,7 @@ def build_translated_priors(
             "flux": _line_flux_prior(handle, graph, flux_by_source),
             "fwhm": _line_fwhm_prior(handle, graph, shapes[BASE_SHAPE]),
             "center": _line_center_prior(handle, graph, center_expression),
+            "delta_v_kms": _line_delta_v_prior(handle, graph, center_expression),
         }
         for kernel in handle.line.kernels:
             for name in kernel.shape_names():
@@ -316,17 +327,44 @@ def build_translated_priors(
         components[handle.id] = MCMCComponentPrior(name=handle.id, _values=values)
     components[CONTINUUM_COMPONENT] = MCMCComponentPrior(
         name=CONTINUUM_COMPONENT,
-        _values={
-            name: MCMCParameterPrior(
-                name=name,
-                family="normal",
-                location=0.0,
-                scale=CONTINUUM_PRIOR_SIGMA * model_scale / wavelength_scale**degree,
-            )
-            for degree, name in enumerate(workspace.continuum.parameter_names)
-        },
+        _values=_continuum_priors(
+            workspace, model_scale=model_scale, wavelength_scale=wavelength_scale
+        ),
     )
     return MCMCPriors(components)
+
+
+def _continuum_priors(
+    workspace: NoobFitWorkspace,
+    *,
+    model_scale: float,
+    wavelength_scale: float,
+) -> dict[str, MCMCParameterPrior]:
+    """Translate the continuum prior, honoring frame count and sharing mode.
+
+    A single-frame (or ``"shared"``) continuum keeps one normal prior per
+    coefficient. ``"pooled"`` exposes the hyperprior on each coefficient's
+    mean (normal) and spread (half-normal); ``"independent"`` keeps the
+    per-frame normal, described once since it is identical across frames.
+    """
+    spec = workspace.continuum
+    single = workspace.n_frames == 1
+    values: dict[str, MCMCParameterPrior] = {}
+    for degree, name in enumerate(spec.parameter_names):
+        scale = CONTINUUM_PRIOR_SIGMA * model_scale / wavelength_scale**degree
+        if single or spec.sharing in ("shared", "independent"):
+            values[name] = MCMCParameterPrior(
+                name=name, family="normal", location=0.0, scale=scale
+            )
+            continue
+        tau_scale = CONTINUUM_TAU_SIGMA * model_scale / wavelength_scale**degree
+        values[f"{name}__mu"] = MCMCParameterPrior(
+            name=f"{name}__mu", family="normal", location=0.0, scale=scale
+        )
+        values[f"{name}__tau"] = MCMCParameterPrior(
+            name=f"{name}__tau", family="halfnormal", scale=tau_scale
+        )
+    return values
 
 
 def _line_flux_prior(
@@ -396,6 +434,33 @@ def _line_center_prior(
         handle.observed_wavelength * (1.0 + spec.upper / C_KMS),
     )
     return MCMCParameterPrior(name="center", family="uniform", bounds=bounds)
+
+
+def _line_delta_v_prior(
+    handle,
+    graph,
+    expression: ParameterExpression,
+) -> MCMCParameterPrior:
+    """Translate the center rule into a velocity-offset prior in km/s.
+
+    This mirrors :func:`_line_center_prior` in the velocity coordinate the
+    model samples, so the ``delta_v_kms`` posterior has a matching prior.
+    """
+    rule = handle.line.center_rule
+    if rule.is_locked:
+        return MCMCParameterPrior(
+            name="delta_v_kms",
+            family="locked",
+            target=graph.handle_by_line[id(rule.target)].id,
+        )
+    if rule.is_fixed:
+        return MCMCParameterPrior(
+            name="delta_v_kms", family="fixed", value=expression.fixed
+        )
+    spec = next(iter(expression.specs.values()))
+    return MCMCParameterPrior(
+        name="delta_v_kms", family="uniform", bounds=(spec.lower, spec.upper)
+    )
 
 
 def _kernel_shape_prior(

@@ -184,26 +184,54 @@ def build_mcmc_posterior(
             "flux": _parameter(idata, names.flux, name="flux"),
             "fwhm": _parameter(idata, names.fwhm, name="fwhm"),
             "center": _parameter(idata, names.center, name="center"),
+            "delta_v_kms": _parameter(idata, names.delta_v_kms, name="delta_v_kms"),
         }
         for label, variable_name in names.shapes:
             values[label] = _parameter(idata, variable_name, name=label)
         components[handle.id] = MCMCComponentPosterior(name=handle.id, _values=values)
     components[CONTINUUM_COMPONENT] = MCMCComponentPosterior(
         name=CONTINUUM_COMPONENT,
-        _values={
-            parameter_name: _parameter(idata, variable_name, name=parameter_name)
-            for parameter_name, variable_name in zip(
-                workspace.continuum.parameter_names,
-                metadata.continuum_variables,
-                strict=True,
-            )
-        },
+        _values=_continuum_values(idata, metadata),
     )
     return MCMCPosterior(components)
 
 
+def _continuum_values(
+    idata: Any, metadata: MCMCModelMetadata
+) -> dict[str, MCMCParameterPosterior]:
+    """Materialize continuum parameters, per-frame when the fit is joint.
+
+    A scalar coefficient keeps its plain name (``"c"``). A frame-indexed
+    coefficient is split into one entry per frame (``"c[frame_0]"``) and, for a
+    pooled continuum, the pooling mean and spread (``"c__mu"``, ``"c__tau"``).
+    """
+    values: dict[str, MCMCParameterPosterior] = {}
+    for spec in metadata.continuum_layout:
+        if not spec.per_frame:
+            values[spec.parameter_name] = _parameter(
+                idata, spec.value_variable, name=spec.parameter_name
+            )
+            continue
+        if spec.mu_variable is not None and spec.tau_variable is not None:
+            mu_key = f"{spec.parameter_name}__mu"
+            tau_key = f"{spec.parameter_name}__tau"
+            values[mu_key] = _parameter(idata, spec.mu_variable, name=mu_key)
+            values[tau_key] = _parameter(idata, spec.tau_variable, name=tau_key)
+        samples = np.asarray(idata.posterior[spec.value_variable], dtype=float)
+        for frame_position, frame_id in enumerate(metadata.frame_ids):
+            key = f"{spec.parameter_name}[{frame_id}]"
+            values[key] = _parameter_from_array(samples[..., frame_position], name=key)
+    return values
+
+
 def _parameter(idata: Any, variable_name: str, *, name: str) -> MCMCParameterPosterior:
-    samples = _readonly(np.asarray(idata.posterior[variable_name], dtype=float))
+    return _parameter_from_array(
+        np.asarray(idata.posterior[variable_name], dtype=float), name=name
+    )
+
+
+def _parameter_from_array(samples: np.ndarray, *, name: str) -> MCMCParameterPosterior:
+    samples = _readonly(samples)
     flattened = samples.reshape(-1)
     lower, upper = _highest_density_interval(flattened, probability=0.94)
     return MCMCParameterPosterior(

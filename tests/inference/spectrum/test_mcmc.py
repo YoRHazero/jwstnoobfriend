@@ -160,7 +160,7 @@ def test_model_sample_uses_built_graph_and_returns_physical_result(monkeypatch) 
 
     assert isinstance(result, MCMCFitResult)
     assert result.posterior.components == ("line", "continuum")
-    assert component.parameters == ("flux", "fwhm", "center")
+    assert component.parameters == ("flux", "fwhm", "center", "delta_v_kms")
     assert continuum.parameters == ("c",)
     assert component["flux"].samples.shape == (2, 50)
     assert component["flux"].samples.flags.writeable is False
