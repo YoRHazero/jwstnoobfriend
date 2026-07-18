@@ -11,6 +11,10 @@ from noobfriend.inference.spectrum.workspace.mcmc.diagnostics import (
     MCMCSampling,
 )
 from noobfriend.inference.spectrum.workspace.mcmc.frames import FrameFit
+from noobfriend.inference.spectrum.workspace.mcmc.lofo import (
+    FrameLOOResult,
+    FrameLOOWarning,
+)
 from noobfriend.inference.spectrum.workspace.mcmc.posterior import (
     MCMCComponentPosterior,
     MCMCParameterPosterior,
@@ -31,6 +35,8 @@ __all__ = [
     "MCMCComponentPrior",
     "MCMCCriteria",
     "FrameFit",
+    "FrameLOOResult",
+    "FrameLOOWarning",
     "MCMCDiagnostics",
     "MCMCDivergenceWarning",
     "MCMCFitResult",

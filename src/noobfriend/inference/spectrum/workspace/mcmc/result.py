@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum.data.types import DispersionAxis
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.mcmc.frames import FrameFit
+    from noobfriend.inference.spectrum.workspace.mcmc.lofo import FrameLOOResult
     from noobfriend.inference.spectrum.workspace.mcmc.model import MCMCModelMetadata
     from noobfriend.inference.spectrum.workspace.mcmc.options import MCMCOptions
 
@@ -226,6 +227,25 @@ class MCMCFitResult:
         )
 
         return build_frame_fits(self)
+
+    def frame_loo(
+        self,
+        *,
+        max_draws: int | None = 1000,
+        random_seed: int = 1729,
+    ) -> FrameLOOResult:
+        """Leave-one-frame-out PSIS cross-validation for a joint fit.
+
+        Drops a whole exposure (not a pixel), marginalizing each frame's pooled
+        continuum analytically so the estimate has no per-frame leak. Lead with
+        ``pareto_k`` and the ``elpd_i <= lpd_i`` self-check — an influential or
+        inconsistent frame shows a high Pareto-k, while raw ``elpd_i`` merely
+        scales with a frame's pixel count. Requires two or more frames and a
+        pooled continuum.
+        """
+        from noobfriend.inference.spectrum.workspace.mcmc.lofo import build_frame_loo
+
+        return build_frame_loo(self, max_draws=max_draws, random_seed=random_seed)
 
     def __repr__(self) -> str:
         """Return a compact representation without expanding posterior arrays."""
