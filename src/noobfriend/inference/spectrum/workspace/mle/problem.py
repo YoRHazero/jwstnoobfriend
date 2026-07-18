@@ -109,7 +109,7 @@ class MLEProblem:
 
     def _kernel_widths(
         self, handle: LineHandle, shape_values: dict[str, dict[int, float]]
-    ) -> tuple[tuple[str, float], ...]:
+    ) -> tuple[tuple[str, float, float], ...]:
         """Evaluate a line's kernel widths from per-name shape values."""
         index = handle.index
         shapes = self.graph.shape_expressions[index]
@@ -532,7 +532,7 @@ def _source_flux_scale(
     *,
     handle: LineHandle,
     resolving_power: float | None,
-    kernels: tuple[tuple[str, float], ...] = (),
+    kernels: tuple[tuple[str, float, float], ...] = (),
 ) -> float:
     preferred_fwhm = 200.0 if handle.component == "narrow" else 1200.0
     template = profile_template(
@@ -556,7 +556,7 @@ def _absorption_flux_upper(
     fwhm_upper_kms: float,
     resolving_power: float | None,
     multiplier: float,
-    kernels: tuple[tuple[str, float], ...] = (),
+    kernels: tuple[tuple[str, float, float], ...] = (),
 ) -> float:
     if multiplier <= 0:
         raise ValueError("absorption_bound_multiplier must be positive.")

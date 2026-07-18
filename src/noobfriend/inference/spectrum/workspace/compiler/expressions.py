@@ -258,7 +258,7 @@ def shape_expressions(
 def line_kernels_kms(
     handle: LineHandle,
     shapes: Mapping[str, ParameterExpression],
-) -> tuple[tuple[str, float], ...]:
+) -> tuple[tuple[str, float, float], ...]:
     """Return fixed-template kernel widths for one line.
 
     Evaluates each kernel shape expression at its initial (or fixed) value,
