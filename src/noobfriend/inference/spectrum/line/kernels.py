@@ -1,19 +1,20 @@
 """Built-in convolution kernels for composite line profiles.
 
-A kernel is declared by passing one of this module's functions to
-:meth:`~noobfriend.inference.spectrum.line.NoobLine.convolve`. Kernels are
-defined in zero-centred velocity space (km/s), are flux-normalized, and are
-parameterized by their FWHM in km/s so every width in a line declaration
-speaks the same language. The function bodies are reference numpy
-implementations; fit backends recognize the functions by identity and use
-closed forms where they exist.
+A kernel is declared by name — ``"gaussian"`` or ``"laplace"`` — passed to
+:meth:`~noobfriend.inference.spectrum.line.NoobLine.convolve`; the matching
+function in this module is accepted too. Kernels are defined in zero-centred
+velocity space (km/s), are flux-normalized, and are parameterized by their
+FWHM in km/s so every width in a line declaration speaks the same language.
+The function bodies are reference numpy implementations; fit backends resolve
+kernels to closed forms where they exist.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import log, pi, sqrt
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -63,8 +64,50 @@ def laplace(x: np.ndarray, fwhm: float) -> np.ndarray:
     return np.exp(-np.abs(np.asarray(x, dtype=float)) / scale) / (2.0 * scale)
 
 
-#: Registered built-in kernels, mapped to their backend dispatch kind.
-KERNEL_KINDS: dict[object, str] = {gaussian: "gaussian", laplace: "laplace"}
+type KernelName = Literal["gaussian", "laplace"]
+type KernelFunction = Callable[..., np.ndarray]
+
+#: Built-in convolution kernels, keyed by the name that ``NoobLine.convolve``
+#: accepts. Each value is the kernel's reference numpy implementation.
+BUILTIN_KERNELS: dict[KernelName, KernelFunction] = {
+    "gaussian": gaussian,
+    "laplace": laplace,
+}
+
+
+def _resolve_kernel(
+    kernel: KernelName | KernelFunction,
+) -> tuple[KernelName, KernelFunction]:
+    """Normalize a kernel spec to its ``(name, function)`` pair.
+
+    Accepts a built-in kernel name (``"gaussian"`` or ``"laplace"``) or the
+    matching built-in kernel function; any other value is reserved for the
+    not-yet-implemented numerical convolution backend.
+
+    Raises
+    ------
+    ValueError
+        If ``kernel`` is a string that is not a built-in kernel name.
+    TypeError
+        If ``kernel`` is neither a built-in name nor a built-in function.
+    """
+    if isinstance(kernel, str):
+        function = BUILTIN_KERNELS.get(kernel)
+        if function is None:
+            valid = ", ".join(repr(name) for name in BUILTIN_KERNELS)
+            raise ValueError(
+                f"unknown built-in kernel {kernel!r}; choose from {valid}."
+            )
+        return kernel, function
+    for name, function in BUILTIN_KERNELS.items():
+        if kernel is function:
+            return name, function
+    raise TypeError(
+        'convolve expects a built-in kernel name ("gaussian" or "laplace") or a '
+        "built-in kernel function from noobfriend.inference.spectrum.line.kernels; "
+        "arbitrary functions require the numerical convolution backend, which is "
+        "not implemented yet."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,4 +138,11 @@ class LineKernel:
         return f"{self.name}__{parameter}"
 
 
-__all__ = ["KERNEL_KINDS", "LineKernel", "gaussian", "laplace"]
+__all__ = [
+    "BUILTIN_KERNELS",
+    "KernelFunction",
+    "KernelName",
+    "LineKernel",
+    "gaussian",
+    "laplace",
+]

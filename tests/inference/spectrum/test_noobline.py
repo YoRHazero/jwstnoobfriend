@@ -214,6 +214,29 @@ def test_convolve_appends_kernel_with_validated_rules() -> None:
         )
 
 
+def test_convolve_accepts_kernel_name_string() -> None:
+    from noobfriend.inference.spectrum.line import kernels
+
+    # The string and the function form produce the identical kernel.
+    by_name = NoobLine("b", obs=5000.0).convolve("laplace", fwhm=(200.0, 8000.0))
+    by_function = NoobLine("b", obs=5000.0).convolve(
+        kernels.laplace, fwhm=(200.0, 8000.0)
+    )
+    assert by_name.kernels == by_function.kernels
+    assert by_name.kernels[0].kind == "laplace"
+
+    # Names chain and honor fraction exactly like the function form.
+    mixed = (
+        NoobLine("b", obs=5000.0)
+        .convolve("gaussian", fwhm=300.0)
+        .convolve("laplace", fwhm=1000.0, fraction=(0.2, 1.0))
+    )
+    assert tuple(kernel.kind for kernel in mixed.kernels) == ("gaussian", "laplace")
+
+    with pytest.raises(ValueError, match="unknown built-in kernel"):
+        NoobLine("b", obs=5000.0).convolve("voigt", fwhm=1.0)
+
+
 def test_derive_propagates_kernels() -> None:
     from noobfriend.inference.spectrum.line import kernels
 

@@ -6,7 +6,12 @@ from dataclasses import dataclass, field, replace
 
 from inspect import signature
 
-from noobfriend.inference.spectrum.line.kernels import KERNEL_KINDS, LineKernel
+from noobfriend.inference.spectrum.line.kernels import (
+    KernelFunction,
+    KernelName,
+    LineKernel,
+    _resolve_kernel,
+)
 from noobfriend.inference.spectrum.line.rules import (
     _ParameterRule,
     _required_float,
@@ -260,19 +265,26 @@ class NoobLine:
             raise ValueError("flux.ratio must be nonnegative.")
         return replace(self, _flux_rule=_ParameterRule.ratio(value))
 
-    def convolve(self, kernel: object, **shape_rules: FixedOrBounded) -> NoobLine:
+    def convolve(
+        self, kernel: KernelName | KernelFunction, **shape_rules: FixedOrBounded
+    ) -> NoobLine:
         """Return a copy convolved with a built-in kernel.
 
-        The kernel is one of the functions in
-        :mod:`noobfriend.inference.spectrum.line.kernels`, defined in
-        zero-centred velocity space (km/s). Its signature after the first
-        (``x``) argument names the kernel's shape parameters; each must be
-        given here as a fixed value or ``(lower, upper)`` bounds in km/s.
+        The kernel is named by a string — ``"gaussian"`` or ``"laplace"`` —
+        which needs no import and is the recommended form. The matching
+        built-in kernel function from
+        :mod:`noobfriend.inference.spectrum.line.kernels` (e.g.
+        ``kernels.laplace``) is also accepted; passing any other function is
+        reserved for a future numerical convolution backend and currently
+        raises. The kernel is defined in zero-centred velocity space (km/s);
+        its shape parameters (the signature after the leading ``x``) are given
+        here as fixed values or ``(lower, upper)`` bounds in km/s.
 
         Parameters
         ----------
         kernel
-            A registered kernel function, e.g. ``kernels.laplace``.
+            A built-in kernel name (``"gaussian"`` or ``"laplace"``) or the
+            matching built-in kernel function.
         **shape_rules
             One fixed-or-bounded rule per kernel shape parameter. The
             reserved ``fraction`` key (default: fixed ``1.0``) sets the
@@ -286,15 +298,8 @@ class NoobLine:
             A copy with the kernel appended to :attr:`kernels`.
         """
         fraction = shape_rules.pop("fraction", 1.0)
-        kind = KERNEL_KINDS.get(kernel)
-        if kind is None:
-            raise TypeError(
-                "convolve expects a built-in kernel from "
-                "noobfriend.inference.spectrum.line.kernels; arbitrary "
-                "functions require the numerical convolution backend, "
-                "which is not implemented yet."
-            )
-        parameters = tuple(signature(kernel).parameters)[1:]
+        kind, function = _resolve_kernel(kernel)
+        parameters = tuple(signature(function).parameters)[1:]
         unknown = set(shape_rules) - set(parameters)
         if unknown:
             names = ", ".join(sorted(unknown))
