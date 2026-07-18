@@ -168,7 +168,15 @@ class NoobFitWorkspace:
             Nonnegative seed used by random starts. Structured starts are
             deterministic and do not depend on this value.
         """
-        _require_single_frame(self, "joint multi-frame MLE")
+        if self.n_frames > 1:
+            raise NotImplementedError(
+                "MLE is a single-frame method. For several frames, either coadd "
+                "them into one NoobSpectrum and call .mle() on the stack, or use "
+                ".model() for the joint Bayesian fit (shared line parameters, "
+                "per-frame continuum). A joint MLE is intentionally not provided: "
+                "a point estimate discards the per-frame error and systematics "
+                "accounting that motivates fitting frames jointly."
+            )
         from noobfriend.inference.spectrum.workspace.mle.fit import fit_workspace_mle
 
         return fit_workspace_mle(

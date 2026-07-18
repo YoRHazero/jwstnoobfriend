@@ -50,12 +50,12 @@ def test_mapping_uses_exposure_names_as_frame_ids() -> None:
     assert frames.resolving_powers == (None, None)
 
 
-def test_resolving_power_may_differ_between_frames() -> None:
+def test_resolving_powers_reports_the_shared_value() -> None:
     frames = NoobSpectrumSet(
-        [_frame(resolving_power=1600.0), _frame(resolving_power=2700.0)]
+        [_frame(resolving_power=1600.0), _frame(resolving_power=1600.0)]
     )
 
-    assert frames.resolving_powers == (1600.0, 2700.0)
+    assert frames.resolving_powers == (1600.0, 1600.0)
 
 
 def test_rejects_empty_and_non_container_input() -> None:
@@ -74,7 +74,7 @@ def test_rejects_non_spectrum_entries_and_bad_ids() -> None:
         NoobSpectrumSet({"": _frame()})
 
 
-def test_rejects_inconsistent_unit_and_redshift() -> None:
+def test_rejects_inconsistent_unit_redshift_and_resolution() -> None:
     with pytest.raises(ValueError, match="one wavelength unit"):
         NoobSpectrumSet([_frame(unit="angstrom"), _frame(unit="nm")])
 
@@ -83,6 +83,15 @@ def test_rejects_inconsistent_unit_and_redshift() -> None:
 
     with pytest.raises(ValueError, match="one source redshift"):
         NoobSpectrumSet([_frame(z=7.0), _frame(z=6.0)])
+
+    # A joint fit is one source at a single spectral resolution: frames must
+    # share one resolving power (a different value, or a set/unset mix, is out).
+    with pytest.raises(ValueError, match="one resolving_power"):
+        NoobSpectrumSet(
+            [_frame(resolving_power=1600.0), _frame(resolving_power=2700.0)]
+        )
+    with pytest.raises(ValueError, match="one resolving_power"):
+        NoobSpectrumSet([_frame(resolving_power=1600.0), _frame(resolving_power=None)])
 
 
 def test_prepare_shares_lines_and_keeps_frames() -> None:
@@ -128,12 +137,13 @@ def test_default_continuum_sharing_is_pooled() -> None:
 
 
 def test_multi_frame_mle_and_summary_defer_cleanly() -> None:
-    # The joint MCMC model is available (see test_mcmc_joint); MLE and the
-    # HTML summary remain single-frame only for now.
+    # The joint MCMC model is available (see test_mcmc_joint). MLE stays
+    # single-frame by design (coadd, or use .model()); the HTML summary is
+    # single-frame only for now.
     base = NoobLine("OIII", rest=5008.24, z=7.0)
     workspace = NoobSpectrumSet([_frame(), _frame()]).prepare([base])
 
-    with pytest.raises(NotImplementedError, match="multi-frame"):
+    with pytest.raises(NotImplementedError, match="single-frame method"):
         workspace.mle()
     with pytest.raises(NotImplementedError, match="multi-frame"):
         workspace.summary()

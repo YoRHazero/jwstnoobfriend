@@ -123,18 +123,6 @@ def test_single_frame_set_keeps_scalar_continuum() -> None:
     assert "continuum__c" not in wrapped.named_vars_to_dims
 
 
-def test_heterogeneous_resolving_power_is_deferred() -> None:
-    joint = NoobSpectrumSet(
-        [
-            _frame(seed=1, continuum_offset=0.05, resolving_power=1600.0),
-            _frame(seed=2, continuum_offset=0.09, resolving_power=2700.0),
-        ]
-    )
-
-    with pytest.raises(NotImplementedError, match="shared resolving_power"):
-        joint.prepare([_line()]).model()
-
-
 @pytest.fixture(scope="module")
 def joint_result():
     joint = NoobSpectrumSet(

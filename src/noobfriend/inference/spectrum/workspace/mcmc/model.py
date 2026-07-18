@@ -24,7 +24,6 @@ from noobfriend.inference.spectrum.workspace.mcmc.priors import (
 )
 
 if TYPE_CHECKING:
-    from noobfriend.inference.spectrum.data import NoobSpectrum
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.compiler import (
         CompiledLineGraph,
@@ -107,7 +106,6 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
     graph = compile_line_graph(workspace)
     _validate_profiles(workspace)
     frames = workspace.spectra
-    _validate_homogeneous_resolving_power(frames)
     n_frames = len(frames)
 
     wavelength_parts: list[np.ndarray] = []
@@ -130,7 +128,10 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         flux_amplitude, float(np.median(np.abs(data))), float(np.median(error))
     )
     wavelength_scale = max(float(np.ptp(wavelength)) / 2.0, 1.0)
+    # Every frame shares one resolving power (enforced by NoobSpectrumSet), so a
+    # single instrumental width and its effective-FWHM reparameterization apply.
     resolving_power = frames[0].resolving_power
+    instrumental_fwhm = None if resolving_power is None else C_KMS / resolving_power
 
     flux_source_ids = tuple(
         dict.fromkeys(
@@ -224,7 +225,6 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         shape_values: dict[str, dict[int, Any]] = {
             name: {} for name in graph.shape_sources
         }
-        instrumental_fwhm = None if resolving_power is None else C_KMS / resolving_power
         for shape_name, sources in graph.shape_sources.items():
             for source_id, spec in sources.items():
                 handle = graph.handle_by_line[source_id]
@@ -353,24 +353,6 @@ def _validate_profiles(workspace: NoobFitWorkspace) -> None:
     if any(handle.profile != "gaussian" for handle in workspace.handles):
         raise NotImplementedError(
             "resolving_power is only implemented for gaussian line profiles."
-        )
-
-
-def _validate_homogeneous_resolving_power(
-    frames: tuple[NoobSpectrum, ...],
-) -> None:
-    """Require every frame to share one spectral resolution.
-
-    Per-frame resolving power (heterogeneous LSF) changes the sampled FWHM
-    coordinate and is deferred to a later phase; a joint fit therefore needs a
-    single instrumental width shared across frames.
-    """
-    resolving_powers = {frame.resolving_power for frame in frames}
-    if len(resolving_powers) > 1:
-        raise NotImplementedError(
-            "joint fits currently require one shared resolving_power across "
-            f"frames; got {sorted(value for value in resolving_powers if value is not None)}"
-            " (heterogeneous-resolution fitting arrives in a later phase)."
         )
 
 

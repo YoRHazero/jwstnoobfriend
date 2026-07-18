@@ -40,7 +40,7 @@ class NoobSpectrumSet:
         a :class:`NoobSpectrum`.
     ValueError
         If no frame is given, frame ids are not unique, or the frames disagree
-        on wavelength unit or redshift.
+        on wavelength unit, redshift, or resolving power.
     """
 
     frames: tuple[NoobSpectrum, ...]
@@ -180,3 +180,9 @@ def _validate_frames(
             and not isclose(reference_z, frame.z, rel_tol=1e-10, abs_tol=1e-12)
         ):
             raise ValueError("all frames must share one source redshift.")
+
+    if len({frame.resolving_power for frame in frames}) > 1:
+        raise ValueError(
+            "all frames must share one resolving_power; a joint fit is one source "
+            "observed at a single spectral resolution."
+        )
