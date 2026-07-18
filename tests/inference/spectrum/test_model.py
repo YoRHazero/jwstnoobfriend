@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from noobfriend.inference.spectrum import NoobLine, NoobSpectrum, NoobSpectrumModel
+from noobfriend.inference.spectrum import (
+    LineHandle,
+    NoobLine,
+    NoobSpectrum,
+    NoobSpectrumModel,
+)
 
 pm = pytest.importorskip("pymc")
 
@@ -175,3 +180,100 @@ def test_workspace_model_rejects_non_gaussian_with_resolving_power() -> None:
 
     with pytest.raises(NotImplementedError, match="gaussian"):
         workspace.model()
+
+
+def _probe_handle(profile: str) -> LineHandle:
+    """Return a minimal handle carrying only the profile family templates read."""
+    line = NoobLine("probe", obs=5007.0, profile=profile)
+    return LineHandle(
+        id="probe",
+        index=0,
+        line=line,
+        observed_wavelength=5007.0,
+        rest_wavelength=None,
+        component="narrow",
+        contribution="emission",
+        profile=profile,
+    )
+
+
+def test_symbolic_profile_matches_numeric_profile_template() -> None:
+    """The PyTensor sampling profile must equal the NumPy reconstruction profile.
+
+    Sampling uses ``symbolic_profile`` while every plot, chi-square, and
+    cross-validation reconstruction uses ``profile_template``; a silent drift
+    between them would make the shown model disagree with the sampled one. Both
+    now share one core, so this pins them together across every profile family,
+    the instrumental-LSF fold, and the convolution-kernel branches (including
+    the numeric zero-weight-branch pruning that the symbolic path omits).
+    """
+    pt = pytest.importorskip("pytensor.tensor")
+
+    from noobfriend.inference.spectrum.workspace.compiler import (
+        C_KMS,
+        profile_template,
+        symbolic_profile,
+    )
+
+    # Reaches deep into the wings (~70 sigma), where the EMG closed form used to
+    # produce 0 * inf = NaN; both paths must stay finite and agree there.
+    wavelength = np.linspace(4847.0, 5167.0, 321)
+    center = 5007.0
+    fwhm = 320.0
+
+    def numeric(profile, *, resolving_power=None, kernels=()):
+        return profile_template(
+            wavelength,
+            handle=_probe_handle(profile),
+            center=center,
+            fwhm_kms=fwhm,
+            resolving_power=resolving_power,
+            kernels=kernels,
+        )
+
+    def symbolic(profile, *, effective_fwhm=fwhm, kernels=()):
+        expression = symbolic_profile(
+            pt,
+            profile=profile,
+            wavelength=wavelength,
+            center=pt.as_tensor_variable(float(center)),
+            fwhm_kms=pt.as_tensor_variable(float(effective_fwhm)),
+            kernels=tuple(
+                (
+                    kind,
+                    pt.as_tensor_variable(float(width)),
+                    pt.as_tensor_variable(float(fraction)),
+                )
+                for kind, width, fraction in kernels
+            ),
+        )
+        return np.asarray(expression.eval())
+
+    def agree(num, sym):
+        assert np.all(np.isfinite(num)), "numeric profile has non-finite values"
+        assert np.all(np.isfinite(sym)), "symbolic profile has non-finite values"
+        np.testing.assert_allclose(num, sym, rtol=1e-7, atol=1e-12)
+
+    for profile in ("gaussian", "lorentzian", "exponential"):
+        agree(numeric(profile), symbolic(profile))
+
+    # Instrumental LSF: the numeric path folds it internally from the resolving
+    # power, the symbolic path receives the pre-folded effective width.
+    resolving_power = 1600.0
+    effective = float(np.sqrt(fwhm**2 + (C_KMS / resolving_power) ** 2))
+    agree(
+        numeric("gaussian", resolving_power=resolving_power),
+        symbolic("gaussian", effective_fwhm=effective),
+    )
+
+    # Convolution kernels: the exact EMG closed form and the branch mixture,
+    # including the deep wings that previously overflowed to NaN.
+    for kernels in (
+        (("laplace", 140.0, 1.0),),
+        (("laplace", 140.0, 0.5),),
+        (("gaussian", 90.0, 0.6),),
+    ):
+        agree(
+            numeric("gaussian", kernels=kernels),
+            symbolic("gaussian", kernels=kernels),
+        )

@@ -234,6 +234,60 @@ def test_kernel_shapes_compile_and_emg_matches_numerical_convolution() -> None:
     assert np.allclose(folded, direct)
 
 
+def test_profile_template_stack_matches_scalar_loop() -> None:
+    from noobfriend.inference.spectrum.workspace.compiler import (
+        profile_template_stack,
+    )
+
+    wavelength = np.linspace(4900.0, 5100.0, 401)
+    rng = np.random.default_rng(0)
+    centers = 5000.0 + rng.uniform(-6.0, 6.0, size=5)
+    fwhms = rng.uniform(150.0, 900.0, size=5)
+
+    def gaussian_handle():
+        return _local_spectrum().prepare([NoobLine("line", obs=5000.0)]).handles[0]
+
+    def check(handle, *, resolving_power=None, kernels=()):
+        stack = profile_template_stack(
+            wavelength,
+            handle=handle,
+            centers=centers,
+            fwhms_kms=fwhms,
+            resolving_power=resolving_power,
+            kernels=kernels,
+        )
+        for i in range(centers.size):
+            scalar = profile_template(
+                wavelength,
+                handle=handle,
+                center=centers[i],
+                fwhm_kms=fwhms[i],
+                resolving_power=resolving_power,
+                kernels=tuple(
+                    (kind, width[i], fraction[i]) for kind, width, fraction in kernels
+                ),
+            )
+            np.testing.assert_allclose(stack[i], scalar, rtol=1e-12, atol=1e-15)
+
+    check(gaussian_handle())
+    check(gaussian_handle(), resolving_power=1600.0)
+
+    # fraction[0] == 1.0 exercises the scalar prune vs batched no-prune branch.
+    fractions = np.array([1.0, 0.8, 0.5, 0.3, 0.9])
+    laplace = ("laplace", rng.uniform(200.0, 1500.0, size=5), fractions)
+    check(gaussian_handle(), kernels=(laplace,))
+    # A gaussian kernel quadrature-adds array widths -> exercises the array sqrt.
+    gaussian = ("gaussian", rng.uniform(200.0, 1200.0, size=5), fractions)
+    check(gaussian_handle(), kernels=(gaussian,))
+
+    lorentzian = (
+        _local_spectrum()
+        .prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+        .handles[0]
+    )
+    check(lorentzian)
+
+
 def test_fraction_mixes_convolved_and_bare_branches() -> None:
     from noobfriend.inference.spectrum.line import kernels as _k
 

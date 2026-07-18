@@ -26,6 +26,7 @@ import numpy as np
 from noobfriend.inference.spectrum.workspace.compiler import (
     contribution_sign,
     profile_template,
+    profile_template_stack,
 )
 
 if TYPE_CHECKING:
@@ -238,27 +239,24 @@ def _line_model_draws(
     wavelength: np.ndarray,
     resolving_power: float | None,
 ) -> np.ndarray:
+    """Sum every line's signed, flux-scaled profile across all posterior draws.
+
+    Each line is evaluated once for the whole draw stack (a single vectorized
+    call over the draw axis) rather than once per draw, so the cost scales with
+    the number of lines instead of lines times draws.
+    """
     n_draws = line_draws[0][1].size if line_draws else 0
     total = np.zeros((n_draws, wavelength.size), dtype=float)
     for handle, flux, center, fwhm, kernels in line_draws:
-        sign = contribution_sign(handle)
-        for draw in range(n_draws):
-            draw_kernels = tuple(
-                (kind, widths[draw], fractions[draw])
-                for kind, widths, fractions in kernels
-            )
-            total[draw] += (
-                sign
-                * flux[draw]
-                * profile_template(
-                    wavelength,
-                    handle=handle,
-                    center=center[draw],
-                    fwhm_kms=fwhm[draw],
-                    resolving_power=resolving_power,
-                    kernels=draw_kernels,
-                )
-            )
+        stack = profile_template_stack(
+            wavelength,
+            handle=handle,
+            centers=center,
+            fwhms_kms=fwhm,
+            resolving_power=resolving_power,
+            kernels=kernels,
+        )
+        total += (contribution_sign(handle) * flux)[:, None] * stack
     return total
 
 

@@ -23,6 +23,11 @@ from noobfriend.inference.spectrum.workspace.compiler.graph import (
 from noobfriend.inference.spectrum.workspace.compiler.profiles import (
     C_KMS,
     profile_template,
+    profile_template_stack,
+)
+from noobfriend.inference.spectrum.workspace.compiler.symbolic import (
+    symbolic_expression,
+    symbolic_profile,
 )
 
 __all__ = [
@@ -43,5 +48,8 @@ __all__ = [
     "line_fwhm_kms",
     "pack_parameter_specs",
     "profile_template",
+    "profile_template_stack",
     "shape_expressions",
+    "symbolic_expression",
+    "symbolic_profile",
 ]

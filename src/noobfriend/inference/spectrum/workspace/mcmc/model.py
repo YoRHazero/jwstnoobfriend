@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from math import isclose, log, pi, sqrt
+from math import isclose, log, sqrt
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -14,6 +14,8 @@ from noobfriend.inference.spectrum.workspace.compiler import (
     C_KMS,
     compile_line_graph,
     contribution_sign,
+    symbolic_expression,
+    symbolic_profile,
 )
 from noobfriend.inference.spectrum.workspace.mcmc.priors import (
     CONTINUUM_PRIOR_SIGMA,
@@ -27,12 +29,9 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.compiler import (
         CompiledLineGraph,
-        FluxExpression,
-        ParameterExpression,
     )
 
 
-_GAUSSIAN_FWHM_TO_SIGMA = 2.0 * sqrt(2.0 * log(2.0))
 _SQRT2 = sqrt(2.0)
 
 
@@ -261,17 +260,15 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
             graph.shape_expressions,
             strict=True,
         ):
-            flux = _symbolic_expression(flux_expression, flux_values, pt)
-            velocity = _symbolic_expression(center_expression, center_values, pt)
-            fwhm = _symbolic_expression(
-                shapes[BASE_SHAPE], shape_values[BASE_SHAPE], pt
-            )
+            flux = symbolic_expression(pt, flux_expression, flux_values)
+            velocity = symbolic_expression(pt, center_expression, center_values)
+            fwhm = symbolic_expression(pt, shapes[BASE_SHAPE], shape_values[BASE_SHAPE])
             center = handle.observed_wavelength * (1.0 + velocity / C_KMS)
             effective_fwhm = fwhm
             if instrumental_fwhm is not None:
                 effective_fwhm = pt.sqrt(fwhm**2 + instrumental_fwhm**2)
             shape_tensors = tuple(
-                (name, _symbolic_expression(shapes[name], shape_values[name], pt))
+                (name, symbolic_expression(pt, shapes[name], shape_values[name]))
                 for kernel in handle.line.kernels
                 for name in kernel.shape_names()
             )
@@ -284,12 +281,12 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                 )
                 for kernel in handle.line.kernels
             )
-            template = _symbolic_profile(
-                wavelength,
+            template = symbolic_profile(
+                pt,
                 profile=handle.profile,
+                wavelength=wavelength,
                 center=center,
                 fwhm_kms=effective_fwhm,
-                pt=pt,
                 kernels=kernel_triples,
             )
             line_total = (
@@ -484,80 +481,6 @@ def _find_flux_pairs(
             used_absorptions.add(absorption_id)
             break
     return tuple(pairs)
-
-
-def _symbolic_expression(
-    expression: FluxExpression | ParameterExpression, values: dict[int, Any], pt: Any
-) -> Any:
-    output = pt.as_tensor_variable(float(expression.fixed))
-    for source_id, coefficient in expression.terms.items():
-        output = output + float(coefficient) * values[source_id]
-    return output
-
-
-def _symbolic_profile(
-    wavelength: np.ndarray,
-    *,
-    profile: str,
-    center: Any,
-    fwhm_kms: Any,
-    pt: Any,
-    kernels: tuple[tuple[str, Any, Any], ...] = (),
-) -> Any:
-    if kernels:
-        if profile != "gaussian":
-            raise NotImplementedError(
-                "convolution kernels currently require a gaussian base profile."
-            )
-        if sum(1 for kind, _, _ in kernels if kind == "laplace") > 1:
-            raise NotImplementedError(
-                "at most one laplace convolution kernel is supported."
-            )
-
-    if profile == "gaussian":
-        delta = wavelength - center
-        branches: list[tuple[Any, Any, Any | None]] = [(1.0, fwhm_kms, None)]
-        for kind, width, fraction in kernels:
-            updated: list[tuple[Any, Any, Any | None]] = []
-            for weight, gauss_fwhm, laplace_fwhm in branches:
-                updated.append((weight * (1.0 - fraction), gauss_fwhm, laplace_fwhm))
-                if kind == "gaussian":
-                    updated.append(
-                        (
-                            weight * fraction,
-                            pt.sqrt(gauss_fwhm**2 + width**2),
-                            laplace_fwhm,
-                        )
-                    )
-                else:
-                    updated.append((weight * fraction, gauss_fwhm, width))
-            branches = updated
-        total: Any = 0.0
-        for weight, gauss_fwhm, laplace_fwhm in branches:
-            sigma = center * gauss_fwhm / C_KMS / _GAUSSIAN_FWHM_TO_SIGMA
-            if laplace_fwhm is None:
-                total = total + weight * pt.exp(-0.5 * (delta / sigma) ** 2) / (
-                    sigma * sqrt(2.0 * pi)
-                )
-            else:
-                scale = center * laplace_fwhm / C_KMS / (2.0 * log(2.0))
-                u_plus = (sigma / scale + delta / sigma) / sqrt(2.0)
-                u_minus = (sigma / scale - delta / sigma) / sqrt(2.0)
-                total = total + weight * (
-                    pt.exp(-0.5 * (delta / sigma) ** 2)
-                    / (4.0 * scale)
-                    * (pt.erfcx(u_plus) + pt.erfcx(u_minus))
-                )
-        return total
-
-    fwhm_wavelength = center * fwhm_kms / C_KMS
-    if profile == "lorentzian":
-        gamma = 0.5 * fwhm_wavelength
-        return (gamma / pi) / ((wavelength - center) ** 2 + gamma**2)
-    if profile == "exponential":
-        scale = fwhm_wavelength / (2.0 * log(2.0))
-        return pt.exp(-pt.abs(wavelength - center) / scale) / (2.0 * scale)
-    raise ValueError(f"Unsupported profile: {profile!r}.")
 
 
 def _safe_name(value: str) -> str:
