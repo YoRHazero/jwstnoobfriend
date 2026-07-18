@@ -25,14 +25,15 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from html import escape
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.special import logsumexp
 
-from noobfriend.inference.spectrum.workspace.compiler import (
-    contribution_sign,
-    profile_template,
+from noobfriend.inference.spectrum.workspace.mcmc.frames import (
+    _draw_indices,
+    _line_model_draws,
+    _line_parameter_draws,
 )
 
 if TYPE_CHECKING:
@@ -210,38 +211,6 @@ def build_frame_loo(
     )
 
 
-def _draw_indices(
-    result: MCMCFitResult, *, max_draws: int | None, random_seed: int
-) -> np.ndarray:
-    reference = result.posterior[result.posterior.components[0]]
-    total = reference[reference.parameters[0]].samples.size
-    if max_draws is None or max_draws >= total:
-        return np.arange(total)
-    rng = np.random.default_rng(random_seed)
-    return np.sort(rng.choice(total, size=max_draws, replace=False))
-
-
-def _line_parameter_draws(
-    result: MCMCFitResult, indices: np.ndarray
-) -> tuple[tuple[Any, np.ndarray, np.ndarray, np.ndarray, tuple], ...]:
-    draws = []
-    for handle in result.inputs.workspace.handles:
-        posterior = result.posterior[handle.id]
-        flux = posterior["flux"].samples.reshape(-1)[indices]
-        center = posterior["center"].samples.reshape(-1)[indices]
-        fwhm = posterior["fwhm"].samples.reshape(-1)[indices]
-        kernels = tuple(
-            (
-                kernel.kind,
-                posterior[kernel.shape_name("fwhm")].samples.reshape(-1)[indices],
-                posterior[kernel.shape_name("fraction")].samples.reshape(-1)[indices],
-            )
-            for kernel in handle.line.kernels
-        )
-        draws.append((handle, flux, center, fwhm, kernels))
-    return tuple(draws)
-
-
 def _continuum_hyperparameter_draws(
     result: MCMCFitResult, indices: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -260,35 +229,6 @@ def _shared_continuum_draws(result: MCMCFitResult, indices: np.ndarray) -> np.nd
     continuum = result.posterior["continuum"]
     names = result.inputs.workspace.continuum.parameter_names
     return np.stack([continuum[name].samples.reshape(-1)[indices] for name in names])
-
-
-def _line_model_draws(
-    line_draws: tuple[tuple[Any, np.ndarray, np.ndarray, np.ndarray, tuple], ...],
-    wavelength: np.ndarray,
-    resolving_power: float | None,
-) -> np.ndarray:
-    n_draws = line_draws[0][1].size if line_draws else 0
-    total = np.zeros((n_draws, wavelength.size), dtype=float)
-    for handle, flux, center, fwhm, kernels in line_draws:
-        sign = contribution_sign(handle)
-        for draw in range(n_draws):
-            draw_kernels = tuple(
-                (kind, widths[draw], fractions[draw])
-                for kind, widths, fractions in kernels
-            )
-            total[draw] += (
-                sign
-                * flux[draw]
-                * profile_template(
-                    wavelength,
-                    handle=handle,
-                    center=center[draw],
-                    fwhm_kms=fwhm[draw],
-                    resolving_power=resolving_power,
-                    kernels=draw_kernels,
-                )
-            )
-    return total
 
 
 def _collapsed_frame_log_likelihood(

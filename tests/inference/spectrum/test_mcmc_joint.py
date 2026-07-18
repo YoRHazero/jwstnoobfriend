@@ -194,6 +194,20 @@ def test_frame_fits_expose_per_frame_goodness_of_fit(joint_result) -> None:
         assert fit.chi_square_per_pixel < 3.0
         # Read-only arrays like the rest of the result surface.
         assert fit.model.flags.writeable is False
+        # No band unless one is requested.
+        assert fit.model_lower is None and fit.model_upper is None
+
+
+def test_frame_fits_band_brackets_the_median_model(joint_result) -> None:
+    fits = joint_result.frame_fits(hdi_probability=0.9, max_draws=400)
+
+    for fit in fits:
+        assert fit.model_lower is not None and fit.model_upper is not None
+        assert fit.model_lower.shape == fit.model.shape
+        assert fit.model_lower.flags.writeable is False
+        # The band contains the median model pointwise (small tolerance).
+        assert np.all(fit.model_lower <= fit.model + 1e-9)
+        assert np.all(fit.model <= fit.model_upper + 1e-9)
 
 
 def test_joint_plot_renders_one_panel_per_frame(joint_result) -> None:

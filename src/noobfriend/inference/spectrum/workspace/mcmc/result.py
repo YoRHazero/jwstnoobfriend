@@ -108,6 +108,9 @@ class MCMCFitResult:
                     "spatial, dispersion, and spatial_window."
                 )
             return self.plot_frames(
+                hdi_probability=hdi_probability,
+                posterior_draws=posterior_draws,
+                random_seed=random_seed,
                 component_colors=component_colors,
                 data_color=data_color,
                 continuum_color=continuum_color,
@@ -180,6 +183,9 @@ class MCMCFitResult:
     def plot_frames(
         self,
         *,
+        hdi_probability: float | None = 0.94,
+        posterior_draws: int | None = 1000,
+        random_seed: int = 1729,
         show_components: bool = True,
         show_chi_square: bool = True,
         component_colors: Mapping[str, str] | None = None,
@@ -192,16 +198,20 @@ class MCMCFitResult:
         size: int = 1000,
         title: str | None = None,
     ) -> Figure:
-        """Plot the posterior-median model over each frame as stacked panels.
+        """Plot the posterior model over each frame as stacked panels.
 
-        Works for any fit; a single-frame fit yields one panel. Each panel is
-        annotated with its chi-square per pixel so inter-visit systematics are
-        visible.
+        Works for any fit; a single-frame fit yields one panel. Each frame's
+        total model carries a pointwise ``hdi_probability`` band (its parameter
+        uncertainty; pass ``None`` for median only), and each panel is annotated
+        with its chi-square per pixel so inter-visit systematics are visible.
         """
         from noobfriend.inference.spectrum.visualization import plot_mcmc_frames
 
         return plot_mcmc_frames(
             self,
+            hdi_probability=hdi_probability,
+            posterior_draws=posterior_draws,
+            random_seed=random_seed,
             show_components=show_components,
             show_chi_square=show_chi_square,
             component_colors=component_colors,
@@ -215,18 +225,31 @@ class MCMCFitResult:
             title=title,
         )
 
-    def frame_fits(self) -> tuple[FrameFit, ...]:
-        """Return the posterior-median model and chi-square for each frame.
+    def frame_fits(
+        self,
+        *,
+        hdi_probability: float | None = None,
+        max_draws: int | None = 1000,
+        random_seed: int = 1729,
+    ) -> tuple[FrameFit, ...]:
+        """Return the posterior model and chi-square for each frame.
 
         A single-frame fit yields one entry; a joint fit yields one entry per
         frame in workspace order. Comparing ``chi_square_per_pixel`` across
         frames exposes inter-visit systematics under the shared line model.
+        With ``hdi_probability`` set, each frame also carries the total model's
+        pointwise highest-density band (``model_lower``/``model_upper``).
         """
         from noobfriend.inference.spectrum.workspace.mcmc.frames import (
             build_frame_fits,
         )
 
-        return build_frame_fits(self)
+        return build_frame_fits(
+            self,
+            hdi_probability=hdi_probability,
+            max_draws=max_draws,
+            random_seed=random_seed,
+        )
 
     def frame_loo(
         self,

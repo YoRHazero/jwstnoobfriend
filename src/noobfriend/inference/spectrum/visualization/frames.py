@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 def plot_mcmc_frames(
     result: MCMCFitResult,
     *,
+    hdi_probability: float | None = 0.94,
+    posterior_draws: int | None = 1000,
+    random_seed: int = 1729,
     show_components: bool = True,
     show_chi_square: bool = True,
     component_colors: Mapping[str, str] | None = None,
@@ -35,7 +38,7 @@ def plot_mcmc_frames(
     size: int = 1000,
     title: str | None = None,
 ) -> Figure:
-    """Plot the posterior-median model over each frame as stacked panels.
+    """Plot the posterior model over each frame as stacked panels.
 
     Every frame is drawn on its own native wavelength grid with the shared line
     model and that frame's continuum; the per-frame chi-square per pixel is
@@ -45,6 +48,13 @@ def plot_mcmc_frames(
     ----------
     result
         A sampled MCMC result (single- or multi-frame).
+    hdi_probability
+        Shade each frame's total model with this pointwise highest-density band
+        (the model's parameter uncertainty). ``None`` draws only the median.
+    posterior_draws
+        Cap on posterior draws used for the band; ``None`` uses every draw.
+    random_seed
+        Seed for the band's draw subsampling.
     show_components
         Draw each line's contribution on the continuum when more than one line
         is present.
@@ -60,7 +70,12 @@ def plot_mcmc_frames(
     """
     import matplotlib.pyplot as plt
 
-    fits = build_frame_fits(result)
+    fits = build_frame_fits(
+        result,
+        hdi_probability=hdi_probability,
+        max_draws=posterior_draws,
+        random_seed=random_seed,
+    )
     workspace = result.inputs.workspace
     line_ids = tuple(workspace.ids)
     colors = resolve_component_colors(line_ids, component_colors)
@@ -97,6 +112,17 @@ def plot_mcmc_frames(
                     linewidth=1.2,
                     label=line_id,
                 )
+        if fit.model_lower is not None and fit.model_upper is not None:
+            axis.fill_between(
+                fit.wavelength,
+                fit.model_lower,
+                fit.model_upper,
+                color=total_color,
+                alpha=0.18,
+                linewidth=0.0,
+                zorder=1,
+                label=f"{hdi_probability:.0%} HDI",
+            )
         axis.plot(
             fit.wavelength,
             fit.model,
