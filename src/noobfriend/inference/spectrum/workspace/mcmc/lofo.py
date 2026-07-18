@@ -125,12 +125,19 @@ def build_frame_loo(
     max_draws: int | None = 1000,
     random_seed: int = 1729,
 ) -> FrameLOOResult:
-    """Compute collapsed-continuum leave-one-frame-out PSIS cross-validation.
+    """Compute leave-one-frame-out PSIS cross-validation.
+
+    A ``"pooled"`` continuum is integrated out analytically per frame under its
+    pooling prior (the collapsed marginal that removes the per-frame leak). A
+    ``"shared"`` continuum has no per-frame nuisance to leak, so the frame's
+    likelihood is evaluated directly at the posterior draws. ``"independent"``
+    continua are not supported.
 
     Parameters
     ----------
     result
-        A sampled joint (multi-frame) MCMC result with a pooled continuum.
+        A sampled joint (multi-frame) MCMC result with a pooled or shared
+        continuum.
     max_draws
         Cap on posterior draws used to reconstruct the per-frame line model;
         ``None`` uses every draw. Subsampling keeps the reconstruction fast.
@@ -147,8 +154,7 @@ def build_frame_loo(
     ValueError
         If the fit has fewer than two frames.
     NotImplementedError
-        If the continuum is not pooled (the collapsed marginal is derived for
-        the pooling prior).
+        If the continuum is ``"independent"``.
 
     Warns
     -----
@@ -159,15 +165,18 @@ def build_frame_loo(
     workspace = result.inputs.workspace
     if workspace.n_frames < 2:
         raise ValueError("frame LOO requires at least two frames.")
-    if workspace.continuum.sharing != "pooled":
+    sharing = workspace.continuum.sharing
+    if sharing not in ("pooled", "shared"):
         raise NotImplementedError(
-            "frame LOO currently supports a pooled continuum; got "
-            f"{workspace.continuum.sharing!r}."
+            f"frame LOO supports 'pooled' and 'shared' continua; got {sharing!r}."
         )
 
     indices = _draw_indices(result, max_draws=max_draws, random_seed=random_seed)
     line_draws = _line_parameter_draws(result, indices)
-    mu, tau = _continuum_hyperparameter_draws(result, indices)
+    if sharing == "pooled":
+        mu, tau = _continuum_hyperparameter_draws(result, indices)
+    else:
+        continuum_coefficients = _shared_continuum_draws(result, indices)
 
     log_likelihood = np.empty((indices.size, workspace.n_frames), dtype=float)
     n_pixels = np.empty(workspace.n_frames, dtype=int)
@@ -177,14 +186,23 @@ def build_frame_loo(
         variance = np.asarray(frame.valid_error, dtype=float) ** 2
         design = workspace.continuum.design(wavelength)
         line_model = _line_model_draws(line_draws, wavelength, frame.resolving_power)
-        log_likelihood[:, frame_index] = _collapsed_frame_log_likelihood(
-            data=data,
-            variance=variance,
-            design=design,
-            line_model=line_model,
-            mu=mu,
-            tau=tau,
-        )
+        if sharing == "pooled":
+            log_likelihood[:, frame_index] = _collapsed_frame_log_likelihood(
+                data=data,
+                variance=variance,
+                design=design,
+                line_model=line_model,
+                mu=mu,
+                tau=tau,
+            )
+        else:
+            log_likelihood[:, frame_index] = _shared_frame_log_likelihood(
+                data=data,
+                variance=variance,
+                design=design,
+                line_model=line_model,
+                coefficients=continuum_coefficients,
+            )
         n_pixels[frame_index] = wavelength.size
 
     return _summarize_frame_loo(
@@ -236,6 +254,12 @@ def _continuum_hyperparameter_draws(
         [continuum[f"{name}__tau"].samples.reshape(-1)[indices] for name in names]
     )
     return mu, tau
+
+
+def _shared_continuum_draws(result: MCMCFitResult, indices: np.ndarray) -> np.ndarray:
+    continuum = result.posterior["continuum"]
+    names = result.inputs.workspace.continuum.parameter_names
+    return np.stack([continuum[name].samples.reshape(-1)[indices] for name in names])
 
 
 def _line_model_draws(
@@ -305,6 +329,29 @@ def _collapsed_frame_log_likelihood(
         + np.linalg.slogdet(normal_matrix)[1]
     )
     return -0.5 * (n_pixels * np.log(2.0 * np.pi) + log_det + quadratic)
+
+
+def _shared_frame_log_likelihood(
+    *,
+    data: np.ndarray,
+    variance: np.ndarray,
+    design: np.ndarray,
+    line_model: np.ndarray,
+    coefficients: np.ndarray,
+) -> np.ndarray:
+    """Per-draw Gaussian log-likelihood at the shared continuum.
+
+    A shared continuum has no per-frame nuisance to integrate out — leaving a
+    frame out cannot revert a frame-specific coefficient to its prior — so the
+    frame likelihood is evaluated directly at each draw's continuum
+    ``design @ coefficients`` plus the shared line model.
+    """
+    continuum = (design @ coefficients).T  # (S, n)
+    residual = data[None, :] - (continuum + line_model)  # (S, n)
+    return -0.5 * np.sum(
+        np.log(2.0 * np.pi * variance)[None, :] + residual**2 / variance[None, :],
+        axis=1,
+    )
 
 
 def _diag_batch(values: np.ndarray) -> np.ndarray:

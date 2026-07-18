@@ -236,12 +236,13 @@ class MCMCFitResult:
     ) -> FrameLOOResult:
         """Leave-one-frame-out PSIS cross-validation for a joint fit.
 
-        Drops a whole exposure (not a pixel), marginalizing each frame's pooled
-        continuum analytically so the estimate has no per-frame leak. Lead with
+        Drops a whole exposure (not a pixel). A pooled continuum is marginalized
+        analytically per frame so the estimate has no per-frame leak; a shared
+        continuum has no per-frame nuisance and is evaluated directly. Lead with
         ``pareto_k`` and the ``elpd_i <= lpd_i`` self-check — an influential or
         inconsistent frame shows a high Pareto-k, while raw ``elpd_i`` merely
         scales with a frame's pixel count. Requires two or more frames and a
-        pooled continuum.
+        pooled or shared continuum (``"independent"`` is not supported).
         """
         from noobfriend.inference.spectrum.workspace.mcmc.lofo import build_frame_loo
 

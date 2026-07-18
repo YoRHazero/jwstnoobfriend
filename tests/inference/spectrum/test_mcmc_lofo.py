@@ -126,14 +126,36 @@ def test_frame_loo_requires_multiple_frames() -> None:
         result.frame_loo()
 
 
-def test_frame_loo_rejects_non_pooled_continuum() -> None:
+def test_frame_loo_supports_shared_continuum() -> None:
+    # Shared continuum (same offset across frames); one frame carries a
+    # discrepant line the shared model cannot fit.
+    frames = {f"f{i}": _frame(i, 0.06) for i in range(3)}
+    frames["bad"] = _frame(99, 0.06, line_scale=2.0)
+    result = (
+        NoobSpectrumSet(frames)
+        .prepare(_lines(), continuum_sharing="shared")
+        .model()
+        .sample(
+            draws=300, tune=600, chains=2, cores=1, progressbar=False, random_seed=5
+        )
+    )
+
+    loo = result.frame_loo(max_draws=500)
+    assert isinstance(loo, FrameLOOResult)
+    assert loo.frame_ids == ("f0", "f1", "f2", "bad")
+    assert np.all(np.isfinite(loo.elpd_i))
+    # No per-frame continuum to marginalize; the injected frame still stands out.
+    assert loo.frame_ids[int(np.argmax(loo.pareto_k))] == "bad"
+
+
+def test_frame_loo_rejects_independent_continuum() -> None:
     frames = NoobSpectrumSet([_frame(1, 0.05), _frame(2, 0.09)])
     result = (
-        frames.prepare(_lines(), continuum_sharing="shared")
+        frames.prepare(_lines(), continuum_sharing="independent")
         .model()
         .sample(
             draws=100, tune=200, chains=2, cores=1, progressbar=False, random_seed=1
         )
     )
-    with pytest.raises(NotImplementedError, match="pooled continuum"):
+    with pytest.raises(NotImplementedError, match="independent"):
         result.frame_loo()
