@@ -176,21 +176,50 @@ class NoobLine:
         **FWHM locks to the base only when the component matches**; deriving a
         different component (e.g. a broad component off a narrow base) instead
         frees the FWHM to that component's default range. Flux defaults to
-        free. Loosen or tighten any axis explicitly with :meth:`center`,
-        :meth:`fwhm`, and :meth:`flux` — e.g. give a broad component its own
-        velocity with ``center(delta_v_kms=...)``.
+        free. Convolution kernels are inherited and follow the same rule:
+        their non-fixed shape parameters **lock to the base when the
+        component matches** and stay independent otherwise. Loosen or tighten
+        any axis explicitly with :meth:`center`, :meth:`fwhm`, and
+        :meth:`flux` — e.g. give a broad component its own velocity with
+        ``center(delta_v_kms=...)``.
         """
+        derived_component = self.component if component is None else component
         return NoobLine(
             linename=linename if linename is not None else self.linename,
             z=self.z if z is None else z,
             rest=self.rest if rest is None and obs is None else rest,
             obs=self.obs if rest is None and obs is None else obs,
             unit=self.unit,
-            component=self.component if component is None else component,
+            component=derived_component,
             contribution=self.contribution if contribution is None else contribution,
             profile=self.profile if profile is None else profile,
             base=self,
-            kernels=self.kernels,
+            kernels=self._kernels_for_derived(derived_component),
+        )
+
+    def _kernels_for_derived(self, component: ComponentName) -> tuple[LineKernel, ...]:
+        """Inherit kernels, locking non-fixed shape rules on a same-component derive.
+
+        Already-locked rules are kept as-is so a derive chain keeps resolving
+        to the original independent source.
+        """
+        if not self.kernels or component != self.component:
+            return self.kernels
+        return tuple(
+            LineKernel(
+                kind=kernel.kind,
+                name=kernel.name,
+                rules=tuple(
+                    (
+                        parameter,
+                        rule
+                        if rule.is_fixed or rule.is_locked
+                        else _ParameterRule.locked(self),
+                    )
+                    for parameter, rule in kernel.rules
+                ),
+            )
+            for kernel in self.kernels
         )
 
     def center(

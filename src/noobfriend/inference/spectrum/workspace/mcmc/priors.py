@@ -322,8 +322,10 @@ def build_translated_priors(
             "delta_v_kms": _line_delta_v_prior(handle, graph, center_expression),
         }
         for kernel in handle.line.kernels:
-            for name in kernel.shape_names():
-                values[name] = _kernel_shape_prior(name, shapes[name])
+            for (_, rule), name in zip(kernel.rules, kernel.shape_names(), strict=True):
+                values[name] = _kernel_shape_prior(
+                    name, shapes[name], rule=rule, graph=graph
+                )
         components[handle.id] = MCMCComponentPrior(name=handle.id, _values=values)
     components[CONTINUUM_COMPONENT] = MCMCComponentPrior(
         name=CONTINUUM_COMPONENT,
@@ -464,9 +466,19 @@ def _line_delta_v_prior(
 
 
 def _kernel_shape_prior(
-    name: str, expression: ParameterExpression
+    name: str,
+    expression: ParameterExpression,
+    *,
+    rule,
+    graph,
 ) -> MCMCParameterPrior:
-    """Translate one kernel shape expression into prior metadata."""
+    """Translate one kernel shape rule into prior metadata."""
+    if rule.is_locked:
+        return MCMCParameterPrior(
+            name=name,
+            family="locked",
+            target=graph.handle_by_line[id(rule.target)].id,
+        )
     if not expression.terms:
         return MCMCParameterPrior(name=name, family="fixed", value=expression.fixed)
     spec = next(iter(expression.specs.values()))

@@ -266,7 +266,10 @@ def _validate_line_graph(entries: tuple[_LineEntry, ...]) -> None:
     for _, line in entries:
         if line.base is not None and id(line.base) not in identities:
             raise ValueError("derived line base is not in the workspace line list.")
-        for rule in (line.center_rule, line.fwhm_rule, line.flux_rule):
+        kernel_rules = tuple(
+            rule for kernel in line.kernels for _, rule in kernel.rules
+        )
+        for rule in (line.center_rule, line.fwhm_rule, line.flux_rule, *kernel_rules):
             if rule.target is not None and id(rule.target) not in identities:
                 raise ValueError(
                     "locked rule target is not in the workspace line list."

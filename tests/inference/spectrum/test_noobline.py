@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from noobfriend.inference.spectrum import DEFAULT_FWHM_RANGES, NoobLine
+from noobfriend.inference.spectrum import NoobLine
+from noobfriend.inference.spectrum.line import DEFAULT_FWHM_RANGES
 
 
 def test_line_converts_rest_wavelength_to_observed_frame() -> None:
@@ -214,6 +215,29 @@ def test_convolve_appends_kernel_with_validated_rules() -> None:
         )
 
 
+def test_derive_locks_inherited_kernel_shapes_on_same_component() -> None:
+    from noobfriend.inference.spectrum.line import kernels
+
+    base = NoobLine("b", obs=5000.0, component="broad").convolve(
+        kernels.laplace, fwhm=(200.0, 8000.0), fraction=0.5
+    )
+
+    same = base.derive("b2")
+    (kernel,) = same.kernels
+    rules = dict(kernel.rules)
+    assert rules["fwhm"].is_locked
+    assert rules["fwhm"].target is base
+    assert rules["fraction"].is_fixed
+
+    other = base.derive("n", component="narrow")
+    assert other.kernels is base.kernels
+
+    chained = same.derive("b3")
+    chained_rules = dict(chained.kernels[0].rules)
+    assert chained_rules["fwhm"].is_locked
+    assert chained_rules["fwhm"].target is base
+
+
 def test_convolve_accepts_kernel_name_string() -> None:
     from noobfriend.inference.spectrum.line import kernels
 
@@ -242,4 +266,6 @@ def test_derive_propagates_kernels() -> None:
 
     base = NoobLine("b", obs=5000.0).convolve(kernels.laplace, fwhm=(100.0, 500.0))
     derived = base.derive("d", obs=5010.0)
-    assert derived.kernels == base.kernels
+    assert tuple(kernel.kind for kernel in derived.kernels) == ("laplace",)
+    # A same-component derive locks the non-fixed kernel shapes to the base.
+    assert dict(derived.kernels[0].rules)["fwhm"].target is base

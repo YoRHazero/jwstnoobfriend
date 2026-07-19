@@ -14,6 +14,7 @@ from noobfriend.inference.spectrum.workspace.compiler.profiles import C_KMS
 
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.line import NoobLine
+    from noobfriend.inference.spectrum.line.rules import _ParameterRule
     from noobfriend.inference.spectrum.workspace.handles import LineHandle
 
 
@@ -236,23 +237,55 @@ def shape_expressions(
         parameters in declaration order.
     """
     shapes = OrderedDict({BASE_SHAPE: fwhm_expression(handle, handle_by_line)})
-    identity = id(handle.line)
     for kernel in handle.line.kernels:
         for parameter, rule in kernel.rules:
             name = f"{kernel.name}__{parameter}"
-            if rule.is_fixed:
-                if rule.value is None:
-                    raise RuntimeError("fixed kernel rule is missing a value.")
-                shapes[name] = ParameterExpression(fixed=rule.value, terms={}, specs={})
-                continue
-            if not rule.is_bounded or rule.bounds is None:
-                raise RuntimeError("kernel shape rules must be fixed or bounded.")
-            lower, upper = rule.bounds
-            spec = VariableSpec(lower=lower, upper=upper, initial=sqrt(lower * upper))
-            shapes[name] = ParameterExpression(
-                fixed=0.0, terms={identity: 1.0}, specs={identity: spec}
+            shapes[name] = _kernel_shape_expression_inner(
+                name, rule, handle, handle_by_line, seen=set()
             )
     return shapes
+
+
+def _kernel_shape_expression_inner(
+    name: str,
+    rule: _ParameterRule,
+    handle: LineHandle,
+    handle_by_line: dict[int, LineHandle],
+    *,
+    seen: set[int],
+) -> ParameterExpression:
+    """Compile one kernel shape rule, resolving locks to the target's source."""
+    identity = id(handle.line)
+    if identity in seen:
+        raise ValueError("kernel shape lock graph contains a cycle.")
+    seen.add(identity)
+    if rule.is_locked:
+        if rule.target is None:
+            raise RuntimeError("locked kernel shape rule is missing a target.")
+        target = handle_by_line[id(rule.target)]
+        return _kernel_shape_expression_inner(
+            name, _kernel_rule(target.line, name), target, handle_by_line, seen=seen
+        )
+    if rule.is_fixed:
+        if rule.value is None:
+            raise RuntimeError("fixed kernel rule is missing a value.")
+        return ParameterExpression(fixed=rule.value, terms={}, specs={})
+    if not rule.is_bounded or rule.bounds is None:
+        raise RuntimeError("kernel shape rules must be fixed, bounded, or locked.")
+    lower, upper = rule.bounds
+    spec = VariableSpec(lower=lower, upper=upper, initial=sqrt(lower * upper))
+    return ParameterExpression(fixed=0.0, terms={identity: 1.0}, specs={identity: spec})
+
+
+def _kernel_rule(line: NoobLine, name: str) -> _ParameterRule:
+    """Return a line's kernel shape rule by fully-qualified name."""
+    for kernel in line.kernels:
+        for parameter, rule in kernel.rules:
+            if f"{kernel.name}__{parameter}" == name:
+                return rule
+    raise RuntimeError(
+        f"locked kernel shape {name!r} has no matching kernel on its target line."
+    )
 
 
 def line_kernels_kms(

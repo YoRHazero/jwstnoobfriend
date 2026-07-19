@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 
 from noobfriend.inference.spectrum import (
-    LineHandle,
     NoobLine,
     NoobSpectrum,
     NoobSpectrumModel,
 )
+from noobfriend.inference.spectrum.workspace import LineHandle
 
 pm = pytest.importorskip("pymc")
 

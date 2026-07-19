@@ -259,6 +259,24 @@ def test_kernel_shapes_compile_and_emg_matches_numerical_convolution() -> None:
     assert np.allclose(folded, direct)
 
 
+def test_derived_kernel_shapes_share_the_base_source() -> None:
+    base = NoobLine("b", obs=5000.0, component="broad").convolve(
+        "laplace", fwhm=(200.0, 8000.0)
+    )
+    derived = base.derive("b2")
+    workspace = _local_spectrum().prepare({"base": base, "derived": derived})
+
+    compiled = compile_line_graph(workspace)
+
+    base_shapes, derived_shapes = compiled.shape_expressions
+    assert base_shapes["laplace__fwhm"].terms == {id(base): 1.0}
+    assert derived_shapes["laplace__fwhm"].terms == {id(base): 1.0}
+    assert tuple(compiled.shape_sources["laplace__fwhm"]) == (id(base),)
+    # The fixed default fraction stays a per-line constant.
+    assert derived_shapes["laplace__fraction"].terms == {}
+    assert derived_shapes["laplace__fraction"].fixed == pytest.approx(1.0)
+
+
 def test_profile_template_stack_matches_scalar_loop() -> None:
     from noobfriend.inference.spectrum.workspace.compiler import (
         profile_template_stack,
