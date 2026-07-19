@@ -8,6 +8,7 @@ import pytest
 from noobfriend.inference.spectrum import NoobLine, NoobSpectrum
 from noobfriend.inference.spectrum.workspace.compiler import (
     BASE_SHAPE,
+    C_KMS,
     compile_line_graph,
     evaluate_expression,
     flux_bounds,
@@ -71,6 +72,30 @@ def test_compile_line_graph_uses_only_noobline_center_rules() -> None:
     assert compiled.center_expressions[1].terms == {id(absorption): 1.0}
     assert compiled.center_sources[id(absorption)].lower == pytest.approx(-250.0)
     assert compiled.center_sources[id(absorption)].upper == pytest.approx(250.0)
+
+
+def test_delta_wavelength_center_rules_convert_in_the_line_unit() -> None:
+    # The line declares its delta_wavelength offset in its own unit (um); the
+    # spectrum is in angstrom. The compiled velocity must equal delta / center
+    # with both in the line's unit, independent of the spectrum's unit.
+    fixed = NoobLine("line", obs=0.5, unit="um").center(delta_wavelength=1e-4)
+    bounded = NoobLine("line", obs=0.5, unit="um").center(
+        delta_wavelength=(-2e-4, 1e-4)
+    )
+    workspace = _local_spectrum().prepare({"fixed": fixed, "bounded": bounded})
+
+    compiled = compile_line_graph(workspace)
+
+    expected = 1e-4 / 0.5 * C_KMS
+    assert compiled.center_expressions[0].fixed == pytest.approx(expected)
+    spec = compiled.center_sources[id(bounded)]
+    assert spec.lower == pytest.approx(-2.0 * expected)
+    assert spec.upper == pytest.approx(expected)
+
+    fixed_handle = workspace.handle_for(fixed)
+    assert line_center(fixed_handle, compiled.handle_by_line) == pytest.approx(
+        fixed_handle.observed_wavelength * (1.0 + expected / C_KMS)
+    )
 
 
 def test_compiler_fixed_template_helpers_follow_rules() -> None:

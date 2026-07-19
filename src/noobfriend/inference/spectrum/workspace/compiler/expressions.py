@@ -154,14 +154,14 @@ def center_velocity_kms(
         if rule.value is None:
             raise RuntimeError("fixed center rule is missing a value.")
         return center_offset_to_velocity(
-            rule.value, rule.offset_unit, handle.observed_wavelength
+            rule.value, rule.offset_unit, handle.line.observed_wavelength
         )
     if rule.is_bounded:
         if rule.bounds is None:
             raise RuntimeError("bounded center rule is missing bounds.")
         value = initial_from_bounds(rule.bounds, preferred=0.0)
         return center_offset_to_velocity(
-            value, rule.offset_unit, handle.observed_wavelength
+            value, rule.offset_unit, handle.line.observed_wavelength
         )
     raise RuntimeError(
         "center rule must be fixed, bounded, or locked before compilation."
@@ -382,7 +382,14 @@ def contribution_sign(handle: LineHandle) -> float:
 
 
 def center_offset_to_velocity(value: float, unit: str | None, center: float) -> float:
-    """Convert a center offset to km/s."""
+    """Convert a center offset to km/s.
+
+    For a ``"wavelength"`` offset, ``value`` and ``center`` must be in the
+    same wavelength unit — the velocity depends only on their ratio, so
+    passing the line's own observed wavelength (in the line's declared unit)
+    keeps a ``delta_wavelength`` rule correct regardless of the spectrum's
+    unit. For ``"km/s"`` (or ``None``) offsets, ``center`` is unused.
+    """
     if unit == "wavelength":
         return value / center * C_KMS
     return value
@@ -426,7 +433,7 @@ def _center_expression_inner(
             raise RuntimeError("fixed center rule is missing a value.")
         return ParameterExpression(
             fixed=center_offset_to_velocity(
-                rule.value, rule.offset_unit, handle.observed_wavelength
+                rule.value, rule.offset_unit, handle.line.observed_wavelength
             ),
             terms={},
             specs={},
@@ -435,10 +442,10 @@ def _center_expression_inner(
         if rule.bounds is None:
             raise RuntimeError("bounded center rule is missing bounds.")
         lower = center_offset_to_velocity(
-            rule.bounds[0], rule.offset_unit, handle.observed_wavelength
+            rule.bounds[0], rule.offset_unit, handle.line.observed_wavelength
         )
         upper = center_offset_to_velocity(
-            rule.bounds[1], rule.offset_unit, handle.observed_wavelength
+            rule.bounds[1], rule.offset_unit, handle.line.observed_wavelength
         )
     else:
         raise RuntimeError(
