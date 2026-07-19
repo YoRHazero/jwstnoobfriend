@@ -49,7 +49,11 @@ class NoobSpectrumModel:
 
     @property
     def spectrum(self) -> NoobSpectrum:
-        """Prepared spectrum data used by this model."""
+        """Prepared spectrum data of a single-frame model.
+
+        Single-frame only: a model built from a multi-frame workspace raises
+        ``RuntimeError``; use ``workspace.spectra`` for its frames.
+        """
         return self.workspace.spectrum
 
     @property
@@ -100,7 +104,10 @@ class NoobSpectrumModel:
     def continuum_design(self, wavelength: ArrayLike | None = None) -> np.ndarray:
         """Return the continuum design matrix.
 
-        When ``wavelength`` is omitted, only valid fitting pixels are used.
+        When ``wavelength`` is omitted, only valid fitting pixels are used —
+        single-frame only, since a joint model has one wavelength grid per
+        frame (raises ``RuntimeError``). Passing ``wavelength`` explicitly
+        works for any model.
         """
         wl = self.spectrum.valid_wavelength if wavelength is None else wavelength
         return self.continuum.design(wl)

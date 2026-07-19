@@ -13,6 +13,7 @@ import numpy as np
 from noobfriend.inference.spectrum.workspace.compiler import (
     contribution_sign,
     profile_template,
+    profile_template_stack,
 )
 
 type ModelView = Literal["observed", "emergent", "intrinsic"]
@@ -201,6 +202,104 @@ def build_mcmc_prediction(
             upper=upper,
         ),
     )
+
+
+def build_mcmc_frame_predictions(
+    result: MCMCFitResult,
+    *,
+    hdi_probability: float | None,
+    posterior_draws: int | None,
+    random_seed: int,
+    model_oversample: int,
+    view: ModelView = "observed",
+) -> tuple[FitPrediction, ...]:
+    """Evaluate posterior draws per frame on dense native wavelength grids.
+
+    Mirrors :func:`build_mcmc_prediction` for every frame of a fit: the shared
+    line draws are evaluated on each frame's oversampled grid together with
+    that frame's continuum coefficients. ``hdi_probability=None`` skips the
+    pointwise total-model band. A single-frame result yields one prediction.
+    """
+    from noobfriend.inference.spectrum.workspace.mcmc.frames import (
+        _line_parameter_draws,
+    )
+
+    if view not in ("observed", "emergent", "intrinsic"):
+        raise ValueError(
+            f"view must be 'observed', 'emergent', or 'intrinsic'; got {view!r}."
+        )
+    probability = (
+        None if hdi_probability is None else _validate_probability(hdi_probability)
+    )
+    workspace = result.inputs.workspace
+    continuum_posterior = result.posterior["continuum"]
+    parameter_names = workspace.continuum.parameter_names
+    per_frame = workspace.n_frames > 1 and workspace.continuum.sharing != "shared"
+    reference = result.posterior[result.posterior.components[0]]
+    indices = _posterior_indices(
+        reference[reference.parameters[0]].samples.size,
+        posterior_draws=posterior_draws,
+        random_seed=random_seed,
+    )
+    line_draws = _line_parameter_draws(result, indices)
+
+    predictions: list[FitPrediction] = []
+    for index, frame_id in enumerate(workspace.frame_ids):
+        frame = workspace.spectra[index]
+        wavelength = dense_wavelength(frame.obs, model_oversample)
+        design = workspace.continuum.design(wavelength)
+        coefficients = np.stack(
+            [
+                continuum_posterior[
+                    f"{name}[{frame_id}]" if per_frame else name
+                ].samples.reshape(-1)[indices]
+                for name in parameter_names
+            ]
+        )
+        continuum_draws = (design @ coefficients).T
+        total_draws = continuum_draws.copy()
+        components: dict[str, CurvePrediction] = {}
+        for handle, flux, center, fwhm, kernels in line_draws:
+            signed_flux = (contribution_sign(handle) * flux)[:, None]
+            observed = signed_flux * profile_template_stack(
+                wavelength,
+                handle=handle,
+                centers=center,
+                fwhms_kms=fwhm,
+                resolving_power=frame.resolving_power,
+                kernels=kernels,
+            )
+            total_draws += observed
+            if view == "observed":
+                curve = observed
+            else:
+                curve = signed_flux * profile_template_stack(
+                    wavelength,
+                    handle=handle,
+                    centers=center,
+                    fwhms_kms=fwhm,
+                    resolving_power=None,
+                    kernels=kernels if view == "emergent" else (),
+                )
+            components[handle.id] = CurvePrediction(
+                value=np.median(continuum_draws + curve, axis=0)
+            )
+        lower = upper = None
+        if probability is not None:
+            lower, upper = _pointwise_hdi(total_draws, probability=probability)
+        predictions.append(
+            FitPrediction(
+                wavelength=wavelength,
+                continuum=CurvePrediction(value=np.median(continuum_draws, axis=0)),
+                components=components,
+                total=CurvePrediction(
+                    value=np.median(total_draws, axis=0),
+                    lower=lower,
+                    upper=upper,
+                ),
+            )
+        )
+    return tuple(predictions)
 
 
 def dense_wavelength(wavelength: np.ndarray, oversample: int) -> np.ndarray:

@@ -213,12 +213,89 @@ def test_frame_fits_band_brackets_the_median_model(joint_result) -> None:
 def test_joint_plot_renders_one_panel_per_frame(joint_result) -> None:
     import matplotlib.pyplot as plt
 
+    # plot() forwards its show_residuals=True default: spectrum + residual rows.
     figure = joint_result.plot(title="joint")
-    assert len(figure.axes) == 2
+    assert len(figure.axes) == 4
+
+    compact = joint_result.plot(show_residuals=False)
+    assert len(compact.axes) == 2
 
     frames_figure = joint_result.plot_frames(show_components=False)
     assert len(frames_figure.axes) == 2
 
+    plt.close("all")
+
+
+def test_joint_plot_forwards_view_oversample_and_legend(joint_result) -> None:
+    import matplotlib.pyplot as plt
+
+    figure = joint_result.plot(
+        view="emergent",
+        model_oversample=2,
+        legend_location="upper left",
+        show_residuals=False,
+    )
+    assert len(figure.axes) == 2
+    axis = figure.axes[0]
+    labels = [text.get_text() for text in axis.get_legend().get_texts()]
+    assert "total model" in labels
+    # The oversampled model curve is denser than the native 160-pixel grid.
+    total_line = next(
+        line for line in axis.get_lines() if line.get_label() == "total model"
+    )
+    assert total_line.get_xdata().size == 2 * 159 + 1
+
+    with pytest.raises(ValueError, match="view must be"):
+        joint_result.plot(view="bogus")
+
+    plt.close("all")
+
+
+def test_joint_plot_draws_2d_strips_for_from_2d_frames() -> None:
+    import matplotlib.pyplot as plt
+
+    def frame_2d(seed: int, offset: float) -> NoobSpectrum:
+        rng = np.random.default_rng(seed)
+        n = 80
+        wavelength = np.linspace(3.99, 4.11, n)
+        line = gaussian(
+            wavelength,
+            center=_CENTER,
+            flux=1.5e-3,
+            fwhm_kms=350.0,
+            resolving_power=1600.0,
+        )
+        image = np.zeros((7, n))
+        image[2:5] = (offset + line) / 3.0
+        image += rng.normal(0.0, 8e-3, image.shape)
+        return NoobSpectrum.from_2d(
+            image,
+            np.full_like(image, 8e-3),
+            obs=wavelength,
+            z=_Z,
+            collapse_window=(2, 5),
+            unit="um",
+            resolving_power=1600.0,
+        )
+
+    joint = NoobSpectrumSet({"a": frame_2d(3, 0.05), "b": frame_2d(4, 0.09)})
+    result = (
+        joint.prepare([_line()])
+        .model()
+        .sample(
+            draws=100,
+            tune=300,
+            chains=2,
+            cores=1,
+            random_seed=7,
+            progressbar=False,
+        )
+    )
+
+    figure = result.plot()
+    assert len(figure.axes) == 6  # image + spectrum + residual per frame
+    compact = result.plot_frames()
+    assert len(compact.axes) == 4  # image + spectrum per frame
     plt.close("all")
 
 

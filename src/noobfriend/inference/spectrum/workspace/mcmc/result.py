@@ -93,9 +93,13 @@ class MCMCFitResult:
         bare profile); the total model and residuals stay observed.
 
         A joint multi-frame fit renders per-frame panels through
-        :meth:`plot_frames` instead; the 2-D overlay arguments
-        (``flux_2d``/``spatial``/``dispersion``/``spatial_window``) are
-        single-frame only and raise if supplied for a joint fit.
+        :meth:`plot_frames`, forwarding the shared arguments (including
+        ``show_residuals``, ``model_oversample``, ``view``,
+        ``cmap``/``pmin``/``pmax``, and ``legend_location``); frames created
+        with ``NoobSpectrum.from_2d`` get per-frame 2-D strips. The explicit
+        2-D overlay arguments (``flux_2d``/``spatial``/``dispersion``/
+        ``spatial_window``) are single-frame only and raise if supplied for a
+        joint fit.
         """
         if self.inputs.workspace.n_frames > 1:
             if any(
@@ -111,15 +115,22 @@ class MCMCFitResult:
                 hdi_probability=hdi_probability,
                 posterior_draws=posterior_draws,
                 random_seed=random_seed,
+                show_residuals=show_residuals,
+                model_oversample=model_oversample,
                 component_colors=component_colors,
                 data_color=data_color,
                 continuum_color=continuum_color,
                 total_color=total_color,
+                cmap=cmap,
+                pmin=pmin,
+                pmax=pmax,
                 xlim=xlim,
                 ylim=ylim,
                 ylog=ylog,
                 size=size,
                 title=title,
+                legend_location=legend_location,
+                view=view,
             )
         from noobfriend.inference.spectrum.visualization import plot_mcmc_fit
 
@@ -188,15 +199,22 @@ class MCMCFitResult:
         random_seed: int = 1729,
         show_components: bool = True,
         show_chi_square: bool = True,
+        show_residuals: bool = False,
+        model_oversample: int = 8,
         component_colors: Mapping[str, str] | None = None,
         data_color: str = "#1A1A1A",
         continuum_color: str = "#7F7F7F",
         total_color: str = "#D62728",
+        cmap: str = "magma",
+        pmin: float = 1.0,
+        pmax: float = 99.0,
         xlim: tuple[float, float] | None = None,
         ylim: tuple[float, float] | None = None,
         ylog: bool = False,
         size: int = 1000,
         title: str | None = None,
+        legend_location: str = "best",
+        view: Literal["observed", "emergent", "intrinsic"] = "observed",
     ) -> Figure:
         """Plot the posterior model over each frame as stacked panels.
 
@@ -204,6 +222,11 @@ class MCMCFitResult:
         total model carries a pointwise ``hdi_probability`` band (its parameter
         uncertainty; pass ``None`` for median only), and each panel is annotated
         with its chi-square per pixel so inter-visit systematics are visible.
+        ``show_residuals`` adds a residual panel per frame, ``view`` selects
+        the convolution layers of the component curves (the total model and
+        residuals stay observed), and frames created with
+        ``NoobSpectrum.from_2d`` get their 2-D source strip scaled by
+        ``cmap``/``pmin``/``pmax``.
         """
         from noobfriend.inference.spectrum.visualization import plot_mcmc_frames
 
@@ -214,15 +237,22 @@ class MCMCFitResult:
             random_seed=random_seed,
             show_components=show_components,
             show_chi_square=show_chi_square,
+            show_residuals=show_residuals,
+            model_oversample=model_oversample,
             component_colors=component_colors,
             data_color=data_color,
             continuum_color=continuum_color,
             total_color=total_color,
+            cmap=cmap,
+            pmin=pmin,
+            pmax=pmax,
             xlim=xlim,
             ylim=ylim,
             ylog=ylog,
             size=size,
             title=title,
+            legend_location=legend_location,
+            view=view,
         )
 
     def frame_fits(
