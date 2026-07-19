@@ -22,6 +22,7 @@ from noobfriend.inference.spectrum.workspace.mcmc.priors import MCMCPriors
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from pathlib import Path
 
     from matplotlib.figure import Figure
     from numpy.typing import ArrayLike
@@ -300,6 +301,38 @@ class MCMCFitResult:
         from noobfriend.inference.spectrum.workspace.mcmc.lofo import build_frame_loo
 
         return build_frame_loo(self, max_draws=max_draws, random_seed=random_seed)
+
+    def save(self, path: str | Path, *, overwrite: bool = False) -> Path:
+        """Save this result to a directory for later :meth:`load`.
+
+        Writes ``idata.nc`` (the raw chains as arviz-compatible NetCDF),
+        ``inputs.pkl`` (the pickled workspace and sampling options), and
+        ``manifest.json`` (human-readable provenance plus the sampling
+        diagnostics, so a run's validity can be checked without loading
+        Python objects). The directory is created if needed; existing
+        persistence files are refused unless ``overwrite`` is true.
+        """
+        from noobfriend.inference.spectrum.workspace.mcmc.persistence import (
+            save_mcmc_result,
+        )
+
+        return save_mcmc_result(self, path, overwrite=overwrite)
+
+    @classmethod
+    def load(cls, path: str | Path) -> MCMCFitResult:
+        """Rebuild a result saved by :meth:`save`.
+
+        The posterior, diagnostics, and criteria are re-derived from the
+        saved chains through the same builders that run after sampling, so
+        the loaded result is always consistent with the chains on disk.
+        Rebuilding recompiles the PyMC model to recover variable naming and
+        therefore requires the ``mcmc`` optional dependency.
+        """
+        from noobfriend.inference.spectrum.workspace.mcmc.persistence import (
+            load_mcmc_result,
+        )
+
+        return load_mcmc_result(path)
 
     def __repr__(self) -> str:
         """Return a compact representation without expanding posterior arrays."""

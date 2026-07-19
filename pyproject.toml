@@ -34,6 +34,8 @@ noobfriend = "noobfriend.cli.app:main"
 [project.optional-dependencies]
 mcmc = [
     "arviz>=1.2.0",
+    "h5netcdf>=1.8.1",
+    "h5py>=3.16.0",
     "numpyro>=0.21.0",
     "pymc>=6.0.1",
 ]
