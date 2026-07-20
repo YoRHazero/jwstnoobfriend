@@ -308,7 +308,7 @@ def test_workspace_mle_fits_halpha_nii_broad_and_close_absorption() -> None:
     assert no_refinement.refinement_applied is False
 
 
-def test_workspace_mle_rejects_non_gaussian_profile_with_resolving_power() -> None:
+def test_workspace_mle_supports_lorentzian_profile_with_resolving_power() -> None:
     wavelength = np.linspace(4900.0, 5100.0, 101)
     spectrum = NoobSpectrum(
         np.ones_like(wavelength),
@@ -316,10 +316,14 @@ def test_workspace_mle_rejects_non_gaussian_profile_with_resolving_power() -> No
         obs=wavelength,
         resolving_power=3000.0,
     )
-    workspace = spectrum.prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+    line = NoobLine("line", obs=5000.0, profile="lorentzian")
+    workspace = spectrum.prepare([line])
 
-    with pytest.raises(NotImplementedError, match="gaussian"):
-        workspace.mle()
+    result = workspace.mle()
+
+    fitted = result.solution.for_line(line)
+    assert np.isfinite(fitted.flux)
+    assert np.isfinite(fitted.fwhm)
 
 
 @pytest.mark.parametrize(

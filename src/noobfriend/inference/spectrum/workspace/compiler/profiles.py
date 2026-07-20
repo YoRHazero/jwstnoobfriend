@@ -8,7 +8,7 @@ from math import sqrt
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.special import erfc, erfcx
+from scipy.special import erfc, erfcx, voigt_profile
 
 from noobfriend.inference.spectrum.workspace.compiler._profile_core import (
     C_KMS,
@@ -29,6 +29,7 @@ _NUMPY_OPS = ProfileOps(
     sqrt=sqrt,
     maximum=np.maximum,
     where=np.where,
+    voigt=voigt_profile,
     prune_zero_weight=True,
 )
 # The batched path carries a draw axis, so kernel widths/fractions are arrays:
@@ -75,12 +76,12 @@ def profile_template(
     center
         Line centre in the wavelength units of ``wavelength``.
     fwhm_kms
-        Intrinsic base-profile FWHM in km/s. The instrumental line-spread
-        width is folded in here by quadrature when ``resolving_power`` is
-        given.
+        Intrinsic base-profile FWHM in km/s.
     resolving_power
-        Spectral resolving power; folds a Gaussian LSF into a gaussian base.
-        Only implemented for gaussian base profiles.
+        Spectral resolving power; folds a Gaussian LSF exactly into the base
+        profile — by quadrature for a gaussian base, via the closed-form
+        Normal–Laplace (Laplace ⊛ Gaussian) for an exponential base, and via
+        the Voigt profile (Faddeeva function) for a lorentzian base.
     kernels
         ``(kind, fwhm_kms, fraction)`` convolution kernels; ``kind`` is
         ``"gaussian"`` or ``"laplace"`` and each width is in km/s. Gaussian
@@ -95,16 +96,9 @@ def profile_template(
     Raises
     ------
     NotImplementedError
-        If ``resolving_power`` or kernels accompany a non-gaussian base, or
-        more than one laplace kernel is supplied.
+        If kernels accompany a non-gaussian base, or more than one laplace
+        kernel is supplied.
     """
-    if resolving_power is not None:
-        if handle.profile != "gaussian":
-            raise NotImplementedError(
-                "resolving_power is only implemented for gaussian line profiles."
-            )
-        fwhm_kms = sqrt(fwhm_kms**2 + (C_KMS / resolving_power) ** 2)
-
     profile = np.asarray(
         evaluate_profile(
             _NUMPY_OPS,
@@ -113,6 +107,9 @@ def profile_template(
             center=center,
             fwhm_kms=fwhm_kms,
             kernels=kernels,
+            instrumental_fwhm_kms=(
+                None if resolving_power is None else C_KMS / resolving_power
+            ),
         ),
         dtype=float,
     )
@@ -147,7 +144,8 @@ def profile_template_stack(
     centers, fwhms_kms
         Per-draw line centres and intrinsic FWHMs (km/s), each shape ``(S,)``.
     resolving_power
-        Spectral resolving power folded into every draw's gaussian base.
+        Spectral resolving power folded exactly into every draw's base
+        profile, as in :func:`profile_template`.
     kernels
         ``(kind, fwhm_kms, fraction)`` convolution kernels whose widths and
         fractions are per-draw arrays of shape ``(S,)``.
@@ -160,18 +158,11 @@ def profile_template_stack(
     Raises
     ------
     NotImplementedError
-        If ``resolving_power`` or kernels accompany a non-gaussian base, or
-        more than one laplace kernel is supplied.
+        If kernels accompany a non-gaussian base, or more than one laplace
+        kernel is supplied.
     """
     centers = np.asarray(centers, dtype=float)
     fwhms = np.asarray(fwhms_kms, dtype=float)
-    if resolving_power is not None:
-        if handle.profile != "gaussian":
-            raise NotImplementedError(
-                "resolving_power is only implemented for gaussian line profiles."
-            )
-        fwhms = np.sqrt(fwhms**2 + (C_KMS / resolving_power) ** 2)
-
     profile = evaluate_profile(
         _NUMPY_STACK_OPS,
         profile=handle.profile,
@@ -185,6 +176,9 @@ def profile_template_stack(
                 np.asarray(fraction, dtype=float)[:, None],
             )
             for kind, width, fraction in kernels
+        ),
+        instrumental_fwhm_kms=(
+            None if resolving_power is None else C_KMS / resolving_power
         ),
     )
     return np.asarray(profile, dtype=float)

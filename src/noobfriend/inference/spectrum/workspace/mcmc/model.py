@@ -103,7 +103,6 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         ) from error
 
     graph = compile_line_graph(workspace)
-    _validate_profiles(workspace)
     frames = workspace.spectra
     n_frames = len(frames)
 
@@ -236,6 +235,11 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                     )
                     shape_values[shape_name][source_id] = pt.exp(log_value)
                     continue
+                # The quadrature "effective" width equals the observed width
+                # only for a gaussian base; for other profiles it is merely an
+                # approximate ridge alignment. Either way the Jacobian keeps
+                # the intrinsic FWHM log-uniform on its declared bounds, so
+                # the reparameterization is valid for every base profile.
                 effective_lower = sqrt(spec.lower**2 + instrumental_fwhm**2)
                 effective_upper = sqrt(spec.upper**2 + instrumental_fwhm**2)
                 log_effective = pm.Uniform(
@@ -264,9 +268,6 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
             velocity = symbolic_expression(pt, center_expression, center_values)
             fwhm = symbolic_expression(pt, shapes[BASE_SHAPE], shape_values[BASE_SHAPE])
             center = handle.observed_wavelength * (1.0 + velocity / C_KMS)
-            effective_fwhm = fwhm
-            if instrumental_fwhm is not None:
-                effective_fwhm = pt.sqrt(fwhm**2 + instrumental_fwhm**2)
             shape_tensors = tuple(
                 (name, symbolic_expression(pt, shapes[name], shape_values[name]))
                 for kernel in handle.line.kernels
@@ -286,8 +287,9 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                 profile=handle.profile,
                 wavelength=wavelength,
                 center=center,
-                fwhm_kms=effective_fwhm,
+                fwhm_kms=fwhm,
                 kernels=kernel_triples,
+                instrumental_fwhm_kms=instrumental_fwhm,
             )
             line_total = (
                 line_total + contribution_sign(handle) * flux * template / model_scale
@@ -342,15 +344,6 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         effective_fwhm_sources=tuple(effective_sources),
     )
     return BuiltMCMCModel(model=model, metadata=metadata)
-
-
-def _validate_profiles(workspace: NoobFitWorkspace) -> None:
-    if workspace.spectra[0].resolving_power is None:
-        return
-    if any(handle.profile != "gaussian" for handle in workspace.handles):
-        raise NotImplementedError(
-            "resolving_power is only implemented for gaussian line profiles."
-        )
 
 
 def _build_continuum(

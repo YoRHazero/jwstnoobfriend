@@ -169,17 +169,26 @@ def test_workspace_model_supports_non_gaussian_without_resolving_power() -> None
     assert isinstance(model.pymc_model, pm.Model)
 
 
-def test_workspace_model_rejects_non_gaussian_with_resolving_power() -> None:
+@pytest.mark.parametrize("profile", ["exponential", "lorentzian"])
+def test_workspace_model_supports_non_gaussian_with_resolving_power(
+    profile: str,
+) -> None:
     obs = np.linspace(4900.0, 5100.0, 101)
     workspace = NoobSpectrum(
         np.ones_like(obs),
         np.full_like(obs, 0.1),
         obs=obs,
         resolving_power=3000.0,
-    ).prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+    ).prepare([NoobLine("line", obs=5000.0, profile=profile)])
 
-    with pytest.raises(NotImplementedError, match="gaussian"):
-        workspace.model()
+    model = workspace.model()
+
+    assert isinstance(model, NoobSpectrumModel)
+    graph = model.pymc_model
+    point = graph.initial_point()
+    assert np.isfinite(graph.compile_logp()(point))
+    # The gradient path exercises the custom Faddeeva Op's pullback.
+    assert np.all(np.isfinite(graph.compile_dlogp()(point)))
 
 
 def _probe_handle(profile: str) -> LineHandle:
@@ -231,13 +240,13 @@ def test_symbolic_profile_matches_numeric_profile_template() -> None:
             kernels=kernels,
         )
 
-    def symbolic(profile, *, effective_fwhm=fwhm, kernels=()):
+    def symbolic(profile, *, resolving_power=None, kernels=()):
         expression = symbolic_profile(
             pt,
             profile=profile,
             wavelength=wavelength,
             center=pt.as_tensor_variable(float(center)),
-            fwhm_kms=pt.as_tensor_variable(float(effective_fwhm)),
+            fwhm_kms=pt.as_tensor_variable(float(fwhm)),
             kernels=tuple(
                 (
                     kind,
@@ -245,6 +254,11 @@ def test_symbolic_profile_matches_numeric_profile_template() -> None:
                     pt.as_tensor_variable(float(fraction)),
                 )
                 for kind, width, fraction in kernels
+            ),
+            instrumental_fwhm_kms=(
+                None
+                if resolving_power is None
+                else pt.as_tensor_variable(C_KMS / resolving_power)
             ),
         )
         return np.asarray(expression.eval())
@@ -257,14 +271,15 @@ def test_symbolic_profile_matches_numeric_profile_template() -> None:
     for profile in ("gaussian", "lorentzian", "exponential"):
         agree(numeric(profile), symbolic(profile))
 
-    # Instrumental LSF: the numeric path folds it internally from the resolving
-    # power, the symbolic path receives the pre-folded effective width.
+    # Instrumental LSF: both paths fold it internally from the same width —
+    # quadrature for a gaussian base, the Normal–Laplace closed form for an
+    # exponential base, the Voigt profile for a lorentzian base.
     resolving_power = 1600.0
-    effective = float(np.sqrt(fwhm**2 + (C_KMS / resolving_power) ** 2))
-    agree(
-        numeric("gaussian", resolving_power=resolving_power),
-        symbolic("gaussian", effective_fwhm=effective),
-    )
+    for profile in ("gaussian", "exponential", "lorentzian"):
+        agree(
+            numeric(profile, resolving_power=resolving_power),
+            symbolic(profile, resolving_power=resolving_power),
+        )
 
     # Convolution kernels: the exact EMG closed form and the branch mixture,
     # including the deep wings that previously overflowed to NaN.
@@ -277,3 +292,28 @@ def test_symbolic_profile_matches_numeric_profile_template() -> None:
             numeric("gaussian", kernels=kernels),
             symbolic("gaussian", kernels=kernels),
         )
+
+
+def test_symbolic_voigt_gradients_match_finite_differences() -> None:
+    """The Faddeeva Op's closed-form pullback must differentiate correctly.
+
+    Lorentzian + resolving_power sampling rides on the custom Wofz Op, whose
+    gradients are hand-derived from ``w'(z) = -2 z w(z) + 2i / sqrt(pi)``; a
+    sign or factor slip there would silently bias every NUTS trajectory, so
+    check them against finite differences in all three Voigt arguments.
+    """
+    pytest.importorskip("pytensor.tensor")
+    import pytensor.tensor as pt
+    from pytensor.gradient import verify_grad
+
+    from noobfriend.inference.spectrum.workspace.compiler._faddeeva import (
+        symbolic_voigt,
+    )
+
+    rng = np.random.default_rng(0)
+    delta = np.linspace(-40.0, 40.0, 81)
+    verify_grad(
+        lambda offsets, sigma, gamma: symbolic_voigt(pt, offsets, sigma, gamma),
+        [delta, np.float64(1.3), np.float64(2.1)],
+        rng=rng,
+    )

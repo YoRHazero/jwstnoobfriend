@@ -162,22 +162,137 @@ def test_profile_template_supports_declared_profiles() -> None:
         assert np.trapezoid(template, wavelength) == pytest.approx(1.0, rel=1e-2)
 
 
-def test_profile_template_rejects_non_gaussian_lsf_convolution() -> None:
-    wavelength = np.linspace(4900.0, 5100.0, 4001)
+def test_lorentzian_profile_with_lsf_matches_numerical_convolution() -> None:
+    """Regression: lorentzian + resolving_power must be the exact Voigt profile.
+
+    A lorentzian line seen through a gaussian LSF is a Voigt profile; pin the
+    library's width bookkeeping (line FWHM -> lorentzian HWHM, instrumental
+    FWHM -> gaussian sigma, both converted at the line centre) against a
+    brute-force numerical convolution, and keep the quadrature shortcut
+    visibly wrong.
+    """
+    from scipy.signal import fftconvolve
+
+    from noobfriend.inference.spectrum.line import kernels
+
+    wavelength = np.linspace(4900.0, 5100.0, 8001)
+    center = 5000.0
+    fwhm_kms = 300.0
+    resolving_power = 1000.0
+    instrumental = C_KMS / resolving_power
     handle = (
         _local_spectrum()
-        .prepare([NoobLine("line", obs=5000.0, profile="lorentzian")])
+        .prepare([NoobLine("line", obs=center, profile="lorentzian")])
         .handles[0]
     )
 
-    with pytest.raises(NotImplementedError, match="gaussian"):
-        profile_template(
-            wavelength,
-            handle=handle,
-            center=5000.0,
-            fwhm_kms=200.0,
-            resolving_power=3000.0,
-        )
+    exact = profile_template(
+        wavelength,
+        handle=handle,
+        center=center,
+        fwhm_kms=fwhm_kms,
+        resolving_power=resolving_power,
+    )
+    intrinsic = profile_template(
+        wavelength,
+        handle=handle,
+        center=center,
+        fwhm_kms=fwhm_kms,
+        resolving_power=None,
+    )
+    dv = float(np.mean(np.diff(wavelength))) / center * C_KMS
+    vgrid = np.arange(-12000, 12001) * dv
+    lsf = kernels.gaussian(vgrid, instrumental) * dv
+    brute = fftconvolve(intrinsic, lsf, mode="same")
+    core = np.abs(wavelength - center) < 60.0
+
+    assert np.all(np.isfinite(exact))
+    assert np.max(np.abs(exact[core] - brute[core])) / np.max(brute) < 1e-3
+
+    quadrature = profile_template(
+        wavelength,
+        handle=handle,
+        center=center,
+        fwhm_kms=float(np.hypot(fwhm_kms, instrumental)),
+        resolving_power=None,
+    )
+    assert np.max(np.abs(quadrature[core] - brute[core])) / np.max(brute) > 0.05
+
+
+def test_exponential_profile_with_lsf_matches_numerical_convolution() -> None:
+    """Regression: exponential + resolving_power must be the exact Normal–Laplace.
+
+    A Laplace line seen through a gaussian LSF is a Normal–Laplace, not a
+    quadrature-widened Laplace; a silent quadrature fold here once forced
+    consumers to hand-build the line as a gaussian base with a fully-convolved
+    laplace kernel. Pin the closed form against a brute-force numerical
+    convolution and against that equivalent kernel spelling, and keep the
+    quadrature shortcut visibly wrong.
+    """
+    from scipy.signal import fftconvolve
+
+    from noobfriend.inference.spectrum.line import kernels
+
+    wavelength = np.linspace(4900.0, 5100.0, 8001)
+    center = 5000.0
+    fwhm_kms = 300.0
+    resolving_power = 1000.0
+    instrumental = C_KMS / resolving_power
+    handle = (
+        _local_spectrum()
+        .prepare([NoobLine("line", obs=center, profile="exponential")])
+        .handles[0]
+    )
+
+    exact = profile_template(
+        wavelength,
+        handle=handle,
+        center=center,
+        fwhm_kms=fwhm_kms,
+        resolving_power=resolving_power,
+    )
+    intrinsic = profile_template(
+        wavelength,
+        handle=handle,
+        center=center,
+        fwhm_kms=fwhm_kms,
+        resolving_power=None,
+    )
+    dv = float(np.mean(np.diff(wavelength))) / center * C_KMS
+    vgrid = np.arange(-12000, 12001) * dv
+    lsf = kernels.gaussian(vgrid, instrumental) * dv
+    brute = fftconvolve(intrinsic, lsf, mode="same")
+    core = np.abs(wavelength - center) < 60.0
+
+    assert np.all(np.isfinite(exact))
+    assert np.max(np.abs(exact[core] - brute[core])) / np.max(brute) < 1e-3
+    assert np.trapezoid(exact, wavelength) == pytest.approx(1.0, rel=1e-3)
+
+    # The equivalent hand-built spelling (gaussian LSF base, fully-convolved
+    # laplace kernel) must be the identical closed form.
+    gaussian_handle = (
+        _local_spectrum().prepare([NoobLine("line", obs=center)]).handles[0]
+    )
+    spelled_out = profile_template(
+        wavelength,
+        handle=gaussian_handle,
+        center=center,
+        fwhm_kms=instrumental,
+        resolving_power=None,
+        kernels=(("laplace", fwhm_kms, 1.0),),
+    )
+    np.testing.assert_allclose(exact, spelled_out, rtol=1e-12, atol=1e-15)
+
+    # The old quadrature fold is measurably wrong (>13% at the peak here);
+    # a regression to it must fail loudly.
+    quadrature = profile_template(
+        wavelength,
+        handle=handle,
+        center=center,
+        fwhm_kms=float(np.hypot(fwhm_kms, instrumental)),
+        resolving_power=None,
+    )
+    assert np.max(np.abs(quadrature[core] - brute[core])) / np.max(brute) > 0.05
 
 
 def test_compile_line_graph_groups_shape_parameters_by_name() -> None:
@@ -329,6 +444,17 @@ def test_profile_template_stack_matches_scalar_loop() -> None:
         .handles[0]
     )
     check(lorentzian)
+    # Exercises the Voigt LSF routing on the batched path.
+    check(lorentzian, resolving_power=1000.0)
+
+    exponential = (
+        _local_spectrum()
+        .prepare([NoobLine("line", obs=5000.0, profile="exponential")])
+        .handles[0]
+    )
+    check(exponential)
+    # Exercises the Normal–Laplace LSF routing on the batched path.
+    check(exponential, resolving_power=1000.0)
 
 
 def test_fraction_mixes_convolved_and_bare_branches() -> None:

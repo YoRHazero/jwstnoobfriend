@@ -12,8 +12,12 @@ without the optional ``mcmc`` dependencies.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from noobfriend.inference.spectrum.workspace.compiler._faddeeva import (
+    symbolic_voigt,
+)
 from noobfriend.inference.spectrum.workspace.compiler._profile_core import (
     ProfileOps,
     evaluate_profile,
@@ -34,13 +38,12 @@ def symbolic_profile(
     center: Any,
     fwhm_kms: Any,
     kernels: Sequence[tuple[str, Any, Any]] = (),
+    instrumental_fwhm_kms: Any | None = None,
 ) -> Any:
     """Build the PyTensor graph of a line's unit-integral profile.
 
     The symbolic counterpart of ``profile_template``: the same math evaluated
-    as a differentiable tensor. Instrumental broadening is folded into
-    ``fwhm_kms`` by the caller (the model builder), so this function takes no
-    ``resolving_power``.
+    as a differentiable tensor.
 
     Parameters
     ----------
@@ -52,9 +55,13 @@ def symbolic_profile(
     wavelength
         Observed-frame wavelengths (a concrete array) to evaluate on.
     center, fwhm_kms
-        Line centre and effective FWHM as symbolic tensors.
+        Line centre and intrinsic FWHM as symbolic tensors.
     kernels
         ``(kind, fwhm_kms, fraction)`` convolution kernels as symbolic tensors.
+    instrumental_fwhm_kms
+        Gaussian instrumental line-spread FWHM in km/s (``C_KMS /
+        resolving_power``), or ``None``. Folded exactly into the base profile
+        by the shared core, as in ``profile_template``.
 
     Returns
     -------
@@ -69,6 +76,7 @@ def symbolic_profile(
         sqrt=pt.sqrt,
         maximum=pt.maximum,
         where=pt.where,
+        voigt=partial(symbolic_voigt, pt),
         prune_zero_weight=False,
     )
     return evaluate_profile(
@@ -78,6 +86,7 @@ def symbolic_profile(
         center=center,
         fwhm_kms=fwhm_kms,
         kernels=kernels,
+        instrumental_fwhm_kms=instrumental_fwhm_kms,
     )
 
 

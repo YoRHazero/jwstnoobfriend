@@ -51,6 +51,12 @@ class ProfileOps:
     maximum, where
         Elementwise ``maximum(x, y)`` and ternary ``where(cond, a, b)`` used to
         clamp transcendental arguments in the far wings.
+    voigt
+        ``voigt(delta, sigma, gamma)`` evaluating the unit-integral Voigt
+        profile (gaussian standard deviation ``sigma`` convolved with a
+        lorentzian of half width ``gamma``) at centre offsets ``delta``. The
+        Faddeeva function behind it has no elementary-function form, so it is
+        injected whole rather than composed from the primitives above.
     prune_zero_weight
         Whether to drop a kernel branch whose weight is identically zero. Set
         only for the numeric backend, where kernel fractions are concrete
@@ -67,6 +73,7 @@ class ProfileOps:
     sqrt: Callable[[Any], Any]
     maximum: Callable[[Any, Any], Any]
     where: Callable[[Any, Any, Any], Any]
+    voigt: Callable[[Any, Any, Any], Any]
     prune_zero_weight: bool
 
 
@@ -78,6 +85,7 @@ def evaluate_profile(
     center: Any,
     fwhm_kms: Any,
     kernels: Sequence[tuple[str, Any, Any]] = (),
+    instrumental_fwhm_kms: Any | None = None,
 ) -> Any:
     """Return the unit-integral line profile on ``wavelength``.
 
@@ -93,14 +101,20 @@ def evaluate_profile(
     center
         Line centre in the wavelength units of ``wavelength``.
     fwhm_kms
-        Base-profile FWHM in km/s. Any instrumental broadening is folded into
-        this value by the caller before evaluation.
+        Intrinsic base-profile FWHM in km/s.
     kernels
         ``(kind, fwhm_kms, fraction)`` convolution kernels applied on top of a
         gaussian base. Each kernel convolves ``fraction`` of the profile and
         leaves the rest untouched (a branch mixture); a gaussian kernel folds
         into the base by quadrature, while a single laplace kernel yields the
         exact two-sided exponentially-modified-gaussian closed form per branch.
+    instrumental_fwhm_kms
+        FWHM of the gaussian instrumental line-spread function in km/s, or
+        ``None`` for none. Folded exactly per base family: into a gaussian
+        base by quadrature; for an exponential base the Laplace ⊛ Gaussian
+        convolution (a Normal–Laplace, *not* a wider Laplace) is evaluated in
+        closed form; a lorentzian base becomes a Voigt profile via
+        ``ops.voigt``.
 
     Returns
     -------
@@ -125,6 +139,27 @@ def evaluate_profile(
             raise NotImplementedError(
                 "at most one laplace convolution kernel is supported."
             )
+
+    if instrumental_fwhm_kms is not None:
+        if profile == "gaussian":
+            fwhm_kms = ops.sqrt(fwhm_kms**2 + instrumental_fwhm_kms**2)
+        elif profile == "exponential":
+            # Quadrature would be wrong here: reuse the EMG closed form by
+            # treating the gaussian LSF as the base and the line as a fully
+            # convolved laplace kernel.
+            return _gaussian_mixture(
+                ops,
+                wavelength,
+                center,
+                instrumental_fwhm_kms,
+                (("laplace", fwhm_kms, 1.0),),
+            )
+        elif profile == "lorentzian":
+            # Lorentzian ⊛ gaussian LSF is a Voigt profile, evaluated whole
+            # through the injected Faddeeva-backed primitive.
+            sigma = center * instrumental_fwhm_kms / C_KMS / _GAUSSIAN_FWHM_TO_SIGMA
+            gamma = 0.5 * center * fwhm_kms / C_KMS
+            return ops.voigt(wavelength - center, sigma, gamma)
 
     if profile == "gaussian":
         return _gaussian_mixture(ops, wavelength, center, fwhm_kms, kernels)
