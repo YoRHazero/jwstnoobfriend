@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from noobfriend.inference.spectrum.line import NOMINAL_FWHM_KMS
 from noobfriend.inference.spectrum.workspace.compiler.profiles import C_KMS
 
 if TYPE_CHECKING:
@@ -17,11 +18,6 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum.line._rules import _ParameterRule
     from noobfriend.inference.spectrum.workspace.handles import LineHandle
 
-
-_INIT_FWHM_KMS = {
-    "narrow": 200.0,
-    "broad": 1200.0,
-}
 
 #: Name of the base-profile width every line carries. Additional shape
 #: parameters (e.g. convolution-kernel widths) are keyed by their own names.
@@ -194,7 +190,7 @@ def line_fwhm_kms(
         if rule.bounds is None:
             raise RuntimeError("bounded FWHM rule is missing bounds.")
         return initial_from_bounds(
-            rule.bounds, preferred=_INIT_FWHM_KMS[handle.component]
+            rule.bounds, preferred=NOMINAL_FWHM_KMS[handle.component]
         )
     raise RuntimeError(
         "FWHM rule must be fixed, bounded, or locked before compilation."
@@ -527,7 +523,7 @@ def _fwhm_expression_inner(
         lower=lower,
         upper=upper,
         initial=initial_from_bounds(
-            (lower, upper), preferred=_INIT_FWHM_KMS[handle.component]
+            (lower, upper), preferred=NOMINAL_FWHM_KMS[handle.component]
         ),
     )
     return ParameterExpression(fixed=0.0, terms={identity: 1.0}, specs={identity: spec})

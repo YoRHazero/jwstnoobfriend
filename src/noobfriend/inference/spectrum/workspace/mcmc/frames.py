@@ -17,12 +17,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from math import isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from noobfriend.inference.spectrum._numeric import (
+    draw_indices,
+    highest_density_interval,
+    readonly,
+    validate_probability,
+)
 from noobfriend.inference.spectrum.workspace.compiler import (
     contribution_sign,
     profile_template,
@@ -139,9 +144,10 @@ def build_frame_fits(
         for handle in workspace.handles
     ]
 
-    band = hdi_probability is not None
-    if band:
-        probability = _validate_probability(hdi_probability)
+    probability = (
+        None if hdi_probability is None else validate_probability(hdi_probability)
+    )
+    if probability is not None:
         indices = _draw_indices(result, max_draws=max_draws, random_seed=random_seed)
         line_draws = _line_parameter_draws(result, indices)
 
@@ -181,7 +187,7 @@ def build_frame_fits(
             components[handle.id] = continuum + signed
 
         model_lower = model_upper = None
-        if band:
+        if probability is not None:
             coefficient_draws = np.stack(
                 [
                     continuum_posterior[
@@ -193,36 +199,40 @@ def build_frame_fits(
             total_draws = (design @ coefficient_draws).T + _line_model_draws(
                 line_draws, wavelength, frame.resolving_power
             )
-            model_lower, model_upper = _pointwise_hdi(total_draws, probability)
+            model_lower, model_upper = highest_density_interval(
+                total_draws, probability=probability
+            )
 
         standardized = (data - total) / error
         fits.append(
             FrameFit(
                 frame_id=frame_id,
-                wavelength=_readonly(wavelength),
-                data=_readonly(data),
-                error=_readonly(error),
-                continuum=_readonly(continuum),
+                wavelength=readonly(wavelength),
+                data=readonly(data),
+                error=readonly(error),
+                continuum=readonly(continuum),
                 components=components,
-                model=_readonly(total),
+                model=readonly(total),
                 chi_square=float(np.sum(standardized**2)),
                 n_pixels=int(wavelength.size),
-                model_lower=None if model_lower is None else _readonly(model_lower),
-                model_upper=None if model_upper is None else _readonly(model_upper),
+                model_lower=None if model_lower is None else readonly(model_lower),
+                model_upper=None if model_upper is None else readonly(model_upper),
             )
         )
     return tuple(fits)
 
 
 def _draw_indices(
-    result: MCMCFitResult, *, max_draws: int | None, random_seed: int
+    result: MCMCFitResult,
+    *,
+    max_draws: int | None,
+    random_seed: int,
+    name: str = "max_draws",
 ) -> np.ndarray:
+    """Subsample draw indices against one result's posterior draw count."""
     reference = result.posterior[result.posterior.components[0]]
     total = reference[reference.parameters[0]].samples.size
-    if max_draws is None or max_draws >= total:
-        return np.arange(total)
-    rng = np.random.default_rng(random_seed)
-    return np.sort(rng.choice(total, size=max_draws, replace=False))
+    return draw_indices(total, max_draws=max_draws, random_seed=random_seed, name=name)
 
 
 def _line_parameter_draws(
@@ -270,29 +280,3 @@ def _line_model_draws(
         )
         total += (contribution_sign(handle) * flux)[:, None] * stack
     return total
-
-
-def _pointwise_hdi(
-    samples: np.ndarray, probability: float
-) -> tuple[np.ndarray, np.ndarray]:
-    ordered = np.sort(samples, axis=0)
-    interval = max(int(np.floor(probability * ordered.shape[0])), 1)
-    if interval >= ordered.shape[0]:
-        return ordered[0], ordered[-1]
-    widths = ordered[interval:] - ordered[: ordered.shape[0] - interval]
-    starts = np.argmin(widths, axis=0)
-    columns = np.arange(ordered.shape[1])
-    return ordered[starts, columns], ordered[starts + interval, columns]
-
-
-def _validate_probability(value: float | None) -> float:
-    probability = float(value)  # type: ignore[arg-type]
-    if not isfinite(probability) or not 0.0 < probability < 1.0:
-        raise ValueError("hdi_probability must be finite and between 0 and 1.")
-    return probability
-
-
-def _readonly(value: np.ndarray) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
-    output.setflags(write=False)
-    return output

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.special import logsumexp
 
+from noobfriend.inference.spectrum._numeric import readonly
 from noobfriend.inference.spectrum.workspace.mcmc.frames import (
     _draw_indices,
     _line_model_draws,
@@ -336,11 +337,11 @@ def _summarize_frame_loo(
         frame_ids=frame_ids,
         elpd=float(loo.elpd),
         standard_error=float(loo.se),
-        elpd_i=_readonly(elpd_i),
-        pareto_k=_readonly(np.asarray(loo.pareto_k, dtype=float).reshape(-1)),
-        lpd_i=_readonly(lpd_i),
+        elpd_i=readonly(elpd_i),
+        pareto_k=readonly(np.asarray(loo.pareto_k, dtype=float).reshape(-1)),
+        lpd_i=readonly(lpd_i),
         good_k=float(loo.good_k),
-        n_pixels=_readonly(n_pixels.astype(float)),
+        n_pixels=readonly(n_pixels.astype(float)),
         n_draws=n_draws,
     )
     if not outcome.reliable:
@@ -353,9 +354,3 @@ def _summarize_frame_loo(
             stacklevel=3,
         )
     return outcome
-
-
-def _readonly(value: np.ndarray) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
-    output.setflags(write=False)
-    return output

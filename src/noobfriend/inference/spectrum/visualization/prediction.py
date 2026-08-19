@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from math import isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
+from noobfriend.inference.spectrum._numeric import (
+    highest_density_interval,
+    readonly,
+    validate_probability,
+)
 from noobfriend.inference.spectrum.workspace.compiler import (
     contribution_sign,
     profile_template,
@@ -116,19 +120,20 @@ def build_mcmc_prediction(
     model (and therefore the residual reference) is always evaluated in the
     observed view, because only that is comparable with the data.
     """
+    from noobfriend.inference.spectrum.workspace.mcmc.frames import _draw_indices
+
     if view not in ("observed", "emergent", "intrinsic"):
         raise ValueError(
             f"view must be 'observed', 'emergent', or 'intrinsic'; got {view!r}."
         )
-    probability = _validate_probability(hdi_probability)
+    probability = validate_probability(hdi_probability)
     workspace = result.inputs.workspace
     wavelength = dense_wavelength(workspace.spectrum.obs, model_oversample)
-    indices = _posterior_indices(
-        result.posterior[result.posterior.components[0]][
-            result.posterior[result.posterior.components[0]].parameters[0]
-        ].samples.size,
-        posterior_draws=posterior_draws,
+    indices = _draw_indices(
+        result,
+        max_draws=posterior_draws,
         random_seed=random_seed,
+        name="posterior_draws",
     )
     n_draws = indices.size
     continuum_draws = np.zeros((n_draws, wavelength.size), dtype=float)
@@ -191,15 +196,15 @@ def build_mcmc_prediction(
             value=np.median(continuum_draws + view_draws, axis=0)
         )
 
-    lower, upper = _pointwise_hdi(total_draws, probability=probability)
+    lower, upper = highest_density_interval(total_draws, probability=probability)
     return FitPrediction(
         wavelength=wavelength,
         continuum=CurvePrediction(value=np.median(continuum_draws, axis=0)),
         components=components,
         total=CurvePrediction(
             value=np.median(total_draws, axis=0),
-            lower=lower,
-            upper=upper,
+            lower=readonly(lower),
+            upper=readonly(upper),
         ),
     )
 
@@ -221,6 +226,7 @@ def build_mcmc_frame_predictions(
     pointwise total-model band. A single-frame result yields one prediction.
     """
     from noobfriend.inference.spectrum.workspace.mcmc.frames import (
+        _draw_indices,
         _line_parameter_draws,
     )
 
@@ -229,17 +235,17 @@ def build_mcmc_frame_predictions(
             f"view must be 'observed', 'emergent', or 'intrinsic'; got {view!r}."
         )
     probability = (
-        None if hdi_probability is None else _validate_probability(hdi_probability)
+        None if hdi_probability is None else validate_probability(hdi_probability)
     )
     workspace = result.inputs.workspace
     continuum_posterior = result.posterior["continuum"]
     parameter_names = workspace.continuum.parameter_names
     per_frame = workspace.n_frames > 1 and workspace.continuum.sharing != "shared"
-    reference = result.posterior[result.posterior.components[0]]
-    indices = _posterior_indices(
-        reference[reference.parameters[0]].samples.size,
-        posterior_draws=posterior_draws,
+    indices = _draw_indices(
+        result,
+        max_draws=posterior_draws,
         random_seed=random_seed,
+        name="posterior_draws",
     )
     line_draws = _line_parameter_draws(result, indices)
 
@@ -286,7 +292,10 @@ def build_mcmc_frame_predictions(
             )
         lower = upper = None
         if probability is not None:
-            lower, upper = _pointwise_hdi(total_draws, probability=probability)
+            lower, upper = highest_density_interval(
+                total_draws, probability=probability
+            )
+            lower, upper = readonly(lower), readonly(upper)
         predictions.append(
             FitPrediction(
                 wavelength=wavelength,
@@ -312,12 +321,12 @@ def dense_wavelength(wavelength: np.ndarray, oversample: int) -> np.ndarray:
     if source.ndim != 1 or source.size == 0:
         raise ValueError("plot wavelength must be a non-empty 1-D array.")
     if source.size == 1:
-        return _readonly(source)
+        return readonly(source)
     pieces = [
         np.linspace(left, right, oversample, endpoint=False)
         for left, right in zip(source[:-1], source[1:], strict=True)
     ]
-    return _readonly(np.concatenate([*pieces, source[-1:]]))
+    return readonly(np.concatenate([*pieces, source[-1:]]))
 
 
 def _select_mle_solution(
@@ -331,56 +340,3 @@ def _select_mle_solution(
     raise ValueError(
         f"solution must be 'selected' or 'likelihood_optimum', got {solution!r}."
     )
-
-
-def _posterior_indices(
-    total_draws: int,
-    *,
-    posterior_draws: int | None,
-    random_seed: int,
-) -> np.ndarray:
-    if posterior_draws is not None:
-        if isinstance(posterior_draws, bool) or not isinstance(posterior_draws, int):
-            raise TypeError("posterior_draws must be a positive integer or None.")
-        if posterior_draws <= 0:
-            raise ValueError("posterior_draws must be a positive integer or None.")
-    if (
-        isinstance(random_seed, bool)
-        or not isinstance(random_seed, int)
-        or random_seed < 0
-    ):
-        raise ValueError("random_seed must be a nonnegative integer.")
-    if posterior_draws is None or posterior_draws >= total_draws:
-        return np.arange(total_draws)
-    rng = np.random.default_rng(random_seed)
-    return np.sort(rng.choice(total_draws, size=posterior_draws, replace=False))
-
-
-def _validate_probability(value: float) -> float:
-    probability = float(value)
-    if not isfinite(probability) or not 0.0 < probability < 1.0:
-        raise ValueError("hdi_probability must be finite and between 0 and 1.")
-    return probability
-
-
-def _pointwise_hdi(
-    samples: np.ndarray,
-    *,
-    probability: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    ordered = np.sort(samples, axis=0)
-    interval_count = max(int(np.floor(probability * ordered.shape[0])), 1)
-    if interval_count >= ordered.shape[0]:
-        return _readonly(ordered[0]), _readonly(ordered[-1])
-    widths = ordered[interval_count:] - ordered[:-interval_count]
-    starts = np.argmin(widths, axis=0)
-    columns = np.arange(ordered.shape[1])
-    lower = ordered[starts, columns]
-    upper = ordered[starts + interval_count, columns]
-    return _readonly(lower), _readonly(upper)
-
-
-def _readonly(value: np.ndarray) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
-    output.setflags(write=False)
-    return output

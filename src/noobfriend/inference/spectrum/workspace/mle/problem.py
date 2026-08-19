@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.optimize import lsq_linear
 
+from noobfriend.inference.spectrum.line import NOMINAL_FWHM_KMS
 from noobfriend.inference.spectrum.workspace.compiler import (
     BASE_SHAPE,
     C_KMS,
@@ -532,7 +533,7 @@ def _source_flux_scale(
     resolving_power: float | None,
     kernels: tuple[tuple[str, float, float], ...] = (),
 ) -> float:
-    preferred_fwhm = 200.0 if handle.component == "narrow" else 1200.0
+    preferred_fwhm = NOMINAL_FWHM_KMS[handle.component]
     template = profile_template(
         wavelength,
         handle=handle,

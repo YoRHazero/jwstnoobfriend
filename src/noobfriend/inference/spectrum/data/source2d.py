@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from noobfriend.inference.spectrum._numeric import readonly
 from noobfriend.inference.spectrum.data.types import DispersionAxis
 
 
@@ -39,9 +40,7 @@ class Spectrum2DSource:
     @property
     def spatial(self) -> np.ndarray:
         """Default cross-dispersion pixel centers."""
-        value = np.arange(self.flux.shape[0], dtype=float)
-        value.setflags(write=False)
-        return value
+        return readonly(np.arange(self.flux.shape[0], dtype=float))
 
     @property
     def spatial_window(self) -> tuple[float, float]:
@@ -72,8 +71,7 @@ def build_spectrum_2d_source(
 
 
 def _readonly_2d(value: np.ndarray, *, name: str) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
+    output = readonly(value)
     if output.ndim != 2:
         raise ValueError(f"2-D source {name} must be 2-D, got shape {output.shape}.")
-    output.setflags(write=False)
     return output

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
+from noobfriend.inference.spectrum._numeric import readonly
 from noobfriend.inference.spectrum.workspace.compiler import evaluate_expression
 
 if TYPE_CHECKING:
@@ -234,7 +235,7 @@ def build_solution(
             fwhm=fwhm,
             center=center,
             delta_v_kms=velocity,
-            model_flux=_readonly(model),
+            model_flux=readonly(model),
             shapes={
                 name: evaluate_expression(
                     graph.shape_expressions[handle.index][name], shape_values[name]
@@ -270,14 +271,8 @@ def build_solution(
                 )
             )
         ),
-        continuum_flux=_readonly(evaluation.continuum),
-        model_flux=_readonly(evaluation.model),
-        residual=_readonly(residual),
+        continuum_flux=readonly(evaluation.continuum),
+        model_flux=readonly(evaluation.model),
+        residual=readonly(residual),
         lines=lines,
     )
-
-
-def _readonly(value: np.ndarray) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
-    output.setflags(write=False)
-    return output

@@ -12,6 +12,7 @@ from noobfriend.inference.spectrum.line.line import NoobLine
 from noobfriend.inference.spectrum.line.types import (
     DEFAULT_CENTER_RANGE_KMS,
     DEFAULT_FWHM_RANGES,
+    NOMINAL_FWHM_KMS,
     ComponentName,
     ContributionName,
     FixedOrBounded,
@@ -28,6 +29,7 @@ __all__ = [
     "KernelFunction",
     "KernelName",
     "LineKernel",
+    "NOMINAL_FWHM_KMS",
     "NoobLine",
     "ProfileName",
     "gaussian",

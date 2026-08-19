@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 from scipy.special import logsumexp
 
+from noobfriend.inference.spectrum._numeric import readonly
+
 
 _LOG_LIKELIHOOD_VARIABLE = "observed_flux_normalized"
 _WAIC_VARIANCE_WARNING_THRESHOLD = 0.4
@@ -99,8 +101,8 @@ def build_mcmc_criteria(idata: Any) -> MCMCCriteria:
         elpd=float(loo.elpd),
         standard_error=float(loo.se),
         effective_parameters=float(loo.p),
-        pointwise=_readonly(np.asarray(loo.elpd_i, dtype=float).reshape(-1)),
-        pareto_k=_readonly(np.asarray(loo.pareto_k, dtype=float).reshape(-1)),
+        pointwise=readonly(np.asarray(loo.elpd_i, dtype=float).reshape(-1)),
+        pareto_k=readonly(np.asarray(loo.pareto_k, dtype=float).reshape(-1)),
         good_k=float(loo.good_k),
         warning=bool(loo.warning),
         n_samples=int(loo.n_samples),
@@ -134,15 +136,9 @@ def _waic(idata: Any) -> MCMCWAIC:
         elpd=float(np.sum(pointwise)),
         standard_error=standard_error,
         effective_parameters=float(np.sum(pointwise_variance)),
-        pointwise=_readonly(pointwise),
-        pointwise_variance=_readonly(pointwise_variance),
+        pointwise=readonly(pointwise),
+        pointwise_variance=readonly(pointwise_variance),
         warning=bool(np.any(pointwise_variance > _WAIC_VARIANCE_WARNING_THRESHOLD)),
         n_samples=n_samples,
         n_observations=n_observations,
     )
-
-
-def _readonly(value: np.ndarray) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
-    output.setflags(write=False)
-    return output

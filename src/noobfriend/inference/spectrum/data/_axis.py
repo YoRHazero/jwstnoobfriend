@@ -8,6 +8,8 @@ from math import isclose
 import numpy as np
 from numpy.typing import ArrayLike
 
+from noobfriend.inference.spectrum._numeric import readonly
+
 
 @dataclass(frozen=True, slots=True)
 class _SpectrumAxis:
@@ -26,8 +28,7 @@ def _normalize_axis(
     if obs_array is None:
         if z is None:
             raise ValueError("z is required when rest is provided without obs.")
-        obs_array = np.array(rest_array * (1.0 + z), dtype=float, copy=True)
-        obs_array.setflags(write=False)
+        obs_array = readonly(rest_array * (1.0 + z))
     if rest_array is not None and obs_array.shape != rest_array.shape:
         raise ValueError(
             f"rest shape {rest_array.shape} must match obs {obs_array.shape}."
@@ -53,8 +54,7 @@ def _format_center_label(center: float) -> str:
 def _optional_1d_float(value: ArrayLike | None, *, name: str) -> np.ndarray | None:
     if value is None:
         return None
-    array = np.array(value, dtype=float, copy=True)
+    array = readonly(value)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1-D.")
-    array.setflags(write=False)
     return array

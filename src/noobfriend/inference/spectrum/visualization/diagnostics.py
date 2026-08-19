@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from noobfriend.inference.spectrum._numeric import draw_indices
+
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
@@ -33,7 +35,7 @@ def plot_mcmc_corner(
     if not selected:
         raise ValueError("plot_corner requires at least one posterior variable.")
     total_draws = next(iter(selected.values())).size
-    indices = _draw_indices(
+    indices = draw_indices(
         total_draws,
         max_draws=max_draws,
         random_seed=random_seed,
@@ -147,29 +149,6 @@ def _corner_variables(
             raise ValueError(f"corner variable {item!r} was requested more than once.")
         output[label] = result.posterior[component][parameter].samples.reshape(-1)
     return output
-
-
-def _draw_indices(
-    total_draws: int,
-    *,
-    max_draws: int | None,
-    random_seed: int,
-) -> np.ndarray:
-    if max_draws is not None:
-        if isinstance(max_draws, bool) or not isinstance(max_draws, int):
-            raise TypeError("max_draws must be a positive integer or None.")
-        if max_draws <= 0:
-            raise ValueError("max_draws must be a positive integer or None.")
-    if (
-        isinstance(random_seed, bool)
-        or not isinstance(random_seed, int)
-        or random_seed < 0
-    ):
-        raise ValueError("random_seed must be a nonnegative integer.")
-    if max_draws is None or max_draws >= total_draws:
-        return np.arange(total_draws)
-    rng = np.random.default_rng(random_seed)
-    return np.sort(rng.choice(total_draws, size=max_draws, replace=False))
 
 
 def _plot_single_corner_variable(

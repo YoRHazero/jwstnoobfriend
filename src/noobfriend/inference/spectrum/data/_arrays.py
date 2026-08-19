@@ -8,6 +8,7 @@ from math import isfinite
 import numpy as np
 from numpy.typing import ArrayLike
 
+from noobfriend.inference.spectrum._numeric import readonly
 from noobfriend.inference.spectrum.types import VALID_WAVE_UNITS, WaveUnit
 
 
@@ -56,10 +57,9 @@ def _normalize_arrays(
 
 
 def _as_1d_float(value: ArrayLike, *, name: str) -> np.ndarray:
-    array = np.array(value, dtype=float, copy=True)
+    array = readonly(value)
     if array.ndim != 1:
         raise ValueError(f"{name} must be 1-D.")
-    array.setflags(write=False)
     return array
 
 

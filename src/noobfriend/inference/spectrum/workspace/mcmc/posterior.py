@@ -10,12 +10,20 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from noobfriend.inference.spectrum._numeric import (
+    highest_density_interval,
+    readonly,
+)
+
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.mcmc.model import MCMCModelMetadata
 
 
 CONTINUUM_COMPONENT = "continuum"
+
+#: Interval mass summarized for every posterior parameter.
+HDI_PROBABILITY = 0.94
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -231,33 +239,15 @@ def _parameter(idata: Any, variable_name: str, *, name: str) -> MCMCParameterPos
 
 
 def _parameter_from_array(samples: np.ndarray, *, name: str) -> MCMCParameterPosterior:
-    samples = _readonly(samples)
+    samples = readonly(samples)
     flattened = samples.reshape(-1)
-    lower, upper = _highest_density_interval(flattened, probability=0.94)
+    lower, upper = highest_density_interval(flattened, probability=HDI_PROBABILITY)
     return MCMCParameterPosterior(
         name=name,
         samples=samples,
         median=float(np.median(flattened)),
         mean=float(np.mean(flattened)),
         standard_deviation=float(np.std(flattened, ddof=1)),
-        hdi_lower=lower,
-        hdi_upper=upper,
+        hdi_lower=float(lower),
+        hdi_upper=float(upper),
     )
-
-
-def _highest_density_interval(
-    samples: np.ndarray, *, probability: float
-) -> tuple[float, float]:
-    ordered = np.sort(samples)
-    interval_count = max(int(np.floor(probability * ordered.size)), 1)
-    if interval_count >= ordered.size:
-        return float(ordered[0]), float(ordered[-1])
-    widths = ordered[interval_count:] - ordered[: ordered.size - interval_count]
-    start = int(np.argmin(widths))
-    return float(ordered[start]), float(ordered[start + interval_count])
-
-
-def _readonly(value: np.ndarray) -> np.ndarray:
-    output = np.array(value, dtype=float, copy=True)
-    output.setflags(write=False)
-    return output
