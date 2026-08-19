@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from typing import Literal
 
+from noobfriend.inference.spectrum.line.distributions import Prior
+
 
 type ComponentName = Literal["narrow", "broad"]
 type ContributionName = Literal["emission", "absorption"]
 type ProfileName = Literal["gaussian", "lorentzian", "exponential"]
+#: The original fast path: a fixed value or a ``(lower, upper)`` range.
 type FixedOrBounded = float | tuple[float, float]
+#: What every line parameter accepts: the fast path, or an explicit prior.
+type ParameterSpec = float | tuple[float, float] | Prior
 
 VALID_COMPONENTS = frozenset({"narrow", "broad"})
 VALID_CONTRIBUTIONS = frozenset({"emission", "absorption"})
@@ -34,5 +39,6 @@ __all__ = [
     "DEFAULT_FWHM_RANGES",
     "FixedOrBounded",
     "NOMINAL_FWHM_KMS",
+    "ParameterSpec",
     "ProfileName",
 ]

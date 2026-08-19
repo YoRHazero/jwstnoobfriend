@@ -6,7 +6,7 @@ from html import escape
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from noobfriend.inference.spectrum.line import NoobLine
+    from noobfriend.inference.spectrum.line import NoobLine, Prior
     from noobfriend.inference.spectrum.line._rules import _ParameterRule
     from noobfriend.inference.spectrum.workspace.handles import LineHandle
     from noobfriend.inference.spectrum.workspace.workspace import NoobFitWorkspace
@@ -126,7 +126,23 @@ def _rule_text(
         if rule.bounds is None:
             raise RuntimeError("bounded rule invariant violated: missing bounds.")
         return f"bounded {_rule_value(rule.bounds, kind=kind, offset_unit=rule.offset_unit)}"
+    if rule.is_prior:
+        if rule.prior is None:
+            raise RuntimeError("prior rule invariant violated: missing prior.")
+        return _prior_text(rule.prior, kind=kind, offset_unit=rule.offset_unit)
     raise RuntimeError("unsupported parameter rule.")
+
+
+def _prior_text(prior: Prior, *, kind: str, offset_unit: str | None) -> str:
+    text = repr(prior)
+    if kind == "center":
+        if offset_unit == "km/s":
+            return f"delta_v_kms ~ {text}"
+        if offset_unit == "wavelength":
+            return f"delta_wavelength ~ {text}"
+    if kind == "fwhm":
+        return f"{text} km/s"
+    return text
 
 
 def _rule_value(

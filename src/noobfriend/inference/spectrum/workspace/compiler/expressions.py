@@ -5,12 +5,20 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from math import inf, sqrt
+from math import inf, isfinite, sqrt
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from noobfriend.inference.spectrum.line import NOMINAL_FWHM_KMS
+from noobfriend.inference.spectrum.line import (
+    NOMINAL_FWHM_KMS,
+    LogUniform,
+    Normal,
+    Prior,
+    TruncatedNormal,
+    Uniform,
+    prior_support,
+)
 from noobfriend.inference.spectrum.workspace.compiler.profiles import C_KMS
 
 if TYPE_CHECKING:
@@ -18,6 +26,14 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum.line._rules import _ParameterRule
     from noobfriend.inference.spectrum.workspace.handles import LineHandle
 
+
+#: Half-width, in standard deviations, of the finite range an unbounded
+#: ``Normal`` prior collapses to. The optimizer needs a box and the ridge
+#: search needs a start, but neither can represent an unbounded prior; three
+#: sigmas keep 99.7% of the declared mass inside the box, so a fit pinned at
+#: its edge is a genuine tension with the prior rather than an artifact of a
+#: tight conversion.
+NORMAL_RANGE_SIGMAS = 3.0
 
 #: Name of the base-profile width every line carries. Additional shape
 #: parameters (e.g. convolution-kernel widths) are keyed by their own names.
@@ -43,11 +59,20 @@ class ParameterExpression:
 
 @dataclass(frozen=True, slots=True)
 class VariableSpec:
-    """Bounded scalar variable specification used by fit backends."""
+    """Bounded scalar variable specification used by fit backends.
+
+    ``lower``/``upper``/``initial`` are all a backend needs to optimize the
+    variable, and the MLE backend uses nothing else. ``prior`` carries a
+    declared distribution when the user supplied one; ``None`` leaves the
+    choice of prior to the sampling backend, which is the original behavior
+    (uniform in the variable for a velocity offset, uniform in its logarithm
+    for a width).
+    """
 
     lower: float
     upper: float
     initial: float
+    prior: Prior | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +123,82 @@ def flux_bounds(line: NoobLine) -> tuple[float, float]:
         if rule.bounds is None:
             raise RuntimeError("bounded flux rule is missing bounds.")
         return rule.bounds
+    if rule.is_prior:
+        return prior_range(_required_prior(rule))
     return 0.0, inf
+
+
+def prior_range(prior: Prior) -> tuple[float, float]:
+    """Return the finite range a declared prior is optimized and sampled on.
+
+    A prior with finite support reports it unchanged. An unbounded ``Normal``
+    collapses to ``mu +/- NORMAL_RANGE_SIGMAS * sigma``, which is what lets
+    the maximum-likelihood backend keep treating every parameter as a plain
+    box without knowing which prior produced it.
+    """
+    lower, upper = prior_support(prior)
+    if isfinite(lower) and isfinite(upper):
+        return lower, upper
+    if isinstance(prior, Normal):
+        half_width = NORMAL_RANGE_SIGMAS * prior.sigma
+        return prior.mu - half_width, prior.mu + half_width
+    raise RuntimeError(f"prior {type(prior).__name__} has no finite range.")
+
+
+def prior_initial(prior: Prior) -> float:
+    """Return one representative value of a declared prior.
+
+    Used as the optimizer start and wherever a nominal parameter value is
+    needed before fitting, such as the data-derived flux scale.
+    """
+    if isinstance(prior, (Normal, TruncatedNormal)):
+        lower, upper = prior_range(prior)
+        return min(max(prior.mu, lower), upper)
+    if isinstance(prior, LogUniform):
+        return sqrt(prior.low * prior.high)
+    if isinstance(prior, Uniform):
+        return 0.5 * (prior.low + prior.high)
+    raise RuntimeError(f"prior {type(prior).__name__} has no representative value.")
+
+
+def scale_prior(prior: Prior, factor: float) -> Prior:
+    """Return a copy of ``prior`` with every value scaled by ``factor``.
+
+    Converts a prior declared in one unit into another, which a center rule
+    needs when it is stated as a wavelength offset but compiled in km/s. The
+    factor is always positive, so bounds keep their order.
+    """
+    if factor <= 0.0:
+        raise ValueError("prior scale factor must be positive.")
+    if isinstance(prior, Normal):
+        return Normal(prior.mu * factor, prior.sigma * factor)
+    if isinstance(prior, TruncatedNormal):
+        return TruncatedNormal(
+            prior.mu * factor,
+            prior.sigma * factor,
+            low=prior.low * factor,
+            high=prior.high * factor,
+        )
+    if isinstance(prior, Uniform):
+        return Uniform(prior.low * factor, prior.high * factor)
+    if isinstance(prior, LogUniform):
+        return LogUniform(prior.low * factor, prior.high * factor)
+    raise RuntimeError(f"prior {type(prior).__name__} cannot be rescaled.")
+
+
+def _required_prior(rule: _ParameterRule) -> Prior:
+    """Return a prior rule's declared distribution."""
+    if rule.prior is None:
+        raise RuntimeError("prior rule is missing its distribution.")
+    return rule.prior
+
+
+def _velocity_prior(rule: _ParameterRule, observed_wavelength: float) -> Prior:
+    """Return a center rule's prior expressed in km/s."""
+    prior = _required_prior(rule)
+    if rule.offset_unit == "wavelength":
+        return scale_prior(prior, C_KMS / observed_wavelength)
+    return prior
 
 
 def center_expression(
@@ -160,6 +260,8 @@ def center_velocity_kms(
         return center_offset_to_velocity(
             value, rule.offset_unit, handle.line.observed_wavelength
         )
+    if rule.is_prior:
+        return prior_initial(_velocity_prior(rule, handle.line.observed_wavelength))
     raise RuntimeError(
         "center rule must be fixed, bounded, or locked before compilation."
     )
@@ -192,6 +294,8 @@ def line_fwhm_kms(
         return initial_from_bounds(
             rule.bounds, preferred=NOMINAL_FWHM_KMS[handle.component]
         )
+    if rule.is_prior:
+        return prior_initial(_required_prior(rule))
     raise RuntimeError(
         "FWHM rule must be fixed, bounded, or locked before compilation."
     )
@@ -266,6 +370,15 @@ def _kernel_shape_expression_inner(
         if rule.value is None:
             raise RuntimeError("fixed kernel rule is missing a value.")
         return ParameterExpression(fixed=rule.value, terms={}, specs={})
+    if rule.is_prior:
+        prior = _required_prior(rule)
+        lower, upper = prior_range(prior)
+        spec = VariableSpec(
+            lower=lower, upper=upper, initial=prior_initial(prior), prior=prior
+        )
+        return ParameterExpression(
+            fixed=0.0, terms={identity: 1.0}, specs={identity: spec}
+        )
     if not rule.is_bounded or rule.bounds is None:
         raise RuntimeError("kernel shape rules must be fixed, bounded, or locked.")
     lower, upper = rule.bounds
@@ -467,7 +580,12 @@ def _center_expression_inner(
             terms={},
             specs={},
         )
-    if rule.is_bounded:
+    prior: Prior | None = None
+    if rule.is_prior:
+        prior = _velocity_prior(rule, handle.line.observed_wavelength)
+        lower, upper = prior_range(prior)
+        initial = prior_initial(prior)
+    elif rule.is_bounded:
         if rule.bounds is None:
             raise RuntimeError("bounded center rule is missing bounds.")
         lower = center_offset_to_velocity(
@@ -476,15 +594,12 @@ def _center_expression_inner(
         upper = center_offset_to_velocity(
             rule.bounds[1], rule.offset_unit, handle.line.observed_wavelength
         )
+        initial = initial_from_bounds((lower, upper), preferred=0.0)
     else:
         raise RuntimeError(
             "center rule must be fixed, bounded, or locked before compilation."
         )
-    spec = VariableSpec(
-        lower=lower,
-        upper=upper,
-        initial=initial_from_bounds((lower, upper), preferred=0.0),
-    )
+    spec = VariableSpec(lower=lower, upper=upper, initial=initial, prior=prior)
     return ParameterExpression(fixed=0.0, terms={identity: 1.0}, specs={identity: spec})
 
 
@@ -511,19 +626,21 @@ def _fwhm_expression_inner(
         if rule.value is None:
             raise RuntimeError("fixed FWHM rule is missing a value.")
         return ParameterExpression(fixed=rule.value, terms={}, specs={})
-    if rule.is_bounded:
+    prior: Prior | None = None
+    if rule.is_prior:
+        prior = _required_prior(rule)
+        lower, upper = prior_range(prior)
+        initial = prior_initial(prior)
+    elif rule.is_bounded:
         if rule.bounds is None:
             raise RuntimeError("bounded FWHM rule is missing bounds.")
         lower, upper = rule.bounds
+        initial = initial_from_bounds(
+            (lower, upper), preferred=NOMINAL_FWHM_KMS[handle.component]
+        )
     else:
         raise RuntimeError(
             "FWHM rule must be fixed, bounded, or locked before compilation."
         )
-    spec = VariableSpec(
-        lower=lower,
-        upper=upper,
-        initial=initial_from_bounds(
-            (lower, upper), preferred=NOMINAL_FWHM_KMS[handle.component]
-        ),
-    )
+    spec = VariableSpec(lower=lower, upper=upper, initial=initial, prior=prior)
     return ParameterExpression(fixed=0.0, terms={identity: 1.0}, specs={identity: spec})

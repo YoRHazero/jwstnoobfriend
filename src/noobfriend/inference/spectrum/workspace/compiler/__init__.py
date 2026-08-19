@@ -2,6 +2,7 @@
 
 from noobfriend.inference.spectrum.workspace.compiler.expressions import (
     BASE_SHAPE,
+    NORMAL_RANGE_SIGMAS,
     FluxExpression,
     ParameterExpression,
     ParameterOffsets,
@@ -15,6 +16,9 @@ from noobfriend.inference.spectrum.workspace.compiler.expressions import (
     line_fwhm_kms,
     line_kernels_kms,
     pack_parameter_specs,
+    prior_initial,
+    prior_range,
+    scale_prior,
     shape_expressions,
 )
 from noobfriend.inference.spectrum.workspace.compiler.graph import (
@@ -28,6 +32,7 @@ from noobfriend.inference.spectrum.workspace.compiler.profiles import (
 )
 from noobfriend.inference.spectrum.workspace.compiler.symbolic import (
     symbolic_expression,
+    symbolic_prior_logp,
     symbolic_profile,
 )
 
@@ -47,11 +52,16 @@ __all__ = [
     "flux_bounds",
     "line_center",
     "line_fwhm_kms",
+    "NORMAL_RANGE_SIGMAS",
     "line_kernels_kms",
     "pack_parameter_specs",
+    "prior_initial",
+    "prior_range",
+    "scale_prior",
     "profile_template",
     "profile_template_stack",
     "shape_expressions",
     "symbolic_expression",
+    "symbolic_prior_logp",
     "symbolic_profile",
 ]

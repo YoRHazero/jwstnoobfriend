@@ -1,5 +1,13 @@
 """Line contract for spectrum fitting."""
 
+from noobfriend.inference.spectrum.line.distributions import (
+    LogUniform,
+    Normal,
+    Prior,
+    TruncatedNormal,
+    Uniform,
+    prior_support,
+)
 from noobfriend.inference.spectrum.line.kernels import (
     BUILTIN_KERNELS,
     KernelFunction,
@@ -16,6 +24,7 @@ from noobfriend.inference.spectrum.line.types import (
     ComponentName,
     ContributionName,
     FixedOrBounded,
+    ParameterSpec,
     ProfileName,
 )
 
@@ -29,9 +38,16 @@ __all__ = [
     "KernelFunction",
     "KernelName",
     "LineKernel",
+    "LogUniform",
     "NOMINAL_FWHM_KMS",
     "NoobLine",
+    "Normal",
+    "ParameterSpec",
+    "Prior",
     "ProfileName",
+    "TruncatedNormal",
+    "Uniform",
     "gaussian",
     "laplace",
+    "prior_support",
 ]

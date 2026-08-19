@@ -9,12 +9,22 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from noobfriend.inference.spectrum.line import (
+    LogUniform,
+    Normal,
+    Prior,
+    TruncatedNormal,
+    Uniform,
+)
 from noobfriend.inference.spectrum.workspace.compiler import (
     BASE_SHAPE,
     C_KMS,
     compile_line_graph,
     contribution_sign,
+    prior_range,
+    scale_prior,
     symbolic_expression,
+    symbolic_prior_logp,
     symbolic_profile,
 )
 from noobfriend.inference.spectrum.workspace.mcmc.priors import (
@@ -192,7 +202,19 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
             handle = graph.handle_by_line[source_id]
             prior = prior_by_source[source_id]
             variable_name = f"source__{handle.index}__{_safe_name(handle.id)}__flux_raw"
-            if prior.family == "uniform":
+            if prior.declared is not None:
+                # Declared in physical flux units; the model works in units of
+                # model_scale, so the prior is rescaled to match.
+                flux_values[source_id] = (
+                    _prior_variable(
+                        pm,
+                        pt,
+                        variable_name,
+                        scale_prior(prior.declared, 1.0 / model_scale),
+                    )
+                    * model_scale
+                )
+            elif prior.family == "uniform":
                 if prior.bounds is None:
                     raise RuntimeError("bounded flux prior is missing bounds.")
                 lower, upper = prior.bounds
@@ -214,11 +236,17 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
         center_values: dict[int, Any] = {}
         for source_id, spec in graph.center_sources.items():
             handle = graph.handle_by_line[source_id]
-            center_values[source_id] = pm.Uniform(
-                f"source__{handle.index}__{_safe_name(handle.id)}__delta_v_kms",
-                lower=spec.lower,
-                upper=spec.upper,
+            variable_name = (
+                f"source__{handle.index}__{_safe_name(handle.id)}__delta_v_kms"
             )
+            if spec.prior is None:
+                center_values[source_id] = pm.Uniform(
+                    variable_name, lower=spec.lower, upper=spec.upper
+                )
+            else:
+                center_values[source_id] = _prior_variable(
+                    pm, pt, variable_name, spec.prior
+                )
 
         shape_values: dict[str, dict[int, Any]] = {
             name: {} for name in graph.shape_sources
@@ -228,20 +256,41 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                 handle = graph.handle_by_line[source_id]
                 prefix = f"source__{handle.index}__{_safe_name(handle.id)}"
                 if shape_name != BASE_SHAPE or instrumental_fwhm is None:
-                    log_value = pm.Uniform(
-                        f"{prefix}__log_{shape_name}",
-                        lower=log(spec.lower),
-                        upper=log(spec.upper),
-                    )
-                    shape_values[shape_name][source_id] = pt.exp(log_value)
+                    # An explicit LogUniform is the declared form of the
+                    # default, so it reuses the same variable and name.
+                    declared = spec.prior
+                    if declared is None or isinstance(declared, LogUniform):
+                        lower, upper = (
+                            (spec.lower, spec.upper)
+                            if declared is None
+                            else (declared.low, declared.high)
+                        )
+                        log_value = pm.Uniform(
+                            f"{prefix}__log_{shape_name}",
+                            lower=log(lower),
+                            upper=log(upper),
+                        )
+                        shape_values[shape_name][source_id] = pt.exp(log_value)
+                    else:
+                        shape_values[shape_name][source_id] = _prior_variable(
+                            pm, pt, f"{prefix}__{shape_name}", declared
+                        )
                     continue
-                # The quadrature "effective" width equals the observed width
-                # only for a gaussian base; for other profiles it is merely an
-                # approximate ridge alignment. Either way the Jacobian keeps
-                # the intrinsic FWHM log-uniform on its declared bounds, so
-                # the reparameterization is valid for every base profile.
-                effective_lower = sqrt(spec.lower**2 + instrumental_fwhm**2)
-                effective_upper = sqrt(spec.upper**2 + instrumental_fwhm**2)
+                # The data constrain the observed width, so the width is
+                # sampled in effective-width coordinates where the likelihood
+                # ridge is straight. (The quadrature "effective" width equals
+                # the observed width only for a gaussian base; for other
+                # profiles it is merely an approximate ridge alignment.) The
+                # declared prior is stated on the *intrinsic* width, so the
+                # Potential restores it: it adds the declared log density plus
+                # the log Jacobian of the coordinate change, cancelling the
+                # density that flat-in-log-effective would otherwise induce.
+                # An unstated prior means the historical log-uniform, for
+                # which this reduces to 2*log_effective - 2*log(intrinsic).
+                declared = spec.prior or LogUniform(spec.lower, spec.upper)
+                lower, upper = prior_range(declared)
+                effective_lower = sqrt(lower**2 + instrumental_fwhm**2)
+                effective_upper = sqrt(upper**2 + instrumental_fwhm**2)
                 log_effective = pm.Uniform(
                     f"{prefix}__log_effective_fwhm",
                     lower=log(effective_lower),
@@ -251,7 +300,9 @@ def build_workspace_model(workspace: NoobFitWorkspace) -> BuiltMCMCModel:
                 intrinsic = pt.sqrt(effective**2 - instrumental_fwhm**2)
                 pm.Potential(
                     f"{prefix}__effective_fwhm_jacobian",
-                    2.0 * log_effective - 2.0 * pt.log(intrinsic),
+                    symbolic_prior_logp(pt, declared, intrinsic)
+                    + 2.0 * log_effective
+                    - pt.log(intrinsic),
                 )
                 shape_values[shape_name][source_id] = intrinsic
                 effective_sources.append(handle.id)
@@ -429,6 +480,32 @@ def _build_continuum(
             )
         continuum = continuum + physical[frame_index] * powers[degree] / model_scale
     return continuum, layout
+
+
+def _prior_variable(pm: Any, pt: Any, name: str, prior: Prior) -> Any:
+    """Create the sampled PyMC variable for one declared prior.
+
+    ``LogUniform`` has no PyMC distribution of its own and is built the way
+    the package has always built log-uniform widths: a uniform variable in
+    the logarithm, exponentiated.
+    """
+    if isinstance(prior, Normal):
+        return pm.Normal(name, mu=prior.mu, sigma=prior.sigma)
+    if isinstance(prior, TruncatedNormal):
+        return pm.TruncatedNormal(
+            name,
+            mu=prior.mu,
+            sigma=prior.sigma,
+            lower=prior.low,
+            upper=prior.high,
+        )
+    if isinstance(prior, Uniform):
+        return pm.Uniform(name, lower=prior.low, upper=prior.high)
+    if isinstance(prior, LogUniform):
+        return pt.exp(
+            pm.Uniform(f"{name}__log", lower=log(prior.low), upper=log(prior.high))
+        )
+    raise RuntimeError(f"prior {type(prior).__name__} has no PyMC variable.")
 
 
 def _find_flux_pairs(

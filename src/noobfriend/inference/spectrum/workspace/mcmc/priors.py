@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 from math import sqrt
 from types import MappingProxyType
@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from noobfriend.inference.spectrum.line import (
+    LogUniform,
+    Normal,
+    Prior,
+    TruncatedNormal,
+    Uniform,
+)
 from noobfriend.inference.spectrum.workspace.compiler import (
     BASE_SHAPE,
     C_KMS,
@@ -18,6 +25,7 @@ from noobfriend.inference.spectrum.workspace.compiler import (
     evaluate_expression,
     flux_bounds,
     line_kernels_kms,
+    prior_range,
     profile_template,
 )
 from noobfriend.inference.spectrum.workspace.mcmc.posterior import CONTINUUM_COMPONENT
@@ -40,7 +48,12 @@ CONTINUUM_TAU_SIGMA = 0.5
 
 @dataclass(frozen=True, slots=True)
 class FluxSourcePrior:
-    """Internal physical prior required to build one independent flux source."""
+    """Internal physical prior required to build one independent flux source.
+
+    ``declared`` carries the user's own prior when one was given, in which
+    case ``family``/``scale`` describe it only for reporting and the model
+    builds the declared distribution directly.
+    """
 
     source_id: int
     line_id: str
@@ -48,6 +61,7 @@ class FluxSourcePrior:
     reference_flux: float
     scale: float | None
     bounds: tuple[float, float] | None
+    declared: Prior | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -238,7 +252,9 @@ def build_flux_source_priors(
         source_id: spec.initial for source_id, spec in graph.center_sources.items()
     }
     fwhm_values = {
-        source_id: sqrt(spec.lower * spec.upper)
+        source_id: (
+            spec.initial if spec.prior is not None else sqrt(spec.lower * spec.upper)
+        )
         for source_id, spec in graph.fwhm_sources.items()
     }
     templates = {source_id: np.zeros_like(wavelength) for source_id in source_ids}
@@ -272,7 +288,22 @@ def build_flux_source_priors(
                 f"flux source {handle.id!r} has no finite reference response."
             )
         reference = data_amplitude / peak
-        if handle.line.flux_rule.is_bounded:
+        if handle.line.flux_rule.is_prior:
+            declared = handle.line.flux_rule.prior
+            if declared is None:
+                raise RuntimeError("prior flux rule is missing its distribution.")
+            priors.append(
+                FluxSourcePrior(
+                    source_id=source_id,
+                    line_id=handle.id,
+                    family=_prior_family(declared),
+                    reference_flux=reference,
+                    scale=None,
+                    bounds=prior_range(declared),
+                    declared=declared,
+                )
+            )
+        elif handle.line.flux_rule.is_bounded:
             priors.append(
                 FluxSourcePrior(
                     source_id=source_id,
@@ -368,6 +399,35 @@ def _continuum_priors(
     return values
 
 
+def _prior_family(prior: Prior) -> str:
+    """Return the reporting family name of a declared prior."""
+    return {
+        Normal: "normal",
+        TruncatedNormal: "truncatednormal",
+        Uniform: "uniform",
+        LogUniform: "loguniform",
+    }[type(prior)]
+
+
+def _declared_metadata(name: str, prior: Prior) -> MCMCParameterPrior:
+    """Translate a declared prior into reporting metadata."""
+    if isinstance(prior, Normal):
+        return MCMCParameterPrior(
+            name=name, family="normal", location=prior.mu, scale=prior.sigma
+        )
+    if isinstance(prior, TruncatedNormal):
+        return MCMCParameterPrior(
+            name=name,
+            family="truncatednormal",
+            location=prior.mu,
+            scale=prior.sigma,
+            bounds=(prior.low, prior.high),
+        )
+    return MCMCParameterPrior(
+        name=name, family=_prior_family(prior), bounds=prior_range(prior)
+    )
+
+
 def _line_flux_prior(
     handle: LineHandle,
     graph: CompiledLineGraph,
@@ -386,6 +446,8 @@ def _line_flux_prior(
             ratio=rule.value,
         )
     source = sources[id(handle.line)]
+    if source.declared is not None:
+        return _declared_metadata("flux", source.declared)
     return MCMCParameterPrior(
         name="flux",
         family=source.family,
@@ -411,6 +473,8 @@ def _line_fwhm_prior(
     if rule.is_fixed:
         return MCMCParameterPrior(name="fwhm", family="fixed", value=expression.fixed)
     spec = next(iter(expression.specs.values()))
+    if spec.prior is not None:
+        return _declared_metadata("fwhm", spec.prior)
     return MCMCParameterPrior(
         name="fwhm",
         family="loguniform",
@@ -439,6 +503,24 @@ def _line_center_prior(
         handle.observed_wavelength * (1.0 + spec.lower / C_KMS),
         handle.observed_wavelength * (1.0 + spec.upper / C_KMS),
     )
+    if spec.prior is not None:
+        # The prior is declared on the velocity offset; the wavelength centre
+        # is an affine image of it, so location and bounds map exactly.
+        velocity = _declared_metadata("center", spec.prior)
+        return replace(
+            velocity,
+            bounds=bounds,
+            location=(
+                None
+                if velocity.location is None
+                else handle.observed_wavelength * (1.0 + velocity.location / C_KMS)
+            ),
+            scale=(
+                None
+                if velocity.scale is None
+                else handle.observed_wavelength * velocity.scale / C_KMS
+            ),
+        )
     return MCMCParameterPrior(name="center", family="uniform", bounds=bounds)
 
 
@@ -464,6 +546,8 @@ def _line_delta_v_prior(
             name="delta_v_kms", family="fixed", value=expression.fixed
         )
     spec = next(iter(expression.specs.values()))
+    if spec.prior is not None:
+        return _declared_metadata("delta_v_kms", spec.prior)
     return MCMCParameterPrior(
         name="delta_v_kms", family="uniform", bounds=(spec.lower, spec.upper)
     )
@@ -486,6 +570,8 @@ def _kernel_shape_prior(
     if not expression.terms:
         return MCMCParameterPrior(name=name, family="fixed", value=expression.fixed)
     spec = next(iter(expression.specs.values()))
+    if spec.prior is not None:
+        return _declared_metadata(name, spec.prior)
     return MCMCParameterPrior(
         name=name, family="loguniform", bounds=(spec.lower, spec.upper)
     )

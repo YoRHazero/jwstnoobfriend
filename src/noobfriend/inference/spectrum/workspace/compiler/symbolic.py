@@ -15,6 +15,13 @@ from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from noobfriend.inference.spectrum.line import (
+    LogUniform,
+    Normal,
+    Prior,
+    TruncatedNormal,
+    Uniform,
+)
 from noobfriend.inference.spectrum.workspace.compiler._faddeeva import (
     symbolic_voigt,
 )
@@ -88,6 +95,43 @@ def symbolic_profile(
         kernels=kernels,
         instrumental_fwhm_kms=instrumental_fwhm_kms,
     )
+
+
+def symbolic_prior_logp(pt: Any, prior: Prior, value: Any) -> Any:
+    """Build the PyTensor graph of a declared prior's log density.
+
+    Only needed where a prior cannot be attached to a PyMC variable directly:
+    a width sampled in effective-width coordinates is a deterministic
+    transform of the sampled variable, so its declared prior enters the model
+    as a ``Potential`` instead.
+
+    Normalization constants are dropped. They do not depend on ``value``, and
+    the result is only ever added to a model as a ``Potential``, where a
+    constant shifts the log posterior without changing it. Truncation is
+    likewise not enforced here: the sampled variable's own bounded support
+    already restricts ``value`` to the declared range.
+
+    Parameters
+    ----------
+    pt
+        The ``pytensor.tensor`` namespace.
+    prior
+        The declared prior, expressed in the units of ``value``.
+    value
+        Symbolic tensor the density is evaluated at.
+
+    Returns
+    -------
+    Any
+        A PyTensor expression for the unnormalized log density.
+    """
+    if isinstance(prior, Uniform):
+        return pt.zeros_like(value)
+    if isinstance(prior, LogUniform):
+        return -pt.log(value)
+    if isinstance(prior, (Normal, TruncatedNormal)):
+        return -0.5 * ((value - prior.mu) / prior.sigma) ** 2
+    raise RuntimeError(f"prior {type(prior).__name__} has no symbolic log density.")
 
 
 def symbolic_expression(

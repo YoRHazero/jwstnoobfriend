@@ -25,10 +25,11 @@ from noobfriend.inference.spectrum.line.types import (
     VALID_PROFILES,
     ComponentName,
     ContributionName,
-    FixedOrBounded,
+    ParameterSpec,
     ProfileName,
 )
 from noobfriend.inference.spectrum.line._wavelength import Wavelength
+from noobfriend.inference.spectrum.line.distributions import prior_support
 from noobfriend.inference.spectrum.types import WaveUnit
 
 
@@ -225,8 +226,8 @@ class NoobLine:
     def center(
         self,
         *,
-        delta_v_kms: FixedOrBounded | None = None,
-        delta_wavelength: FixedOrBounded | None = None,
+        delta_v_kms: ParameterSpec | None = None,
+        delta_wavelength: ParameterSpec | None = None,
     ) -> NoobLine:
         """Return a copy with an explicit center offset rule.
 
@@ -249,7 +250,7 @@ class NoobLine:
     def fwhm(
         self,
         *,
-        override: FixedOrBounded | None = None,
+        override: ParameterSpec | None = None,
         locked: bool | NoobLine | None = None,
     ) -> NoobLine:
         """Return a copy with an explicit FWHM rule.
@@ -272,7 +273,7 @@ class NoobLine:
         return replace(self, _fwhm_rule=_default_fwhm_rule(self.component))
 
     def flux(
-        self, *, override: FixedOrBounded | None = None, ratio: float | None = None
+        self, *, override: ParameterSpec | None = None, ratio: float | None = None
     ) -> NoobLine:
         """Return a copy with an explicit flux rule.
 
@@ -295,7 +296,7 @@ class NoobLine:
         return replace(self, _flux_rule=_ParameterRule.ratio(value))
 
     def convolve(
-        self, kernel: KernelName | KernelFunction, **shape_rules: FixedOrBounded
+        self, kernel: KernelName | KernelFunction, **shape_rules: ParameterSpec
     ) -> NoobLine:
         """Return a copy convolved with a built-in kernel.
 
@@ -352,6 +353,12 @@ class NoobLine:
         if fraction_rule.is_fixed:
             if fraction_rule.value is None or not 0.0 < fraction_rule.value <= 1.0:
                 raise ValueError("convolve.fraction must lie in (0, 1].")
+        elif fraction_rule.is_prior:
+            if fraction_rule.prior is None:
+                raise RuntimeError("prior rule invariant violated: missing prior.")
+            lower, upper = prior_support(fraction_rule.prior)
+            if not 0.0 < lower < upper <= 1.0:
+                raise ValueError("convolve.fraction prior support must lie in (0, 1].")
         elif fraction_rule.bounds is not None:
             lower, upper = fraction_rule.bounds
             if not 0.0 < lower < upper <= 1.0:
