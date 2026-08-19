@@ -17,15 +17,14 @@ from noobfriend.inference.spectrum.workspace.compiler import (
     contribution_sign,
     evaluate_expression,
     flux_bounds,
-    profile_template,
-)
-from noobfriend.inference.spectrum.workspace.compiler.expressions import (
     line_kernels_kms,
+    profile_template,
 )
 from noobfriend.inference.spectrum.workspace.mcmc.posterior import CONTINUUM_COMPONENT
 
 if TYPE_CHECKING:
-    from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
+    from noobfriend.inference.spectrum.line._rules import _ParameterRule
+    from noobfriend.inference.spectrum.workspace import LineHandle, NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.compiler import (
         CompiledLineGraph,
         ParameterExpression,
@@ -370,8 +369,11 @@ def _continuum_priors(
 
 
 def _line_flux_prior(
-    handle, graph, sources: Mapping[int, FluxSourcePrior]
+    handle: LineHandle,
+    graph: CompiledLineGraph,
+    sources: Mapping[int, FluxSourcePrior],
 ) -> MCMCParameterPrior:
+    """Translate one line's flux rule into prior metadata."""
     rule = handle.line.flux_rule
     if rule.is_fixed:
         return MCMCParameterPrior(name="flux", family="fixed", value=rule.value)
@@ -394,10 +396,11 @@ def _line_flux_prior(
 
 
 def _line_fwhm_prior(
-    handle,
-    graph,
+    handle: LineHandle,
+    graph: CompiledLineGraph,
     expression: ParameterExpression,
 ) -> MCMCParameterPrior:
+    """Translate one line's base-width rule into prior metadata."""
     rule = handle.line.fwhm_rule
     if rule.is_locked:
         return MCMCParameterPrior(
@@ -416,10 +419,11 @@ def _line_fwhm_prior(
 
 
 def _line_center_prior(
-    handle,
-    graph,
+    handle: LineHandle,
+    graph: CompiledLineGraph,
     expression: ParameterExpression,
 ) -> MCMCParameterPrior:
+    """Translate one line's center rule into a wavelength prior."""
     rule = handle.line.center_rule
     if rule.is_locked:
         return MCMCParameterPrior(
@@ -439,8 +443,8 @@ def _line_center_prior(
 
 
 def _line_delta_v_prior(
-    handle,
-    graph,
+    handle: LineHandle,
+    graph: CompiledLineGraph,
     expression: ParameterExpression,
 ) -> MCMCParameterPrior:
     """Translate the center rule into a velocity-offset prior in km/s.
@@ -469,8 +473,8 @@ def _kernel_shape_prior(
     name: str,
     expression: ParameterExpression,
     *,
-    rule,
-    graph,
+    rule: _ParameterRule,
+    graph: CompiledLineGraph,
 ) -> MCMCParameterPrior:
     """Translate one kernel shape rule into prior metadata."""
     if rule.is_locked:

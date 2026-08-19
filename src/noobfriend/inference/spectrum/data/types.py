@@ -7,3 +7,8 @@ from typing import Literal
 
 type DispersionAxis = Literal["row", "column"]
 type NoiseSource = Literal["manual", "continuum", "background"]
+
+__all__ = [
+    "DispersionAxis",
+    "NoiseSource",
+]

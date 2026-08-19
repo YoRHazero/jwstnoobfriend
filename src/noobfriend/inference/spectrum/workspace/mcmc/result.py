@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from noobfriend.inference.spectrum.workspace.mcmc.criteria import (
     MCMCCriteria,
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from noobfriend.inference.spectrum.data import NoobSpectrum, NoobSpectrumSet
     from noobfriend.inference.spectrum.data.types import DispersionAxis
+    from noobfriend.inference.spectrum.visualization import ModelView
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.mcmc.frames import FrameFit
     from noobfriend.inference.spectrum.workspace.mcmc.lofo import FrameLOOResult
@@ -85,7 +86,7 @@ class MCMCFitResult:
         size: int = 1000,
         title: str | None = None,
         legend_location: str = "best",
-        view: Literal["observed", "emergent", "intrinsic"] = "observed",
+        view: ModelView = "observed",
     ) -> Figure:
         """Plot posterior model summaries and optional residuals in flux units.
 
@@ -215,7 +216,7 @@ class MCMCFitResult:
         size: int = 1000,
         title: str | None = None,
         legend_location: str = "best",
-        view: Literal["observed", "emergent", "intrinsic"] = "observed",
+        view: ModelView = "observed",
     ) -> Figure:
         """Plot the posterior model over each frame as stacked panels.
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from noobfriend.inference.spectrum.types import WaveUnit
 
 type ComponentName = Literal["narrow", "broad"]
 type ContributionName = Literal["emission", "absorption"]
@@ -27,5 +26,4 @@ __all__ = [
     "DEFAULT_FWHM_RANGES",
     "FixedOrBounded",
     "ProfileName",
-    "WaveUnit",
 ]

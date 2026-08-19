@@ -314,9 +314,7 @@ def test_kernel_shapes_compile_and_emg_matches_numerical_convolution() -> None:
     from scipy.signal import fftconvolve
 
     from noobfriend.inference.spectrum.line import kernels
-    from noobfriend.inference.spectrum.workspace.compiler.expressions import (
-        line_kernels_kms,
-    )
+    from noobfriend.inference.spectrum.workspace.compiler import line_kernels_kms
 
     wavelength = np.linspace(4900.0, 5100.0, 8001)
     line = (

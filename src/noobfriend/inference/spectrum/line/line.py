@@ -12,7 +12,7 @@ from noobfriend.inference.spectrum.line.kernels import (
     LineKernel,
     _resolve_kernel,
 )
-from noobfriend.inference.spectrum.line.rules import (
+from noobfriend.inference.spectrum.line._rules import (
     _ParameterRule,
     _required_float,
     _rule_from_fixed_or_bounded,
@@ -27,9 +27,9 @@ from noobfriend.inference.spectrum.line.types import (
     ContributionName,
     FixedOrBounded,
     ProfileName,
-    WaveUnit,
 )
-from noobfriend.inference.spectrum.line.wavelength import Wavelength
+from noobfriend.inference.spectrum.line._wavelength import Wavelength
+from noobfriend.inference.spectrum.types import WaveUnit
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,8 +302,8 @@ class NoobLine:
         The kernel is named by a string — ``"gaussian"`` or ``"laplace"`` —
         which needs no import and is the recommended form. The matching
         built-in kernel function from
-        :mod:`noobfriend.inference.spectrum.line.kernels` (e.g.
-        ``kernels.laplace``) is also accepted; passing any other function is
+        :mod:`noobfriend.inference.spectrum.line` (e.g. ``laplace``) is also
+        accepted; passing any other function is
         reserved for a future numerical convolution backend and currently
         raises. The kernel is defined in zero-centred velocity space (km/s);
         its shape parameters (the signature after the leading ``x``) are given

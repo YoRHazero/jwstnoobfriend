@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from math import isclose
 from typing import TYPE_CHECKING, Literal
 
-from noobfriend.inference.spectrum.data.axis import _format_center_label
+from noobfriend.inference.spectrum.data._axis import _format_center_label
 from noobfriend.inference.spectrum.line import NoobLine
 from noobfriend.inference.spectrum.types import WaveUnit, convert_wavelength
 from noobfriend.inference.spectrum.workspace.continuum import (
@@ -196,7 +196,7 @@ class NoobFitWorkspace:
 
         return render_workspace_summary(self)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[LineHandle]:
         """Iterate over line handles."""
         return iter(self.handles)
 

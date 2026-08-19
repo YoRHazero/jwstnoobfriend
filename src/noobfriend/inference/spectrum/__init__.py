@@ -3,6 +3,7 @@
 from noobfriend.inference.spectrum.data import NoobSpectrum, NoobSpectrumSet
 from noobfriend.inference.spectrum.line import NoobLine
 from noobfriend.inference.spectrum.model import NoobSpectrumModel
+from noobfriend.inference.spectrum.types import WaveUnit, convert_wavelength
 from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
 
 __all__ = [
@@ -11,4 +12,6 @@ __all__ = [
     "NoobSpectrum",
     "NoobSpectrumModel",
     "NoobSpectrumSet",
+    "WaveUnit",
+    "convert_wavelength",
 ]

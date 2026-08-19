@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -30,7 +30,19 @@ from noobfriend.inference.spectrum.workspace.compiler import (
 )
 
 if TYPE_CHECKING:
+    from noobfriend.inference.spectrum.workspace import LineHandle
     from noobfriend.inference.spectrum.workspace.mcmc.result import MCMCFitResult
+
+
+#: One line's posterior draws: ``(handle, flux, center, fwhm, kernels)``, where
+#: ``kernels`` carries ``(kind, fwhm_kms, fraction)`` per-draw arrays.
+type _LineDraw = tuple[
+    LineHandle,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    tuple[tuple[str, np.ndarray, np.ndarray], ...],
+]
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -215,8 +227,8 @@ def _draw_indices(
 
 def _line_parameter_draws(
     result: MCMCFitResult, indices: np.ndarray
-) -> tuple[tuple[Any, np.ndarray, np.ndarray, np.ndarray, tuple], ...]:
-    draws = []
+) -> tuple[_LineDraw, ...]:
+    draws: list[_LineDraw] = []
     for handle in result.inputs.workspace.handles:
         posterior = result.posterior[handle.id]
         flux = posterior["flux"].samples.reshape(-1)[indices]
@@ -235,7 +247,7 @@ def _line_parameter_draws(
 
 
 def _line_model_draws(
-    line_draws: tuple[tuple[Any, np.ndarray, np.ndarray, np.ndarray, tuple], ...],
+    line_draws: tuple[_LineDraw, ...],
     wavelength: np.ndarray,
     resolving_power: float | None,
 ) -> np.ndarray:

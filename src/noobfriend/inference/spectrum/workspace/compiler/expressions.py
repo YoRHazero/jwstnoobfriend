@@ -14,7 +14,7 @@ from noobfriend.inference.spectrum.workspace.compiler.profiles import C_KMS
 
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.line import NoobLine
-    from noobfriend.inference.spectrum.line.rules import _ParameterRule
+    from noobfriend.inference.spectrum.line._rules import _ParameterRule
     from noobfriend.inference.spectrum.workspace.handles import LineHandle
 
 

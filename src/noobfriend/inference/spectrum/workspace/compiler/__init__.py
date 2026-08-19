@@ -13,6 +13,7 @@ from noobfriend.inference.spectrum.workspace.compiler.expressions import (
     flux_bounds,
     line_center,
     line_fwhm_kms,
+    line_kernels_kms,
     pack_parameter_specs,
     shape_expressions,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "flux_bounds",
     "line_center",
     "line_fwhm_kms",
+    "line_kernels_kms",
     "pack_parameter_specs",
     "profile_template",
     "profile_template_stack",

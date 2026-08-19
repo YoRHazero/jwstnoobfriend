@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isclose
 
-from noobfriend.inference.spectrum.line.rules import _required_float
+from noobfriend.inference.spectrum.line._rules import _required_float
 from noobfriend.inference.spectrum.types import VALID_WAVE_UNITS, WaveUnit
 
 

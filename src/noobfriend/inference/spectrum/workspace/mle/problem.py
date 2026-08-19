@@ -10,9 +10,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.optimize import lsq_linear
 
-from noobfriend.inference.spectrum.workspace.compiler.expressions import (
-    line_kernels_kms,
-)
 from noobfriend.inference.spectrum.workspace.compiler import (
     BASE_SHAPE,
     C_KMS,
@@ -23,6 +20,7 @@ from noobfriend.inference.spectrum.workspace.compiler import (
     contribution_sign,
     evaluate_expression,
     flux_bounds,
+    line_kernels_kms,
     profile_template,
 )
 

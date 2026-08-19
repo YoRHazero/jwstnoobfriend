@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 
 if TYPE_CHECKING:
-    from noobfriend.inference.spectrum.line.rules import _ParameterRule
+    from noobfriend.inference.spectrum.line._rules import _ParameterRule
 
 _GAUSSIAN_FWHM_TO_SIGMA = 2.0 * sqrt(2.0 * log(2.0))
 
@@ -104,7 +104,7 @@ def _resolve_kernel(
             return name, function
     raise TypeError(
         'convolve expects a built-in kernel name ("gaussian" or "laplace") or a '
-        "built-in kernel function from noobfriend.inference.spectrum.line.kernels; "
+        "built-in kernel function from noobfriend.inference.spectrum.line; "
         "arbitrary functions require the numerical convolution backend, which is "
         "not implemented yet."
     )

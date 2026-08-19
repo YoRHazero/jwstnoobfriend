@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from noobfriend.inference.spectrum.data.arrays import (
+from noobfriend.inference.spectrum.data._arrays import (
     _normalize_arrays,
     _normalize_redshift,
     _normalize_resolving_power,
     _normalize_unit,
 )
-from noobfriend.inference.spectrum.data.axis import _normalize_axis
-from noobfriend.inference.spectrum.data.collapse import _collapse_to_1d
+from noobfriend.inference.spectrum.data._axis import _normalize_axis
+from noobfriend.inference.spectrum.data._collapse import _collapse_to_1d
 from noobfriend.inference.spectrum.data.source2d import Spectrum2DSource
 from noobfriend.inference.spectrum.data.types import DispersionAxis, NoiseSource
 from noobfriend.inference.spectrum.types import WaveUnit
@@ -27,37 +27,83 @@ if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True, eq=False, init=False)
 class NoobSpectrum:
     """Prepared 1-D spectrum data for line fitting.
 
-    ``obs``, ``flux``, and ``error`` are normalized to immutable 1-D arrays.
+    The constructor accepts any array-like input; the attributes below are the
+    normalized form it stores. ``obs``, ``flux``, and ``error`` are immutable
+    1-D float arrays of equal length, and ``obs`` is strictly increasing.
     ``mask_excluded`` uses ``True`` for pixels excluded from fitting. Invalid
-    numeric pixels are not rewritten; they are exposed through ``valid_mask`` so
-    later fitting code can consistently drop them.
+    numeric pixels are not rewritten; they are exposed through ``valid_mask``
+    so later fitting code can consistently drop them.
+
+    Parameters
+    ----------
+    flux, error
+        Flux density and its 1-sigma uncertainty, one value per pixel.
+    obs
+        Observed-frame wavelength in ``unit``. Optional only when ``rest`` and
+        ``z`` are given, in which case it is derived from them.
+    rest
+        Rest-frame wavelength in ``unit``.
+    z
+        Source redshift, strictly positive when provided.
+    unit
+        Wavelength unit shared by ``obs`` and ``rest``.
+    resolving_power
+        Spectral resolving power, positive when provided.
+    mask_excluded
+        Boolean mask, ``True`` for pixels excluded from fitting.
+    source_2d
+        Canonical 2-D source retained by :meth:`from_2d`; its wavelength
+        extent must match the prepared 1-D spectrum.
+
+    Attributes
+    ----------
+    flux, error, obs : numpy.ndarray
+        Read-only normalized arrays.
+    rest, mask_excluded : numpy.ndarray or None
+        Read-only normalized arrays, ``None`` when not supplied.
+
+    Raises
+    ------
+    ValueError
+        If the arrays disagree in shape, ``obs`` is not strictly increasing,
+        no valid unmasked pixel remains, or the wavelength inputs are mutually
+        inconsistent.
     """
 
-    flux: ArrayLike
-    error: ArrayLike
-    obs: ArrayLike | None = field(default=None, kw_only=True)
-    rest: ArrayLike | None = field(default=None, kw_only=True)
-    z: float | None = field(default=None, kw_only=True)
-    unit: WaveUnit = field(default="angstrom", kw_only=True)
-    resolving_power: float | None = field(default=None, kw_only=True)
-    mask_excluded: ArrayLike | None = field(default=None, kw_only=True)
-    source_2d: Spectrum2DSource | None = field(default=None, kw_only=True, repr=False)
+    flux: np.ndarray
+    error: np.ndarray
+    obs: np.ndarray
+    rest: np.ndarray | None
+    z: float | None
+    unit: WaveUnit
+    resolving_power: float | None
+    mask_excluded: np.ndarray | None
+    source_2d: Spectrum2DSource | None
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        flux: ArrayLike,
+        error: ArrayLike,
+        *,
+        obs: ArrayLike | None = None,
+        rest: ArrayLike | None = None,
+        z: float | None = None,
+        unit: WaveUnit = "angstrom",
+        resolving_power: float | None = None,
+        mask_excluded: ArrayLike | None = None,
+        source_2d: Spectrum2DSource | None = None,
+    ) -> None:
         """Validate and normalize spectrum arrays and metadata."""
-        unit = _normalize_unit(self.unit)
-        z = _normalize_redshift(self.z)
-        resolving_power = _normalize_resolving_power(self.resolving_power)
-        axis = _normalize_axis(obs=self.obs, rest=self.rest, z=z)
-        arrays = _normalize_arrays(axis.obs, self.flux, self.error, self.mask_excluded)
-        if (
-            self.source_2d is not None
-            and self.source_2d.flux.shape[1] != arrays.wavelength.size
-        ):
+        parsed_unit = _normalize_unit(unit)
+        parsed_z = _normalize_redshift(z)
+        parsed_resolving_power = _normalize_resolving_power(resolving_power)
+        axis = _normalize_axis(obs=obs, rest=rest, z=parsed_z)
+        arrays = _normalize_arrays(axis.obs, flux, error, mask_excluded)
+        if source_2d is not None and source_2d.flux.shape[1] != arrays.wavelength.size:
             raise ValueError(
                 "source_2d wavelength extent must match the prepared 1-D spectrum."
             )
@@ -66,10 +112,11 @@ class NoobSpectrum:
         object.__setattr__(self, "error", arrays.error)
         object.__setattr__(self, "obs", arrays.wavelength)
         object.__setattr__(self, "rest", axis.rest)
-        object.__setattr__(self, "z", z)
-        object.__setattr__(self, "unit", unit)
-        object.__setattr__(self, "resolving_power", resolving_power)
+        object.__setattr__(self, "z", parsed_z)
+        object.__setattr__(self, "unit", parsed_unit)
+        object.__setattr__(self, "resolving_power", parsed_resolving_power)
         object.__setattr__(self, "mask_excluded", arrays.mask_excluded)
+        object.__setattr__(self, "source_2d", source_2d)
 
     @classmethod
     def from_2d(
@@ -129,10 +176,6 @@ class NoobSpectrum:
     @property
     def wavelength(self) -> np.ndarray:
         """Observed-frame wavelength, kept as a data-view alias."""
-        if self.obs is None:
-            raise RuntimeError(
-                "NoobSpectrum invariant violated: missing observed wavelength."
-            )
         return self.obs
 
     @property
@@ -176,7 +219,7 @@ class NoobSpectrum:
                 f"mask_excluded shape {new_mask.shape} must match obs {self.obs.shape}."
             )
         if self.mask_excluded is not None:
-            new_mask = np.asarray(self.mask_excluded, dtype=bool) | new_mask
+            new_mask = self.mask_excluded | new_mask
         return replace(self, mask_excluded=new_mask)
 
     def clear_mask(self) -> NoobSpectrum:

@@ -9,8 +9,10 @@ from noobfriend.inference.spectrum.visualization.fit import (
     plot_mle_fit,
 )
 from noobfriend.inference.spectrum.visualization.frames import plot_mcmc_frames
+from noobfriend.inference.spectrum.visualization.prediction import ModelView
 
 __all__ = [
+    "ModelView",
     "plot_mcmc_corner",
     "plot_mcmc_fit",
     "plot_mcmc_frames",
