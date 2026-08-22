@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 from noobfriend.inference.spectrum.data._axis import _format_center_label
 from noobfriend.inference.spectrum.line import NoobLine, Prior
-from noobfriend.inference.spectrum.types import WaveUnit, convert_wavelength
+from noobfriend.inference.spectrum._types import WaveUnit, convert_wavelength
 from noobfriend.inference.spectrum.workspace.continuum import (
     ContinuumSharing,
     ContinuumSpec,

@@ -1,4 +1,8 @@
-"""Shared spectrum type aliases."""
+"""Shared spectrum type aliases.
+
+Internal: ``WaveUnit`` is a ``Literal`` of the three unit strings, so callers
+write the string itself rather than importing the alias.
+"""
 
 from __future__ import annotations
 
@@ -29,9 +33,3 @@ def _check_unit(unit: WaveUnit) -> None:
         raise ValueError(
             f"unit {unit!r} must be one of {tuple(sorted(VALID_WAVE_UNITS))}."
         )
-
-
-__all__ = [
-    "WaveUnit",
-    "convert_wavelength",
-]

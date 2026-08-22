@@ -18,7 +18,7 @@ from noobfriend.inference.spectrum.data._axis import _normalize_axis
 from noobfriend.inference.spectrum.data._collapse import _collapse_to_1d
 from noobfriend.inference.spectrum.data.source2d import Spectrum2DSource
 from noobfriend.inference.spectrum.data.types import DispersionAxis, NoiseSource
-from noobfriend.inference.spectrum.types import WaveUnit
+from noobfriend.inference.spectrum._types import WaveUnit
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence

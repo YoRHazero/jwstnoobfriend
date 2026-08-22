@@ -9,7 +9,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from noobfriend.inference.spectrum._numeric import readonly
-from noobfriend.inference.spectrum.types import VALID_WAVE_UNITS, WaveUnit
+from noobfriend.inference.spectrum._types import VALID_WAVE_UNITS, WaveUnit
 
 
 @dataclass(frozen=True, slots=True)

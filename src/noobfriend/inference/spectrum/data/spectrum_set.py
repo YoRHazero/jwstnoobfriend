@@ -11,7 +11,7 @@ from noobfriend.inference.spectrum.data.spectrum import NoobSpectrum
 
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.line import NoobLine, Prior
-    from noobfriend.inference.spectrum.types import WaveUnit
+    from noobfriend.inference.spectrum._types import WaveUnit
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.continuum import ContinuumSharing
 

@@ -30,7 +30,7 @@ from noobfriend.inference.spectrum.line.types import (
 )
 from noobfriend.inference.spectrum.line._wavelength import Wavelength
 from noobfriend.inference.spectrum.line.distributions import prior_support
-from noobfriend.inference.spectrum.types import WaveUnit
+from noobfriend.inference.spectrum._types import WaveUnit
 
 
 @dataclass(frozen=True, slots=True)
