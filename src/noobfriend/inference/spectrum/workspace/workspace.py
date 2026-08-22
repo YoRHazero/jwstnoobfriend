@@ -9,7 +9,7 @@ from math import isclose
 from typing import TYPE_CHECKING, Literal
 
 from noobfriend.inference.spectrum.data._axis import _format_center_label
-from noobfriend.inference.spectrum.line import NoobLine
+from noobfriend.inference.spectrum.line import NoobLine, Prior
 from noobfriend.inference.spectrum.types import WaveUnit, convert_wavelength
 from noobfriend.inference.spectrum.workspace.continuum import (
     ContinuumSharing,
@@ -51,6 +51,7 @@ class NoobFitWorkspace:
         continuum_order: int = 1,
         continuum_lambda_0: float | None = None,
         continuum_sharing: ContinuumSharing = "pooled",
+        continuum_priors: Mapping[str, Prior] | None = None,
     ) -> NoobFitWorkspace:
         """Build a workspace from one spectrum or a joint set of frames."""
         spectra, frame_ids = _normalize_spectrum_input(data)
@@ -63,6 +64,7 @@ class NoobFitWorkspace:
             continuum_order=continuum_order,
             continuum_lambda_0=continuum_lambda_0,
             continuum_sharing=continuum_sharing,
+            continuum_priors=continuum_priors,
         )
         return cls(
             spectra=spectra,

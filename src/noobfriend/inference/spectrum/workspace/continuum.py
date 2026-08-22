@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
 from math import isfinite
-from typing import TYPE_CHECKING, Literal
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from numpy.typing import ArrayLike
+
+from noobfriend.inference.spectrum.line import Prior
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -29,11 +33,19 @@ class ContinuumSpec:
     ``"independent"`` (a free continuum per frame), or ``"shared"`` (one
     continuum for every frame). It has no effect on a single-frame fit, whose
     continuum is always a single set of coefficients.
+
+    ``priors`` holds declared priors keyed by :attr:`parameter_names`, in the
+    spectrum's own flux units (the units the coefficient posteriors are
+    reported in). A coefficient with no declared prior keeps the sampling
+    backend's data-scaled default. Under ``"pooled"`` sharing a declared
+    prior constrains the coefficient's hierarchical mean, not each frame
+    separately.
     """
 
     lambda_0: float
     order: int = 1
     sharing: ContinuumSharing = "pooled"
+    priors: Mapping[str, Prior] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize and validate continuum inputs."""
@@ -52,6 +64,25 @@ class ContinuumSpec:
         if not isfinite(lambda_0):
             raise ValueError("continuum_lambda_0 must be finite.")
         object.__setattr__(self, "lambda_0", lambda_0)
+        object.__setattr__(self, "priors", MappingProxyType(dict(self.priors)))
+        _validate_priors(self.priors, self.parameter_names)
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Return picklable state.
+
+        A ``mappingproxy`` cannot be pickled, and this spec is pickled whole
+        as part of a saved fit, so the prior mapping is unwrapped here and
+        re-frozen on the way back in.
+        """
+        state = {entry.name: getattr(self, entry.name) for entry in fields(self)}
+        state["priors"] = dict(state["priors"])
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore state, re-freezing the prior mapping."""
+        for name, value in state.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "priors", MappingProxyType(dict(state["priors"])))
 
     @property
     def parameter_names(self) -> tuple[str, ...]:
@@ -76,6 +107,7 @@ def build_continuum(
     continuum_order: int = 1,
     continuum_lambda_0: float | None = None,
     continuum_sharing: ContinuumSharing = "pooled",
+    continuum_priors: Mapping[str, Prior] | None = None,
 ) -> ContinuumSpec:
     """Resolve prepare-time continuum options into a concrete spec."""
     if continuum_lambda_0 is None:
@@ -88,4 +120,21 @@ def build_continuum(
         lambda_0=continuum_lambda_0,
         order=continuum_order,
         sharing=continuum_sharing,
+        priors={} if continuum_priors is None else dict(continuum_priors),
     )
+
+
+def _validate_priors(
+    priors: Mapping[str, Prior], parameter_names: tuple[str, ...]
+) -> None:
+    """Check declared continuum priors against the coefficients that exist."""
+    for name, prior in priors.items():
+        if name not in parameter_names:
+            valid = ", ".join(parameter_names)
+            raise ValueError(
+                f"unknown continuum prior parameter {name!r}; valid parameters: {valid}"
+            )
+        if not isinstance(prior, Prior):
+            raise TypeError(
+                f"continuum prior {name!r} must be a Prior, got {type(prior).__name__}."
+            )

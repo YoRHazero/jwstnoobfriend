@@ -424,9 +424,21 @@ def _build_continuum(
     scalar = n_frames == 1 or spec.sharing == "shared"
     for degree, name in enumerate(spec.parameter_names):
         factor = model_scale / wavelength_scale**degree
+        # A declared prior is stated in physical flux units; the coefficient is
+        # sampled in units of `factor`, so the prior is rescaled to match.
+        declared = spec.priors.get(name)
+        normalized = None if declared is None else scale_prior(declared, 1.0 / factor)
         if scalar:
-            raw = pm.Normal(
-                f"continuum__{name}__normalized", mu=0.0, sigma=CONTINUUM_PRIOR_SIGMA
+            raw = (
+                pm.Normal(
+                    f"continuum__{name}__normalized",
+                    mu=0.0,
+                    sigma=CONTINUUM_PRIOR_SIGMA,
+                )
+                if normalized is None
+                else _prior_variable(
+                    pm, pt, f"continuum__{name}__normalized", normalized
+                )
             )
             physical = pm.Deterministic(f"continuum__{name}", raw * factor)
             continuum = continuum + physical * powers[degree] / model_scale
@@ -440,11 +452,21 @@ def _build_continuum(
             continue
 
         if spec.sharing == "independent":
-            raw = pm.Normal(
-                f"continuum__{name}__normalized",
-                mu=0.0,
-                sigma=CONTINUUM_PRIOR_SIGMA,
-                dims="frame",
+            raw = (
+                pm.Normal(
+                    f"continuum__{name}__normalized",
+                    mu=0.0,
+                    sigma=CONTINUUM_PRIOR_SIGMA,
+                    dims="frame",
+                )
+                if normalized is None
+                else _prior_variable(
+                    pm,
+                    pt,
+                    f"continuum__{name}__normalized",
+                    normalized,
+                    dims="frame",
+                )
             )
             physical = pm.Deterministic(
                 f"continuum__{name}", raw * factor, dims="frame"
@@ -457,8 +479,18 @@ def _build_continuum(
                 )
             )
         else:
-            mu = pm.Normal(
-                f"continuum__{name}__mu_normalized", mu=0.0, sigma=CONTINUUM_PRIOR_SIGMA
+            # Pooled sharing puts the declared prior on the hierarchical
+            # mean; each frame still scatters around it by tau.
+            mu = (
+                pm.Normal(
+                    f"continuum__{name}__mu_normalized",
+                    mu=0.0,
+                    sigma=CONTINUUM_PRIOR_SIGMA,
+                )
+                if normalized is None
+                else _prior_variable(
+                    pm, pt, f"continuum__{name}__mu_normalized", normalized
+                )
             )
             tau = pm.HalfNormal(
                 f"continuum__{name}__tau_normalized", sigma=CONTINUUM_TAU_SIGMA
@@ -482,15 +514,19 @@ def _build_continuum(
     return continuum, layout
 
 
-def _prior_variable(pm: Any, pt: Any, name: str, prior: Prior) -> Any:
+def _prior_variable(
+    pm: Any, pt: Any, name: str, prior: Prior, *, dims: str | None = None
+) -> Any:
     """Create the sampled PyMC variable for one declared prior.
 
     ``LogUniform`` has no PyMC distribution of its own and is built the way
     the package has always built log-uniform widths: a uniform variable in
-    the logarithm, exponentiated.
+    the logarithm, exponentiated. ``dims`` gives the variable a model
+    dimension, which a per-frame continuum coefficient needs.
     """
+    shape = {} if dims is None else {"dims": dims}
     if isinstance(prior, Normal):
-        return pm.Normal(name, mu=prior.mu, sigma=prior.sigma)
+        return pm.Normal(name, mu=prior.mu, sigma=prior.sigma, **shape)
     if isinstance(prior, TruncatedNormal):
         return pm.TruncatedNormal(
             name,
@@ -498,12 +534,18 @@ def _prior_variable(pm: Any, pt: Any, name: str, prior: Prior) -> Any:
             sigma=prior.sigma,
             lower=prior.low,
             upper=prior.high,
+            **shape,
         )
     if isinstance(prior, Uniform):
-        return pm.Uniform(name, lower=prior.low, upper=prior.high)
+        return pm.Uniform(name, lower=prior.low, upper=prior.high, **shape)
     if isinstance(prior, LogUniform):
         return pt.exp(
-            pm.Uniform(f"{name}__log", lower=log(prior.low), upper=log(prior.high))
+            pm.Uniform(
+                f"{name}__log",
+                lower=log(prior.low),
+                upper=log(prior.high),
+                **shape,
+            )
         )
     raise RuntimeError(f"prior {type(prior).__name__} has no PyMC variable.")
 

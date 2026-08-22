@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from noobfriend.inference.spectrum.data.spectrum import NoobSpectrum
 
 if TYPE_CHECKING:
-    from noobfriend.inference.spectrum.line import NoobLine
+    from noobfriend.inference.spectrum.line import NoobLine, Prior
     from noobfriend.inference.spectrum.types import WaveUnit
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.continuum import ContinuumSharing
@@ -82,6 +82,7 @@ class NoobSpectrumSet:
         continuum_order: int = 1,
         continuum_lambda_0: float | None = None,
         continuum_sharing: ContinuumSharing = "pooled",
+        continuum_priors: Mapping[str, Prior] | None = None,
     ) -> NoobFitWorkspace:
         """Resolve a line combination jointly against every frame.
 
@@ -98,6 +99,14 @@ class NoobSpectrumSet:
             How continuum coefficients are shared across frames. ``"pooled"``
             uses non-centered partial pooling, ``"independent"`` fits each
             frame freely, and ``"shared"`` ties all frames to one continuum.
+        continuum_priors
+            Priors for individual continuum coefficients, keyed by name
+            (``"c"``, ``"k1"``, ...) and given in the spectrum's own flux
+            units. Coefficients left out keep the sampling backend's
+            data-scaled default.
+            Under ``"pooled"`` sharing a declared prior constrains the
+            coefficient's hierarchical mean; the frames still scatter around
+            it. Use ``"shared"`` to constrain every frame alike.
         """
         from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
 
@@ -107,6 +116,7 @@ class NoobSpectrumSet:
             continuum_order=continuum_order,
             continuum_lambda_0=continuum_lambda_0,
             continuum_sharing=continuum_sharing,
+            continuum_priors=continuum_priors,
         )
 
     def __len__(self) -> int:

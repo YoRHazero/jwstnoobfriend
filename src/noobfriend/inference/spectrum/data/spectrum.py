@@ -23,7 +23,7 @@ from noobfriend.inference.spectrum.types import WaveUnit
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from noobfriend.inference.spectrum.line import NoobLine
+    from noobfriend.inference.spectrum.line import NoobLine, Prior
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
 
 
@@ -256,8 +256,24 @@ class NoobSpectrum:
         *,
         continuum_order: int = 1,
         continuum_lambda_0: float | None = None,
+        continuum_priors: Mapping[str, Prior] | None = None,
     ) -> NoobFitWorkspace:
-        """Resolve a line combination against this spectrum."""
+        """Resolve a line combination against this spectrum.
+
+        Parameters
+        ----------
+        lines
+            Line declarations, as a sequence or a mapping of id to line.
+        continuum_order
+            Polynomial order of the continuum.
+        continuum_lambda_0
+            Continuum anchor wavelength; defaults to the first line's center.
+        continuum_priors
+            Priors for individual continuum coefficients, keyed by name
+            (``"c"``, ``"k1"``, ...) and given in the spectrum's own flux
+            units. Coefficients left out keep the sampling backend's
+            data-scaled default.
+        """
         from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
 
         return NoobFitWorkspace.build(
@@ -265,6 +281,7 @@ class NoobSpectrum:
             lines,
             continuum_order=continuum_order,
             continuum_lambda_0=continuum_lambda_0,
+            continuum_priors=continuum_priors,
         )
 
     def __repr__(self) -> str:

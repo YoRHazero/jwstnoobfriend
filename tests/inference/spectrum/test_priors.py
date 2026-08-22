@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pytest
 from scipy import stats
 
-from noobfriend.inference.spectrum import NoobLine, NoobSpectrum
+from noobfriend.inference.spectrum import NoobLine, NoobSpectrum, NoobSpectrumSet
 from noobfriend.inference.spectrum.line import (
     LogUniform,
     Normal,
@@ -231,7 +233,7 @@ def test_flux_prior_supplies_the_optimizer_flux_bounds() -> None:
         override=TruncatedNormal(1e-17, 3e-18, low=0.0, high=1e-16)
     )
 
-    assert flux_bounds(line) == pytest.approx((0.0, 1e-16))
+    assert flux_bounds(line) == pytest.approx((0.0, 1e-16), rel=1e-9, abs=0.0)
 
 
 # --------------------------------------------------------------------------
@@ -387,3 +389,177 @@ def test_declared_priors_are_reported_back() -> None:
     # the wavelength centre is an affine image of the declared velocity prior
     assert priors["center"].family == "normal"
     assert priors["center"].location == pytest.approx(40000.0)
+
+
+# --------------------------------------------------------------------------
+# continuum coefficient priors
+# --------------------------------------------------------------------------
+
+
+def _flat_spectrum(error_scale: float = 5e-21) -> NoobSpectrum:
+    wavelength = np.linspace(39000.0, 41000.0, 300)
+    rng = np.random.default_rng(0)
+    return NoobSpectrum(
+        np.full_like(wavelength, 1e-19) + rng.normal(0.0, 5e-21, wavelength.size),
+        np.full_like(wavelength, error_scale),
+        obs=wavelength,
+    )
+
+
+_DECLARED_CONTINUUM = Normal(1.05e-19, 8e-21)
+
+
+def test_continuum_priors_reach_the_workspace() -> None:
+    workspace = _flat_spectrum().prepare(
+        [NoobLine("Ha", obs=40000.0)],
+        continuum_order=1,
+        continuum_priors={"c": _DECLARED_CONTINUUM},
+    )
+
+    assert dict(workspace.continuum.priors) == {"c": _DECLARED_CONTINUUM}
+    assert "k1" not in workspace.continuum.priors
+
+
+def test_continuum_priors_are_validated_against_the_coefficients() -> None:
+    spectrum = _flat_spectrum()
+    lines = [NoobLine("Ha", obs=40000.0)]
+
+    with pytest.raises(ValueError, match="unknown continuum prior parameter 'k2'"):
+        spectrum.prepare(
+            lines, continuum_order=1, continuum_priors={"k2": Normal(0.0, 1.0)}
+        )
+    with pytest.raises(TypeError, match="must be a Prior"):
+        spectrum.prepare(lines, continuum_order=1, continuum_priors={"c": (0.0, 1.0)})
+
+
+def test_undeclared_continuum_priors_leave_the_model_unchanged() -> None:
+    """The default continuum prior must survive the new declaration path."""
+    lines = [NoobLine("Ha", obs=40000.0)]
+    spectrum = _flat_spectrum()
+    default = spectrum.prepare(lines, continuum_order=1).model().pymc_model
+    empty = (
+        spectrum.prepare(lines, continuum_order=1, continuum_priors={})
+        .model()
+        .pymc_model
+    )
+
+    assert sorted(v.name for v in default.free_RVs) == sorted(
+        v.name for v in empty.free_RVs
+    )
+    default_logp, empty_logp = default.compile_logp(), empty.compile_logp()
+    rng = np.random.default_rng(0)
+    reference_point = default.initial_point()
+    for _ in range(50):
+        point = {
+            name: value + rng.normal(0.0, 0.3, np.shape(value))
+            for name, value in reference_point.items()
+        }
+        assert float(default_logp(point)) == float(empty_logp(point))
+
+
+@pytest.mark.parametrize(
+    ("sharing", "n_frames", "declared_key"),
+    [
+        (None, 1, "c"),
+        ("shared", 2, "c"),
+        ("independent", 2, "c"),
+        ("pooled", 2, "c__mu"),
+    ],
+)
+def test_declared_continuum_prior_is_reported_per_sharing_mode(
+    sharing: str | None, n_frames: int, declared_key: str
+) -> None:
+    """Pooled sharing routes the declaration to the hierarchical mean."""
+    lines = [NoobLine("Ha", obs=40000.0)]
+    options = {"continuum_order": 1, "continuum_priors": {"c": _DECLARED_CONTINUUM}}
+    if sharing is None:
+        workspace = _flat_spectrum().prepare(lines, **options)
+    else:
+        frames = NoobSpectrumSet({f"v{i}": _flat_spectrum() for i in range(n_frames)})
+        workspace = frames.prepare(lines, continuum_sharing=sharing, **options)
+    priors = workspace.model().priors["continuum"]
+
+    assert priors[declared_key].family == "normal"
+    assert priors[declared_key].location == pytest.approx(
+        _DECLARED_CONTINUUM.mu, rel=1e-9, abs=0.0
+    )
+    assert priors[declared_key].scale == pytest.approx(
+        _DECLARED_CONTINUUM.sigma, rel=1e-9, abs=0.0
+    )
+    # an undeclared coefficient keeps its data-scaled default, which is
+    # centred on zero and scaled by the data rather than by the declaration
+    undeclared = "k1__mu" if sharing == "pooled" else "k1"
+    assert priors[undeclared].location == 0.0
+    assert abs(priors[undeclared].scale / _DECLARED_CONTINUUM.sigma - 1.0) > 0.1
+
+
+def test_summary_renders_declared_continuum_priors() -> None:
+    lines = [NoobLine("Ha", obs=40000.0)]
+    spectrum = _flat_spectrum()
+    declared = spectrum.prepare(
+        lines, continuum_order=1, continuum_priors={"c": _DECLARED_CONTINUUM}
+    ).summary()
+
+    assert "Declared coefficient priors" in declared
+    assert repr(_DECLARED_CONTINUUM) in declared
+    assert (
+        "Declared coefficient priors"
+        not in spectrum.prepare(lines, continuum_order=1).summary()
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("sharing", "key", "target_accept"),
+    [(None, "c", 0.95), ("independent", "c[v0]", 0.95), ("pooled", "c__mu", 0.99)],
+)
+def test_declared_continuum_prior_is_imposed(
+    sharing: str | None, key: str, target_accept: float
+) -> None:
+    """Inflated errors make the likelihood far wider than the declared prior.
+
+    With the line flux pinned at zero the continuum level is the only free
+    parameter, so its posterior collapses onto the declared prior — which is
+    what shows the physical-to-normalized rescaling is right.
+    """
+    lines = [NoobLine("Ha", obs=40000.0).flux(override=0.0)]
+    options = {"continuum_order": 0, "continuum_priors": {"c": _DECLARED_CONTINUUM}}
+    weak = _flat_spectrum(error_scale=1e-17)
+    if sharing is None:
+        workspace = weak.prepare(lines, **options)
+    else:
+        workspace = NoobSpectrumSet({"v0": weak, "v1": weak}).prepare(
+            lines, continuum_sharing=sharing, **options
+        )
+    result = workspace.model().sample(
+        draws=2000,
+        tune=1000,
+        chains=4,
+        target_accept=target_accept,
+        random_seed=1729,
+        progressbar=False,
+    )
+
+    samples = result.posterior["continuum"][key].samples.reshape(-1)
+    assert samples.mean() == pytest.approx(_DECLARED_CONTINUUM.mu, rel=0.02, abs=0.0)
+    assert samples.std() == pytest.approx(_DECLARED_CONTINUUM.sigma, rel=0.08, abs=0.0)
+
+
+def test_continuum_spec_survives_pickling() -> None:
+    """A saved fit pickles its workspace, and the prior mapping is frozen.
+
+    ``MappingProxyType`` is not picklable, so the spec carries an explicit
+    pickle protocol; without it saving any fit that declares a continuum
+    prior fails.
+    """
+    workspace = _flat_spectrum().prepare(
+        [NoobLine("Ha", obs=40000.0)],
+        continuum_order=1,
+        continuum_priors={"c": _DECLARED_CONTINUUM},
+    )
+
+    restored = pickle.loads(pickle.dumps(workspace))
+
+    assert dict(restored.continuum.priors) == {"c": _DECLARED_CONTINUUM}
+    with pytest.raises(TypeError):
+        restored.continuum.priors["k1"] = _DECLARED_CONTINUUM

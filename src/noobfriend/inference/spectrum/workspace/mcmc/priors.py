@@ -374,24 +374,36 @@ def _continuum_priors(
 ) -> dict[str, MCMCParameterPrior]:
     """Translate the continuum prior, honoring frame count and sharing mode.
 
-    A single-frame (or ``"shared"``) continuum keeps one normal prior per
+    A single-frame (or ``"shared"``) continuum keeps one prior per
     coefficient. ``"pooled"`` exposes the hyperprior on each coefficient's
-    mean (normal) and spread (half-normal); ``"independent"`` keeps the
-    per-frame normal, described once since it is identical across frames.
+    mean and spread (half-normal); ``"independent"`` keeps the per-frame
+    prior, described once since it is identical across frames.
+
+    A coefficient with a declared prior reports that prior instead of the
+    data-scaled default, in the same physical units it was declared in. Under
+    ``"pooled"`` sharing it replaces the prior on the hierarchical mean.
     """
     spec = workspace.continuum
     single = workspace.n_frames == 1
     values: dict[str, MCMCParameterPrior] = {}
     for degree, name in enumerate(spec.parameter_names):
         scale = CONTINUUM_PRIOR_SIGMA * model_scale / wavelength_scale**degree
+        declared = spec.priors.get(name)
         if single or spec.sharing in ("shared", "independent"):
-            values[name] = MCMCParameterPrior(
-                name=name, family="normal", location=0.0, scale=scale
+            values[name] = (
+                MCMCParameterPrior(
+                    name=name, family="normal", location=0.0, scale=scale
+                )
+                if declared is None
+                else _declared_metadata(name, declared)
             )
             continue
         tau_scale = CONTINUUM_TAU_SIGMA * model_scale / wavelength_scale**degree
-        values[f"{name}__mu"] = MCMCParameterPrior(
-            name=f"{name}__mu", family="normal", location=0.0, scale=scale
+        mu_name = f"{name}__mu"
+        values[mu_name] = (
+            MCMCParameterPrior(name=mu_name, family="normal", location=0.0, scale=scale)
+            if declared is None
+            else _declared_metadata(mu_name, declared)
         )
         values[f"{name}__tau"] = MCMCParameterPrior(
             name=f"{name}__tau", family="halfnormal", scale=tau_scale

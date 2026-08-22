@@ -6,6 +6,8 @@ from html import escape
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from noobfriend.inference.spectrum.line import NoobLine, Prior
     from noobfriend.inference.spectrum.line._rules import _ParameterRule
     from noobfriend.inference.spectrum.workspace.handles import LineHandle
@@ -18,6 +20,7 @@ def render_workspace_summary(workspace: NoobFitWorkspace) -> str:
     target_ids = {id(handle.line): handle.id for handle in workspace.handles}
     rows = "\n".join(_line_row(handle, target_ids) for handle in workspace.handles)
     continuum_formula = _continuum_formula(workspace.continuum.order)
+    continuum_priors = _continuum_prior_text(workspace.continuum.priors)
     resolving_power = (
         "None" if spectrum.resolving_power is None else _fmt(spectrum.resolving_power)
     )
@@ -56,6 +59,7 @@ def render_workspace_summary(workspace: NoobFitWorkspace) -> str:
   </p>
   <h3>Continuum</h3>
   <p><code>{_html(continuum_formula)}</code>, lambda_0 = {_html(_fmt(workspace.continuum.lambda_0))}</p>
+  {continuum_priors}
   <p class="note">
     Center locks share velocity offset. Wavelength offsets are converted by each line's nominal observed center.
   </p>
@@ -166,6 +170,20 @@ def _target_id(rule: _ParameterRule, target_ids: dict[int, str]) -> str:
     if rule.target is None:
         raise RuntimeError("dependent rule invariant violated: missing target.")
     return target_ids[id(rule.target)]
+
+
+def _continuum_prior_text(priors: Mapping[str, Prior]) -> str:
+    """Render declared continuum coefficient priors, or nothing when absent."""
+    if not priors:
+        return ""
+    declared = "; ".join(
+        f"<code>{_html(name)}</code> ~ {_html(repr(prior))}"
+        for name, prior in priors.items()
+    )
+    return (
+        f'<p class="note">Declared coefficient priors (flux units): {declared}. '
+        "Coefficients not listed keep the data-scaled default.</p>"
+    )
 
 
 def _continuum_formula(order: int) -> str:
