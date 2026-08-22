@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
     from noobfriend.inference.spectrum.data import NoobSpectrum
-    from noobfriend.inference.spectrum.data.types import DispersionAxis
+    from noobfriend.inference.spectrum.data._types import DispersionAxis
     from noobfriend.inference.spectrum.workspace.mcmc import MCMCFitResult
     from noobfriend.inference.spectrum.workspace.mle import MLEFitResult
 

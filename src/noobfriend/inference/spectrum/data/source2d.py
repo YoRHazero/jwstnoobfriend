@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from noobfriend.inference.spectrum._numeric import readonly
-from noobfriend.inference.spectrum.data.types import DispersionAxis
+from noobfriend.inference.spectrum.data._types import DispersionAxis
 
 
 @dataclass(frozen=True, slots=True, eq=False)

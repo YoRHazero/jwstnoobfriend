@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
     from noobfriend.inference.spectrum.data import NoobSpectrum, NoobSpectrumSet
-    from noobfriend.inference.spectrum.data.types import DispersionAxis
+    from noobfriend.inference.spectrum.data._types import DispersionAxis
     from noobfriend.inference.spectrum.visualization import ModelView
     from noobfriend.inference.spectrum.workspace import NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.mcmc.frames import FrameFit

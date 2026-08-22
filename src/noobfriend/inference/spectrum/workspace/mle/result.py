@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
     from noobfriend.inference.spectrum.line import NoobLine
-    from noobfriend.inference.spectrum.data.types import DispersionAxis
+    from noobfriend.inference.spectrum.data._types import DispersionAxis
     from noobfriend.inference.spectrum.workspace import LineHandle, NoobFitWorkspace
     from noobfriend.inference.spectrum.workspace.mle.selection import MLECandidate
 

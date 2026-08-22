@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import ArrayLike
 
-from noobfriend.inference.spectrum.data.types import DispersionAxis, NoiseSource
+from noobfriend.inference.spectrum.data._types import DispersionAxis, NoiseSource
 
 
 def _collapse_to_1d(
