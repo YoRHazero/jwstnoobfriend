@@ -77,7 +77,10 @@ def cli_init(
         ),
     ] = False,
 ) -> None:
-    """Initialize a single-stage NooBox from a directory of products."""
+    """Initialize a single-stage NooBox from a directory of products.
+
+    Files under an active env mount are recorded with their remote addresses.
+    """
     resolved_stage = resolve_stage(stage)
     target = resolve_box_path(path)
 
@@ -100,7 +103,7 @@ def cli_init(
         )
         raise typer.Exit(code=1)
 
-    box.save(target)
+    box.canonicalize_locations().save(target)
     console.print(
         f"[bold green]Wrote NooBox ({len(box)} books @ {resolved_stage}) to "
         f"[yellow]{target}[/yellow][/bold green]"

@@ -19,6 +19,8 @@ from noobfriend.cli.box._presenters import (
     make_box_summary_table,
 )
 from noobfriend.cli.box.app import box_app
+from noobfriend.cli.env._mount import save_state
+from noobfriend.core.env import MountState
 from noobfriend.navigation import NooBook, NooBox
 
 runner = CliRunner()
@@ -130,6 +132,34 @@ def test_init_empty_match_writes_nothing(tmp_path):
 
     assert result.exit_code == 1
     assert not manifest.exists()
+
+
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_init_records_mounted_files_as_remote(tmp_path, monkeypatch, explicit_root):
+    monkeypatch.chdir(tmp_path)
+    mountpoint = tmp_path / "mnt"
+    stage_dir = mountpoint / "stage1b"
+    stage_dir.mkdir(parents=True)
+    name = "jw01345001001_02201_00001_nrca1_rate.fits"
+    (stage_dir / name).write_bytes(b"mounted product")
+    save_state(tmp_path, MountState("server", "/disk/data", str(mountpoint), {}))
+    monkeypatch.setenv("NOOB_SERVER", "localhost")
+    monkeypatch.setenv("STAGE_1B_PATH", str(stage_dir))
+
+    # The library scan keeps local paths; the CLI opts into canonicalization.
+    scanned = NooBox.from_directory("1b")
+    assert next(iter(scanned)).location == str(stage_dir / name)
+
+    manifest = tmp_path / "noobox.json"
+    args = ["init", "1b", "--path", str(manifest)]
+    if explicit_root:
+        args.extend(["--root", str(stage_dir)])
+    result = runner.invoke(box_app, args)
+
+    assert result.exit_code == 0, result.output
+    book = next(iter(NooBox.load(manifest)))
+    assert book.location == f"server:/disk/data/stage1b/{name}"
+    assert book.read_bytes() == b"mounted product"
 
 
 def test_init_refuses_to_clobber_without_force(tmp_path):

@@ -2,9 +2,9 @@
 
 Mounting is a one-time configuration transform: the remote ``DATA_ROOT_PATH`` is
 sshfs-mounted locally and the ``.env`` is rewritten so the library sees a local
-``localhost`` server with local paths. Most library code stays mount-unaware; the
-reduction runner is the deliberate exception, reading the *sidecar* to record
-canonical server paths (see :mod:`noobfriend.core.env._mount`). The sidecar also
+``localhost`` server with local paths. Most library code stays mount-unaware;
+``box init`` and the reduction runner read the *sidecar* to record canonical
+server paths (see :mod:`noobfriend.core.env._mount`). The sidecar also
 lets :func:`env unmount` restore the original ``.env`` verbatim. By default the
 mount lives outside any git repository (under the user cache), so the mount tree
 never lands in a working copy.

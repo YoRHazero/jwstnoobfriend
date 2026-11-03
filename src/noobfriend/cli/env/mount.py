@@ -3,8 +3,8 @@
 ``mount`` sshfs-mounts ``NOOB_SERVER:DATA_ROOT_PATH`` (by default under the user
 cache, outside any repo) and rewrites the ``.env`` so the library reads local
 paths; ``unmount`` reverses it from the sidecar. Most library code stays
-mount-unaware -- once mounted, it simply sees a local server -- except the
-reduction runner, which reads the sidecar for canonical manifest paths.
+mount-unaware -- once mounted, it simply sees a local server. ``box init`` and
+the reduction runner read the sidecar for canonical manifest paths.
 """
 
 from pathlib import Path

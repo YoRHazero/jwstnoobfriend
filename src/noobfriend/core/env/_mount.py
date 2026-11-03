@@ -2,11 +2,11 @@
 
 ``env mount`` sshfs-mounts a remote data root locally and rewrites the ``.env``
 to local paths, so most library code sees a plain local filesystem and needs no
-mount awareness. The reduction *runner* is the deliberate exception: the NooBox
-manifest must record *canonical* ``host:server_path`` locations (portable off the
-reduce machine, not this machine's mount point), and file IO can skip the remote
-round-trip by opening the mounted path directly. Both read the sidecar
-(``.noob_mount.json``) that ``env mount`` leaves next to the ``.env``.
+mount awareness. ``NooBox.canonicalize_locations`` (used by ``box init``) and the
+reduction runner use the mapping to record canonical ``host:server_path``
+locations, portable across machines. File IO uses the same mapping to open
+mounted paths directly. Both directions read the sidecar (``.noob_mount.json``)
+that ``env mount`` leaves next to the ``.env``.
 
 This read-side model + resolver live in ``core`` so the (core-only) runner can use
 them without importing ``cli``; ``cli.env`` re-imports them for the mount command

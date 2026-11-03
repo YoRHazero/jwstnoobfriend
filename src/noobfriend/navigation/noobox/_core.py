@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from noobfriend.core.display import track
-from noobfriend.core.env import get_settings, stage_path_var
+from noobfriend.core.env import get_settings, stage_path_var, to_canonical
 from noobfriend.core.io import list_remote_dir
 from noobfriend.navigation._store import ByteStore, LruByteStore
 from noobfriend.navigation.noobook import NooBook
@@ -334,6 +334,26 @@ class NooBox:
         for book in list(self._books.values()):
             if not book.is_probed:
                 self._books[book.id] = book.probe(store=self._store)
+        return self
+
+    def canonicalize_locations(self) -> "NooBox":
+        """Rewrite mounted local locations to canonical server addresses in place.
+
+        Uses the active ``env mount`` mapping to convert each matching local
+        path to ``host:server_path``. Already-remote locations and local paths
+        outside the mount are unchanged; without a mapping this is a no-op.
+        Files are not opened and the manifest is not saved automatically.
+
+        Books shared with other boxes or views are updated too. Call
+        :meth:`copy` first when those books should keep their original paths.
+
+        Returns
+        -------
+        NooBox
+            This box, for chaining. Repeated calls leave canonical paths intact.
+        """
+        for book in self._books.values():
+            book.location = to_canonical(book.location)
         return self
 
     # -- views, grouping and lineage boundary ---------------------------------

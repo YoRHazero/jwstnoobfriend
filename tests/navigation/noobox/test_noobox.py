@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from noobfriend.core.env import MountState
 from noobfriend.navigation import Footprint, NooBook, NooBox
 
 from ._helpers import make_box
@@ -248,6 +249,48 @@ def test_from_directory_local_server_keeps_bare_path(tmp_path, monkeypatch):
 
     location = next(iter(box)).location
     assert location == str(tmp_path / "jw01345001001_02201_00001_nrca1_cal.fits")
+
+
+# -- location canonicalization ------------------------------------------------
+
+
+@pytest.mark.parametrize("mounted", [False, True])
+def test_canonicalize_locations_preserves_mixed_records(tmp_path, monkeypatch, mounted):
+    mountpoint = tmp_path / "mnt"
+    state = MountState("server", "/disk/data", str(mountpoint), {})
+    monkeypatch.setattr(
+        "noobfriend.core.env._mount.find_mount_state",
+        lambda: state if mounted else None,
+    )
+    roots = [
+        str(mountpoint / "stage2"),
+        "server:/disk/data/stage2",
+        "other-server:/data",
+        str(tmp_path / "local"),
+    ]
+    books = [
+        NooBook.from_name(f"{root}/jw01345001001_02201_{i:05d}_nrca1_cal.fits", "2a")
+        for i, root in enumerate(roots, start=1)
+    ]
+    books[0].parent_ids = ("upstream@1b",)
+    manifest = make_box(*books).save(tmp_path / "noobox.json")
+    original = json.loads(manifest.read_text())
+    box = NooBox.load(manifest)
+    view = box.select(exposure="00001")
+    expected = [book.to_record() for book in box]
+    if mounted:
+        expected[0]["location"] = (
+            "server:/disk/data/stage2/jw01345001001_02201_00001_nrca1_cal.fits"
+        )
+
+    assert box.canonicalize_locations() is box
+    assert [book.to_record() for book in box] == expected
+    assert next(iter(view)).location == expected[0]["location"]
+    assert json.loads(manifest.read_text()) == original  # no implicit save
+    assert [book.to_record() for book in box.canonicalize_locations()] == expected
+
+    box.save(manifest)
+    assert [book.to_record() for book in NooBox.load(manifest)] == expected
 
 
 # -- subsetting, grouping, selection ------------------------------------------
