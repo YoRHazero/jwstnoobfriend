@@ -77,3 +77,21 @@ markers = [
     "slow: sampling or otherwise long-running tests (deselect with -m 'not slow')",
     "integration: crosses subpackage boundaries or exercises an end-to-end flow",
 ]
+
+[tool.importlinter]
+root_package = "noobfriend"
+# Lower layers may name upper ones only for typing (T12.4).
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "inference.spectrum layers"
+type = "layers"
+containers = ["noobfriend.inference.spectrum"]
+layers = [
+    "data | line | continuum",
+    "workspace",
+    "mcmc | mle",
+    "noise | profiles",
+    "priors",
+    "_xp | _wavelength | _text",
+]
