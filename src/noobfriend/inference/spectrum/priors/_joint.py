@@ -147,6 +147,13 @@ class JointMember(Prior):
         """Always ``True``."""
         return True
 
+    def scaled(self, factor: float) -> JointMember:
+        """Unavailable: a joint member cannot change units."""
+        raise ValueError(
+            f"joint prior member {self.name!r} cannot be rescaled; declare the "
+            "line in the spectrum's wavelength unit."
+        )
+
     def log_density(self, xp: Any, value: Any) -> Any:
         """Unavailable: members are only sampled jointly."""
         raise NotImplementedError("joint prior members have no separate density.")

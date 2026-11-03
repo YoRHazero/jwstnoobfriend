@@ -51,6 +51,28 @@ class Prior:
         """Return the support ``(low, high)`` of a resolved prior."""
         raise NotImplementedError
 
+    def scaled(self, factor: float) -> Prior:
+        """Return the prior of ``factor * x`` when ``x`` has this prior.
+
+        Parameters
+        ----------
+        factor
+            Positive multiplier (a unit conversion or a sampling scale).
+
+        Returns
+        -------
+        Prior
+            The same family with location, scale and bounds multiplied.
+        """
+        if not factor > 0.0:
+            raise ValueError(f"scale factor must be positive; got {factor!r}.")
+        changes = {
+            name: getattr(self, name) * factor
+            for name in ("mu", "sigma", "low", "high")
+            if hasattr(self, name) and getattr(self, name) is not None
+        }
+        return replace(self, **changes)
+
     @property
     def is_proper(self) -> bool:
         """Whether the density integrates to one."""
@@ -366,21 +388,28 @@ def _log_normal_mass(alpha: float, beta: float) -> float:
 
 
 def _bound_pair(prior: Any) -> str:
-    if prior.low is None and prior.high is None:
+    low, high = _shown_bounds(prior)
+    if low is None and high is None:
         return ""
-    low = "" if prior.low is None else f"{prior.low:.4g}"
-    high = "" if prior.high is None else f"{prior.high:.4g}"
-    if prior.high is None:
-        return f"low={low}"
-    if prior.low is None:
-        return f"high={high}"
-    return f"{low}, {high}"
+    if high is None:
+        return f"low={low:.4g}"
+    if low is None:
+        return f"high={high:.4g}"
+    return f"{low:.4g}, {high:.4g}"
 
 
 def _bound_text(prior: Any) -> str:
+    low, high = _shown_bounds(prior)
     parts = []
-    if prior.low is not None:
-        parts.append(f"low={prior.low:.4g}")
-    if prior.high is not None:
-        parts.append(f"high={prior.high:.4g}")
+    if low is not None:
+        parts.append(f"low={low:.4g}")
+    if high is not None:
+        parts.append(f"high={high:.4g}")
     return "".join(f", {part}" for part in parts)
+
+
+def _shown_bounds(prior: Any) -> tuple[float | None, float | None]:
+    """Bounds worth printing: omitted and infinite ends are left out."""
+    low = prior.low if prior.low is not None and isfinite(prior.low) else None
+    high = prior.high if prior.high is not None and isfinite(prior.high) else None
+    return low, high
