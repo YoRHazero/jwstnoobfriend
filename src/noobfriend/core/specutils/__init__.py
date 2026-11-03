@@ -9,13 +9,23 @@ interpretation:
   estimated from the 2-D source-free background's cross-dispersion correlation.
 - :func:`continuum_boost` -- the same inflation estimated empirically from a 1-D
   spectrum's line-free scatter.
+- :func:`continuum_noise`, :func:`background_noise` -- error scale *and*
+  dispersion-axis correlation ``rho(1..K)`` of a collapsed spectrum, from its
+  1-D line-free scatter or from the 2-D sky's autocovariance.
 """
 
 from noobfriend.core.specutils._collapse import collapse
-from noobfriend.core.specutils._noise import continuum_boost, cross_dispersion_boost
+from noobfriend.core.specutils._noise import (
+    background_noise,
+    continuum_boost,
+    continuum_noise,
+    cross_dispersion_boost,
+)
 
 __all__ = [
+    "background_noise",
     "collapse",
     "continuum_boost",
+    "continuum_noise",
     "cross_dispersion_boost",
 ]

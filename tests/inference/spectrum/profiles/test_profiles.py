@@ -7,7 +7,7 @@ import pytest
 from scipy.signal import fftconvolve
 from scipy.special import voigt_profile
 
-from noobfriend.inference.spectrum._units import C_KMS
+from noobfriend.inference.spectrum._wavelength import C_KMS
 from noobfriend.inference.spectrum._xp import numpy_namespace
 from noobfriend.inference.spectrum.profiles import (
     GAUSSIAN_FWHM_TO_SIGMA,

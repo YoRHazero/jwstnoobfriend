@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from math import log, pi, sqrt
 from typing import Any
 
-from noobfriend.inference.spectrum._units import C_KMS
+from noobfriend.inference.spectrum._wavelength import C_KMS
 
 #: Base profile families.
 PROFILES: tuple[str, ...] = ("gaussian", "lorentzian", "exponential")
