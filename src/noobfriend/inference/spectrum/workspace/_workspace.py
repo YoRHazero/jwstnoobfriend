@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
     from noobfriend.inference.spectrum.data import NoobSpectrum
     from noobfriend.inference.spectrum.mcmc import NoobMCMCResult, NoobSpectrumModel
+    from noobfriend.inference.spectrum.mle import NoobMLEResult
 
 
 @dataclass(frozen=True, eq=False)
@@ -174,6 +175,58 @@ class NoobFitWorkspace:
         from noobfriend.inference.spectrum.mcmc import NoobSpectrumModel
 
         return NoobSpectrumModel(self)
+
+    def mle(
+        self,
+        absorption_bound_multipliers: Sequence[float] = (0.5, 1.0, 2.0, 5.0),
+        cancellation_threshold: float | None = 0.37,
+        relative_likelihood_min: float = 0.5,
+        random_seed: int = 1729,
+    ) -> NoobMLEResult:
+        """Quick maximum-likelihood fit of a single-frame workspace.
+
+        Reading rules: the frame's raw error with white noise (the ``Noise``
+        model is ignored); joint priors are ignored; every other prior only
+        bounds its parameter (an omitted ``Uniform()`` / ``LogUniform()``
+        bound leaves it unbounded); fixed values and bindings apply. Multi-start
+        bounded least squares, then among solutions within the relative
+        likelihood region the one with the least emission/absorption
+        cancellation, refined further when it still cancels more than
+        ``cancellation_threshold``.
+
+        Parameters
+        ----------
+        absorption_bound_multipliers
+            Internal upper bounds tried for free absorption fluxes, in units
+            of the flux that reaches the data range at the widest width.
+        cancellation_threshold
+            Cancellation fraction above which the refinement runs; ``None``
+            disables it.
+        relative_likelihood_min
+            Smallest relative likelihood a solution may have to be selected.
+        random_seed
+            Seed of the random starts.
+
+        Returns
+        -------
+        NoobMLEResult
+            Selected solution, likelihood optimum, Jacobian error bars.
+
+        Raises
+        ------
+        ValueError
+            If the workspace has more than one frame (select one with
+            ``spec.select(frame_id)``).
+        """
+        from noobfriend.inference.spectrum.mle import fit
+
+        return fit(
+            self,
+            absorption_bound_multipliers=absorption_bound_multipliers,
+            cancellation_threshold=cancellation_threshold,
+            relative_likelihood_min=relative_likelihood_min,
+            random_seed=random_seed,
+        )
 
     def load(self, path: str | Path) -> NoobMCMCResult:
         """Reattach a saved MCMC result to this workspace.
