@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from noobfriend.core.jaxruntime import enable_x64
 from noobfriend.inference.spectrum._xp import jax_namespace
 from noobfriend.inference.spectrum.mcmc._names import (
     latent,
@@ -110,6 +111,7 @@ def build_numpyro_model(
     import numpyro
     import numpyro.distributions as dist
 
+    enable_x64()
     xp = jax_namespace()
     table = workspace.parameters
     joint_names = {

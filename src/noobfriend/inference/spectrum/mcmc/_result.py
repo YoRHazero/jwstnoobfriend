@@ -54,6 +54,19 @@ class NoobMCMCResult:
     sampling : SamplingReport
         Options, wall time, diagnostics, convergence verdict and
         reparameterizations.
+
+    Examples
+    --------
+    Plots beyond ``decompose().plot()`` and ``plot_corner()`` come straight
+    from ArviZ, since ``idata`` and ``loo`` are its native objects::
+
+        import arviz as az
+
+        az.plot_trace_dist(result.idata, var_names=["Ha.fwhm", "Ha.flux"])
+        az.plot_rank(result.idata, var_names=["Ha.fwhm"])
+        az.plot_khat(result.loo)              # pixel Pareto-k
+        az.plot_khat(result.frames.loo)       # frame Pareto-k (several frames)
+        az.summary(result.idata)              # every physical parameter
     """
 
     def __init__(
