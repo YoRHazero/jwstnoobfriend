@@ -2,8 +2,9 @@
 
 Public surface:
 
-- :func:`find_project_root`, :func:`load_environment` — discover and merge the
-  layered ``.env`` files into :data:`os.environ`.
+- :func:`find_project_root`, :func:`load_environment`, :func:`read_environment`
+  — discover the layered ``.env`` files and merge them into :data:`os.environ`
+  (or return the merged values without applying them).
 - :class:`NoobSettings`, :func:`get_settings`, :func:`env_fields` — validated,
   typed access to the configuration variables, plus a render-friendly view.
 - :class:`EnvField`, :class:`EnvGroup`, :class:`EnvPathKind`,
@@ -14,7 +15,11 @@ Public surface:
   ``host:server_path`` locations against the local mount.
 """
 
-from noobfriend.core.env._loader import find_project_root, load_environment
+from noobfriend.core.env._loader import (
+    find_project_root,
+    load_environment,
+    read_environment,
+)
 from noobfriend.core.env._mount import (
     SIDECAR_NAME,
     MountState,
@@ -40,6 +45,7 @@ __all__ = [
     "get_settings",
     "load_environment",
     "load_state",
+    "read_environment",
     "sidecar_path",
     "stage_path_var",
     "to_canonical",

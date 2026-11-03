@@ -61,6 +61,15 @@ class NoobSettings(BaseSettings):
         description="Path to the NooBox manifest file used by NooBox.save / load.",
         json_schema_extra={"group": EnvGroup.noob, "path_kind": EnvPathKind.file},
     )
+    noob_mcmc_cpu_cores: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "CPU cores exposed to JAX as host devices for MCMC chains; "
+            "unset means every core."
+        ),
+        json_schema_extra={"group": EnvGroup.noob},
+    )
     noob_server: str = Field(
         default="localhost",
         description=(

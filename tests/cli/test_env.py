@@ -28,6 +28,7 @@ class TestEnvFields:
             "CRDS_PATH",
             "START_STAGE",
             "NOOBOX_PATH",
+            "NOOB_MCMC_CPU_CORES",
             "NOOB_SERVER",
             "DATA_ROOT_PATH",
         }

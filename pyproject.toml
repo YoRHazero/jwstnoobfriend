@@ -33,11 +33,11 @@ noobfriend = "noobfriend.cli.app:main"
 
 [project.optional-dependencies]
 mcmc = [
-    "arviz>=1.2.0",
+    "arviz>=1.3",
     "h5netcdf>=1.8.1",
     "h5py>=3.16.0",
-    "numpyro>=0.21.0",
-    "pymc>=6.0.1",
+    "jax>=0.12",
+    "numpyro>=0.22",
 ]
 cuda = [
     "jax[cuda12]; sys_platform == 'linux'",
@@ -64,6 +64,7 @@ convention = "numpy"
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.15",
     "ipykernel>=7.2.0",
     "nbconvert>=7.17.1",
     "pytest>=9.0.3",

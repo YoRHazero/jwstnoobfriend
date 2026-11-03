@@ -7,6 +7,8 @@ The two public entry points are:
 - :func:`load_environment` — read ``.env`` from the project root (base) and
   the current working directory (override) and apply the merged result to
   :data:`os.environ`.
+- :func:`read_environment` — the same merged view, returned without touching
+  :data:`os.environ`.
 
 Auto-loading on ``import noobfriend`` is **opt-in**: set the environment
 variable ``NOOBFRIEND_AUTOLOAD_ENV=1`` to enable it; the top-level
@@ -83,22 +85,7 @@ def load_environment(*, override: bool = False) -> list[str]:
     Only the **names** of loaded variables are logged, never their values, so
     secrets in ``.env`` files do not leak into log output.
     """
-    project_root = find_project_root()
-    cwd = Path.cwd()
-
-    candidates: list[Path] = []
-    if project_root is not None:
-        candidates.append(project_root / _ENV_FILENAME)
-    if cwd != project_root:
-        candidates.append(cwd / _ENV_FILENAME)
-
-    merged: dict[str, str | None] = {}
-    found: list[Path] = []
-    for path in candidates:
-        if path.exists():
-            found.append(path)
-            merged.update(dotenv_values(path))
-
+    merged, found = _layered_values()
     if not found:
         logger.warning(
             "noobfriend.load_environment: no .env file found in project root or cwd"
@@ -107,8 +94,6 @@ def load_environment(*, override: bool = False) -> list[str]:
 
     applied: list[str] = []
     for key, value in merged.items():
-        if value is None:
-            continue
         if override or key not in os.environ:
             os.environ[key] = value
             applied.append(key)
@@ -121,3 +106,48 @@ def load_environment(*, override: bool = False) -> list[str]:
         applied,
     )
     return applied
+
+
+def read_environment() -> dict[str, str]:
+    """Return the merged layered ``.env`` values without applying them.
+
+    The side-effect-free counterpart of :func:`load_environment`: the same two
+    files are merged with the same precedence (cwd over project root), but
+    :data:`os.environ` is left untouched and nothing is logged. Callers that
+    must not mutate the process environment (for example code run at import
+    time) combine this with :data:`os.environ` themselves.
+
+    Returns
+    -------
+    dict of str to str
+        Variable names mapped to their merged values. Keys declared without a
+        value are omitted. Empty when neither ``.env`` file exists.
+    """
+    merged, _ = _layered_values()
+    return merged
+
+
+def _layered_values() -> tuple[dict[str, str], list[Path]]:
+    """Merge the project-root and cwd ``.env`` files, cwd winning."""
+    project_root = find_project_root()
+    cwd = Path.cwd()
+
+    candidates: list[Path] = []
+    if project_root is not None:
+        candidates.append(project_root / _ENV_FILENAME)
+    if cwd != project_root:
+        candidates.append(cwd / _ENV_FILENAME)
+
+    merged: dict[str, str] = {}
+    found: list[Path] = []
+    for path in candidates:
+        if path.exists():
+            found.append(path)
+            merged.update(
+                {
+                    key: value
+                    for key, value in dotenv_values(path).items()
+                    if value is not None
+                }
+            )
+    return merged, found
