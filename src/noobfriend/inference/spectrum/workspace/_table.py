@@ -55,6 +55,10 @@ class Parameter:
         For a pooled row: the mean's name; the spread is ``<mean>.spread``.
     log_pooled
         Whether pooling happens in log space (power-law level).
+    scale
+        Typical magnitude of the parameter (a reference flux, ``S / W**n``,
+        a nominal width); backends sample ``value / scale`` so their internal
+        coordinates are of order one whatever the flux units.
     """
 
     name: str
@@ -67,6 +71,7 @@ class Parameter:
     value: float | None = None
     pooled_from: str | None = None
     log_pooled: bool = False
+    scale: float = 1.0
 
     @property
     def is_free(self) -> bool:

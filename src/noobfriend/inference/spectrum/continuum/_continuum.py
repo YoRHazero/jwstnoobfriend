@@ -44,7 +44,11 @@ class NoobContinuum:
         How a multi-frame fit shares the parameters: ``"pooled"`` (each frame
         its own values drawn around a common mean with a fitted spread),
         ``"independent"`` (each frame its own values) or ``"shared"`` (one set
-        for every frame). Irrelevant for a single frame.
+        for every frame). Irrelevant for a single frame. Pooling estimates a
+        spread from the frames themselves, so it needs several frames; with
+        two, the pooled mean and spread are barely identified and sampling
+        usually fails the convergence checks (use ``"independent"`` or
+        ``"shared"`` there).
     declarations : Mapping[str, float or Prior]
         Declared parameter values by name (``"c0"``, ``"c1"``, ... or
         ``"level"``, ``"index"``).

@@ -24,6 +24,7 @@ matplotlib instead (no interactivity needed, trivial ``savefig`` export):
   on a shared wavelength axis.
 - :func:`draw_spectrum` — the lower-level engine behind both, drawing data and
   model overlays onto a caller-supplied Axes for custom multi-panel figures.
+- :func:`draw_spectrum2d` — the matching image engine for a 2-D spectrum.
 """
 
 from noobfriend.core.display.plot._bokeh import set_render_mode
@@ -38,7 +39,7 @@ from noobfriend.core.display.plot._overlay import (
 from noobfriend.core.display.plot._psf_select import psf_select_panel
 from noobfriend.core.display.plot._spectrum import ModelSpec, draw_spectrum
 from noobfriend.core.display.plot._spectrum1d import plot_spectrum1d
-from noobfriend.core.display.plot._spectrum2d import plot_spectrum2d
+from noobfriend.core.display.plot._spectrum2d import draw_spectrum2d, plot_spectrum2d
 
 __all__ = [
     "ModelSpec",
@@ -46,6 +47,7 @@ __all__ = [
     "ImageFrame",
     "ImageOverlay",
     "draw_spectrum",
+    "draw_spectrum2d",
     "imshow",
     "imshow_blink",
     "plot_footprints",

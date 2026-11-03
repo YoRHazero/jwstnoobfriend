@@ -23,6 +23,8 @@ FWHM_PRIORS: dict[str, Prior] = {
     "narrow": LogUniform(10.0, 700.0),
     "broad": LogUniform(800.0, 5000.0),
 }
+#: Typical velocity offset (km/s): the sampling scale of centre parameters.
+VELOCITY_SCALE_KMS = 100.0
 #: Representative FWHM (km/s) by component, for data-derived flux scales and
 #: optimizer starts.
 NOMINAL_FWHM_KMS: dict[str, float] = {"narrow": 200.0, "broad": 1200.0}

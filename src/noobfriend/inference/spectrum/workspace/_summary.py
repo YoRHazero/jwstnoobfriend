@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
+
+from noobfriend.inference.spectrum._text import format_rows
 
 if TYPE_CHECKING:
     from noobfriend.inference.spectrum.workspace._workspace import NoobFitWorkspace
@@ -98,20 +99,6 @@ def workspace_summary(workspace: NoobFitWorkspace) -> str:
             if block.marginalized:
                 lines.append(f"      marginalized out: {', '.join(block.marginalized)}")
     return "\n".join(lines)
-
-
-def format_rows(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
-    """Left-align columns under their headers, indented by two spaces."""
-    widths = [len(header) for header in headers]
-    for row in rows:
-        widths = [
-            max(width, len(cell)) for width, cell in zip(widths, row, strict=True)
-        ]
-    rendered = []
-    for row in [list(headers), *rows]:
-        cells = [cell.ljust(width) for cell, width in zip(row, widths, strict=True)]
-        rendered.append("  " + "  ".join(cells).rstrip())
-    return rendered
 
 
 def _resolving_power_text(resolving_power: object) -> str:

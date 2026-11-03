@@ -201,6 +201,64 @@ def _draw_image(
     ax.set_ylim(float(spatial_edges[0]), float(spatial_edges[-1]))
 
 
+def draw_spectrum2d(
+    ax: Axes,
+    wavelength: ArrayLike,
+    flux_2d: ArrayLike,
+    *,
+    spatial: ArrayLike | None = None,
+    collapse_rows: tuple[int, int] | None = None,
+    cmap: str = "Greys",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    pmin: float = 1.0,
+    pmax: float = 99.0,
+) -> None:
+    """Draw a 2-D spectrum image onto a caller-supplied Axes.
+
+    The image engine of :func:`plot_spectrum2d`, for custom multi-panel
+    figures: a ``(spatial, wavelength)`` image with a percentile stretch and,
+    optionally, the collapse aperture marked.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    wavelength : array_like
+        Wavelength of each column.
+    flux_2d : array_like
+        Image, rows along the cross-dispersion axis.
+    spatial : array_like, optional
+        Cross-dispersion coordinate of each row; row index by default.
+    collapse_rows : tuple of int, optional
+        ``(lo, hi)`` half-open row range to mark as the collapse aperture.
+    cmap : str, default "Greys"
+        Matplotlib colormap name.
+    vmin, vmax : float, optional
+        Explicit color limits; each missing side falls back to a percentile.
+    pmin, pmax : float
+        Percentile cuts used for missing limits.
+    """
+    image = np.asarray(flux_2d, dtype=float)
+    rows = np.arange(image.shape[0], dtype=float) if spatial is None else spatial
+    spatial_edges = _centers_to_edges(np.asarray(rows, dtype=float))
+    window = None
+    if collapse_rows is not None:
+        lo, hi = collapse_rows
+        window = (float(spatial_edges[lo]), float(spatial_edges[hi]))
+    low, high = resolve_limits(image, vmin, vmax, pmin, pmax)
+    _draw_image(
+        ax,
+        image,
+        _centers_to_edges(np.asarray(wavelength, dtype=float)),
+        spatial_edges,
+        cmap=cmap,
+        vmin=low,
+        vmax=high,
+        window=window,
+    )
+
+
 def plot_spectrum2d(
     wavelength: ArrayLike,
     flux_2d: ArrayLike,

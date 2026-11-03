@@ -414,7 +414,11 @@ def _autocovariance(values: np.ndarray, valid: np.ndarray, dr: int, dc: int) -> 
     both = valid[r0:r1, : cols - dc] & valid[r0 + dr : r1 + dr, dc:]
     count = int(both.sum())
     if count == 0:
-        raise ValueError(f"no background pixel pairs at separation ({dr}, {dc}).")
+        raise ValueError(
+            f"no background pixel pairs at separation ({dr}, {dc}); the sky needs "
+            "rows as far apart as the collapse window is tall (use a taller cutout, "
+            "a narrower window or a tighter source mask)."
+        )
     return float(np.sum(np.where(both, a * b, 0.0))) / count
 
 

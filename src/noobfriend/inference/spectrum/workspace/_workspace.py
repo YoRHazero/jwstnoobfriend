@@ -29,7 +29,10 @@ from noobfriend.inference.spectrum.workspace._summary import workspace_summary
 from noobfriend.inference.spectrum.workspace._table import JointBlock, ParameterTable
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from noobfriend.inference.spectrum.data import NoobSpectrum
+    from noobfriend.inference.spectrum.mcmc import NoobMCMCResult, NoobSpectrumModel
 
 
 @dataclass(frozen=True, eq=False)
@@ -159,6 +162,39 @@ class NoobFitWorkspace:
         return frame_model(
             xp, self.lines, self.continuum, values, frame_id, wavelength, view=view
         )
+
+    def model(self) -> NoobSpectrumModel:
+        """Build the NumPyro sampling model (see ``NoobSpectrumModel``).
+
+        Returns
+        -------
+        NoobSpectrumModel
+            Call ``.sample()`` on it, or take ``.numpyro_model`` to customize.
+        """
+        from noobfriend.inference.spectrum.mcmc import NoobSpectrumModel
+
+        return NoobSpectrumModel(self)
+
+    def load(self, path: str | Path) -> NoobMCMCResult:
+        """Reattach a saved MCMC result to this workspace.
+
+        Rebuild the workspace with the script that produced the fit (prepare
+        is cheap), then load. Data and model fingerprints are checked
+        separately; a mismatch names which part changed.
+
+        Parameters
+        ----------
+        path
+            File written by ``NoobMCMCResult.save``.
+
+        Returns
+        -------
+        NoobMCMCResult
+            The result with every method available.
+        """
+        from noobfriend.inference.spectrum.mcmc import load
+
+        return load(self, path)
 
     def __repr__(self) -> str:
         """Summarize the workspace in one line."""

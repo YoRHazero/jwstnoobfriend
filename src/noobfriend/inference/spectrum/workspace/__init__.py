@@ -27,7 +27,6 @@ from noobfriend.inference.spectrum.workspace._protocols import (
     SpectrumLike,
 )
 from noobfriend.inference.spectrum.workspace._resolve import DataScales
-from noobfriend.inference.spectrum.workspace._summary import format_rows
 from noobfriend.inference.spectrum.workspace._table import (
     JointBlock,
     Parameter,
@@ -61,6 +60,5 @@ __all__ = [
     "Scale",
     "SpectrumLike",
     "Sum",
-    "format_rows",
     "prepare",
 ]

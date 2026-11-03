@@ -169,17 +169,28 @@ class _TableBuilder:
         unit: str,
         domain: Domain,
         value: float | Prior,
+        scale: float = 1.0,
     ) -> Expression:
         """Add a fixed or free row and return the expression reading it."""
         if isinstance(value, Prior):
+            prior = value.resolve(domain)
             self.rows.append(
                 Parameter(
-                    name, owner, role, unit, domain, "free", prior=value.resolve(domain)
+                    name, owner, role, unit, domain, "free", prior=prior, scale=scale
                 )
             )
             return Ref(name)
         self.rows.append(
-            Parameter(name, owner, role, unit, domain, "fixed", value=float(value))
+            Parameter(
+                name,
+                owner,
+                role,
+                unit,
+                domain,
+                "fixed",
+                value=float(value),
+                scale=scale,
+            )
         )
         return Const(float(value), name)
 
@@ -296,13 +307,12 @@ def _resolve_line(
 
     # Centre: velocity offset relative to the line's own nominal wavelength.
     rule = line.center_rule
-    if rule.kind == "default":
+    velocity = defaults.VELOCITY_SCALE_KMS
+    width_scale = defaults.NOMINAL_FWHM_KMS[line.component]
+    if rule.kind in ("default", "delta_v_kms"):
+        value = defaults.CENTER_PRIOR if rule.kind == "default" else rule.value
         delta_v = builder.declare(
-            f"{name}.delta_v", name, "delta_v", "km/s", REAL, defaults.CENTER_PRIOR
-        )
-    elif rule.kind == "delta_v_kms":
-        delta_v = builder.declare(
-            f"{name}.delta_v", name, "delta_v", "km/s", REAL, rule.value
+            f"{name}.delta_v", name, "delta_v", "km/s", REAL, value, velocity
         )
     elif rule.kind == "delta_wavelength":
         factor = convert_wavelength(1.0, from_unit=line.unit, to_unit=unit)
@@ -312,7 +322,13 @@ def _resolve_line(
             else rule.value * factor
         )
         shift = builder.declare(
-            f"{name}.delta_wavelength", name, "delta_wavelength", unit, REAL, value
+            f"{name}.delta_wavelength",
+            name,
+            "delta_wavelength",
+            unit,
+            REAL,
+            value,
+            nominal * velocity / C_KMS,
         )
         delta_v = Scale(C_KMS / nominal, shift)
     else:
@@ -323,6 +339,7 @@ def _resolve_line(
             "km/s",
             REAL,
             rule.value,
+            velocity,
         )
         delta_v = Sum(expressions[f"{base}.delta_v"], difference)
     builder.quantity(f"{name}.delta_v", name, "delta_v", "km/s", delta_v)
@@ -330,7 +347,13 @@ def _resolve_line(
     builder.quantity(f"{name}.center", name, "center", unit, center)
 
     fwhm = _scale_quantity(
-        builder, line, "fwhm", "km/s", POSITIVE, defaults.FWHM_PRIORS[line.component]
+        builder,
+        line,
+        "fwhm",
+        "km/s",
+        POSITIVE,
+        defaults.FWHM_PRIORS[line.component],
+        width_scale,
     )
     builder.quantity(f"{name}.fwhm", name, "fwhm", "km/s", fwhm)
 
@@ -351,23 +374,29 @@ def _resolve_line(
                 expression = locked
             else:
                 expression = builder.declare(
-                    flat, name, f"{kernel.kind}.{role}", unit_text, domain, value
+                    flat,
+                    name,
+                    f"{kernel.kind}.{role}",
+                    unit_text,
+                    domain,
+                    value,
+                    width_scale if role == "fwhm" else 1.0,
                 )
             builder.quantity(flat, name, f"{kernel.kind}.{role}", unit_text, expression)
 
     flux_unit = f"flux*{unit}"
-    default_flux = None
-    if line.flux_rule.kind == "default":
-        nominal_fwhm = simplify(fwhm)
-        width = (
-            nominal_fwhm.value
-            if isinstance(nominal_fwhm, Const)
-            else defaults.NOMINAL_FWHM_KMS[line.component]
-        )
-        default_flux = defaults.flux_prior(
-            _reference_flux(line.profile, nominal, width, lsf, scales.amplitude)
-        )
-    flux = _scale_quantity(builder, line, "flux", flux_unit, NONNEGATIVE, default_flux)
+    nominal_fwhm = simplify(fwhm)
+    width = nominal_fwhm.value if isinstance(nominal_fwhm, Const) else width_scale
+    reference = _reference_flux(line.profile, nominal, width, lsf, scales.amplitude)
+    flux = _scale_quantity(
+        builder,
+        line,
+        "flux",
+        flux_unit,
+        NONNEGATIVE,
+        defaults.flux_prior(reference),
+        reference,
+    )
     builder.quantity(f"{name}.flux", name, "flux", flux_unit, flux)
 
     return LineHandle(
@@ -391,7 +420,8 @@ def _scale_quantity(
     role: str,
     unit: str,
     domain: Domain,
-    default: Prior | None,
+    default: Prior,
+    scale: float,
 ) -> Expression:
     """Resolve a width or flux rule (independent value or ratio to the base)."""
     name = line.name
@@ -408,7 +438,7 @@ def _scale_quantity(
         )
         return Product(builder.expressions[f"{line.base.name}.{role}"], ratio)
     value = default if rule.kind == "default" else rule.value
-    return builder.declare(f"{name}.{role}", name, role, unit, domain, value)
+    return builder.declare(f"{name}.{role}", name, role, unit, domain, value, scale)
 
 
 def _reference_flux(
@@ -468,9 +498,12 @@ def _resolve_continuum(
             declared if declared is not None else _continuum_default(parameter, scales)
         )
         unit_text = _continuum_unit(parameter, unit)
+        scale = _continuum_scale(parameter, scales)
         mean_name = f"continuum.{parameter}"
         if not isinstance(value, Prior) or sharing == "shared":
-            builder.declare(mean_name, "continuum", parameter, unit_text, domain, value)
+            builder.declare(
+                mean_name, "continuum", parameter, unit_text, domain, value, scale
+            )
             for frame_id in frame_ids:
                 frame_parameters[frame_id].append(mean_name)
             continue
@@ -484,19 +517,23 @@ def _resolve_continuum(
                     unit_text,
                     domain,
                     value,
+                    scale,
                 )
                 frame_parameters[frame_id].append(name)
             continue
-        builder.declare(mean_name, "continuum", parameter, unit_text, domain, value)
+        builder.declare(
+            mean_name, "continuum", parameter, unit_text, domain, value, scale
+        )
         log_pooled = parameter == "level"
         spread = defaults.spread_prior(parameter, scales.flux, scales.wavelength)
         builder.declare(
             f"{mean_name}.spread",
             "continuum",
             f"{parameter}.spread",
-            "dex-e" if log_pooled else unit_text,
+            "ln" if log_pooled else unit_text,
             POSITIVE,
             spread,
+            1.0 if parameter in ("level", "index") else scale,
         )
         for frame_id in frame_ids:
             name = f"frame.{frame_id}.continuum.{parameter}"
@@ -510,6 +547,7 @@ def _resolve_continuum(
                     "pooled",
                     pooled_from=mean_name,
                     log_pooled=log_pooled,
+                    scale=scale,
                 )
             )
             frame_parameters[frame_id].append(name)
@@ -535,6 +573,14 @@ def _continuum_default(parameter: str, scales: DataScales) -> Prior:
     return defaults.coefficient_prior(
         scales.flux, scales.wavelength, int(parameter[1:])
     )
+
+
+def _continuum_scale(parameter: str, scales: DataScales) -> float:
+    if parameter == "index":
+        return 1.0
+    if parameter == "level":
+        return scales.flux
+    return scales.flux / scales.wavelength ** int(parameter[1:])
 
 
 def _continuum_unit(parameter: str, unit: str) -> str:
