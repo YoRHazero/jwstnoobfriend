@@ -69,7 +69,7 @@ def fake_result(
         for name in physical_names(workspace)
     }
     xp = numpy_namespace()
-    pixels, pixel_frames, pixel_index, frames = [], [], [], []
+    pixels, pixel_frames, pixel_index = [], [], []
     for frame_id, frame in workspace.spectrum.frames.items():
         mask = workspace.fitted[frame_id]
         resid = (
@@ -83,18 +83,13 @@ def fake_result(
         rho = None if rho is None else np.asarray(rho).reshape(-1)
         noise = workspace.frame_noise[frame_id]
         pixels.append(noise.pointwise(xp, resid, scale, rho).reshape(chains, draws, -1))
-        frames.append(
-            noise.log_likelihood(xp, resid, scale, rho).reshape(chains, draws)
-        )
         pixel_frames += [frame_id] * noise.size
         pixel_index.append(np.flatnonzero(mask))
     log_likelihood = xr.Dataset(
         {
             "pixels": (("chain", "draw", "pixel"), np.concatenate(pixels, axis=-1)),
-            "frames": (("chain", "draw", "frame"), np.stack(frames, axis=-1)),
         },
         coords={
-            "frame": list(workspace.frame_ids),
             "pixel_frame": ("pixel", pixel_frames),
             "pixel_index": ("pixel", np.concatenate(pixel_index)),
         },

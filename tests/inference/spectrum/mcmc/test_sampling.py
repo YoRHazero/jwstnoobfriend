@@ -83,6 +83,9 @@ def test_correlated_noise_loo_terms() -> None:
     )
     result = workspace.model().sample(draws=200, tune=300, chains=4)
     log_likelihood = result.idata["log_likelihood"].dataset
+    # Pixel terms only: a frame-level PSIS term would leak each frame's own
+    # continuum into its own prediction.
+    assert list(log_likelihood.data_vars) == ["pixels"]
     posterior = result.idata["posterior"].dataset
     on_r = log_likelihood["pixel_frame"].values == "r"
     pointwise = log_likelihood["pixels"].values[0, 0, on_r]
@@ -102,6 +105,3 @@ def test_correlated_noise_loo_terms() -> None:
     np.testing.assert_allclose(
         pointwise, noise.pointwise(xp, resid, scale, rho), rtol=1e-8
     )
-    joint = log_likelihood["frames"].sel(frame="r").values[0, 0]
-    assert joint == pytest.approx(float(noise.log_likelihood(xp, resid, scale, rho)))
-    assert result.frames.loo is not None

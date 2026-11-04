@@ -48,9 +48,8 @@ class NoobMCMCResult:
         ArviZ InferenceData. ``posterior`` holds only physical parameters
         under their flat names; internal sampling coordinates are in
         ``internal``; ``log_likelihood`` holds ``pixels`` (pointwise, exact
-        conditionals for correlated noise) and ``frames`` (each frame's joint
-        log likelihood). Use it directly with ArviZ (trace, rank, Pareto-k
-        plots).
+        conditionals for correlated noise). Use it directly with ArviZ (trace,
+        rank, Pareto-k plots).
     sampling : SamplingReport
         Options, wall time, diagnostics, convergence verdict and
         reparameterizations.
@@ -65,7 +64,6 @@ class NoobMCMCResult:
         az.plot_trace_dist(result.idata, var_names=["Ha.fwhm", "Ha.flux"])
         az.plot_rank(result.idata, var_names=["Ha.fwhm"])
         az.plot_khat(result.loo)              # pixel Pareto-k
-        az.plot_khat(result.frames.loo)       # frame Pareto-k (several frames)
         az.summary(result.idata)              # every physical parameter
     """
 
@@ -102,27 +100,14 @@ class NoobMCMCResult:
 
     @cached_property
     def frames(self) -> FramePosteriors:
-        """Per-frame parameters, chi-square and leave-one-frame-out PSIS-LOO.
+        """Per-frame parameters and whitened chi-square.
 
-        The frame-level LOO (``frames.loo``) treats each frame's joint log
-        likelihood as one observation; it is ``None`` for a single frame.
+        There is no leave-one-frame-out LOO: PSIS on a frame's joint log
+        likelihood cannot stand in for refitting without the frame, whose own
+        continuum and noise parameters only that frame constrains. Compare
+        models with the pixel-level :attr:`loo`; judge frame consistency with
+        each frame's ``chi2``.
         """
-        import arviz as az
-
-        labels = [
-            str(label) for label in self.idata["log_likelihood"].dataset["frame"].values
-        ]
-        frame_loo = None
-        elpd: dict[str, float] = {}
-        pareto: dict[str, float] = {}
-        if len(labels) > 1:
-            frame_loo = az.loo(self.idata, pointwise=True, var_name="frames")
-            elpd = dict(
-                zip(labels, np.asarray(frame_loo.elpd_i).reshape(-1), strict=True)
-            )
-            pareto = dict(
-                zip(labels, np.asarray(frame_loo.pareto_k).reshape(-1), strict=True)
-            )
         values = posterior_values(self, 1000)
         xp = numpy_namespace()
         frames = {}
@@ -141,13 +126,11 @@ class NoobMCMCResult:
                 self.workspace,
                 frame_id,
                 chi2=float(np.sum(np.asarray(whitened) ** 2)),
-                elpd=float(elpd.get(frame_id, np.nan)),
-                pareto_k=float(pareto.get(frame_id, np.nan)),
             )
-        return FramePosteriors(frames, frame_loo)
+        return FramePosteriors(frames)
 
     def summary(self) -> str:
-        """Return plan, sampling verdict, posterior table, LOO and frames as text."""
+        """Return plan, sampling verdict, posterior table, pixel LOO and frames as text."""
         from noobfriend.inference.spectrum.mcmc._summary import result_summary
 
         return result_summary(self)

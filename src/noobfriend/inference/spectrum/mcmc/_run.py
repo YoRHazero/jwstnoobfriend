@@ -147,15 +147,18 @@ def log_likelihood_dataset(
     *,
     replaced: bool,
 ) -> xr.Dataset:
-    """Pointwise and per-frame log likelihoods.
+    """Pointwise log likelihoods for PSIS-LOO.
 
-    ``pixels`` (``chain, draw, pixel``) holds the pointwise terms for
-    PSIS-LOO: the observation sites' own values for white noise, and the
-    exact conditional ``log p(y_i | y_-i)`` for correlated noise in the
-    library's model. A site that only gives one value per frame (correlated
-    noise in a replaced model) contributes that single value. ``frames``
-    (``chain, draw, frame``) holds each site's joint log likelihood, for
-    frame-level LOO.
+    ``pixels`` (``chain, draw, pixel``) holds the observation sites' own
+    values for white noise, and the exact conditional ``log p(y_i | y_-i)``
+    for correlated noise in the library's model. A site that only gives one
+    value per frame (correlated noise in a replaced model) contributes that
+    single value.
+
+    There is no frame-level term: PSIS over a frame's joint log likelihood
+    cannot represent the leave-that-frame-out posterior of the frame's own
+    continuum and noise parameters, so its estimates would be biased and
+    unreliable (Pareto-k near 1 even on clean data).
     """
     import numpyro
     import xarray as xr
@@ -164,12 +167,9 @@ def log_likelihood_dataset(
         values = numpyro.infer.log_likelihood(model, dict(samples), batch_ndims=2)
     chains, draws = next(iter(samples.values())).shape[:2]
     pixel_parts, pixel_frames, pixel_index = [], [], []
-    frame_parts, frame_labels = [], []
     for site in sites:
         site_values = np.asarray(values[site], dtype=float).reshape(chains, draws, -1)
         label = site_frame(site)
-        frame_labels.append(label)
-        frame_parts.append(site_values.sum(axis=-1))
         noise = workspace.frame_noise.get(label)
         if noise is not None and not replaced and noise.kind != "white":
             pointwise = _correlated_pointwise(workspace, samples, label)
@@ -187,12 +187,10 @@ def log_likelihood_dataset(
                 ("chain", "draw", "pixel"),
                 np.concatenate(pixel_parts, axis=-1),
             ),
-            "frames": (("chain", "draw", "frame"), np.stack(frame_parts, axis=-1)),
         },
         coords={
             "chain": np.arange(chains),
             "draw": np.arange(draws),
-            "frame": frame_labels,
             "pixel_frame": ("pixel", pixel_frames),
             "pixel_index": ("pixel", np.concatenate(pixel_index)),
         },

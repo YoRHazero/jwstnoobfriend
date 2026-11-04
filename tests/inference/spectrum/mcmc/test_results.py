@@ -62,7 +62,6 @@ class TestAccess:
         frame = result.frames["b"]
         assert frame.noise.scale.median == 1.0
         assert frame.continuum.coefficient(0).median == pytest.approx(1.0, rel=0.1)
-        assert result.frames.loo is not None
         with pytest.raises(AttributeError):
             _ = frame.noise.rho
 

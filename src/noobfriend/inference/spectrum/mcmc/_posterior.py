@@ -345,9 +345,6 @@ class FramePosterior:
         pixels (correlated noise is whitened first).
     n_pixels
         Number of fitted pixels.
-    elpd, pareto_k
-        The frame's leave-one-frame-out expected log predictive density and
-        Pareto-k.
     """
 
     def __init__(
@@ -357,8 +354,6 @@ class FramePosterior:
         frame_id: str,
         *,
         chi2: float,
-        elpd: float,
-        pareto_k: float,
     ) -> None:
         self.id = frame_id
         self.noise = NoisePosterior(source, frame_id)
@@ -369,23 +364,17 @@ class FramePosterior:
         )
         self.chi2 = chi2
         self.n_pixels = int(workspace.fitted[frame_id].sum())
-        self.elpd = elpd
-        self.pareto_k = pareto_k
 
     def __repr__(self) -> str:
-        """Show the frame's fit statistics."""
-        return (
-            f"FramePosterior({self.id!r}, chi2={self.chi2:.1f}/{self.n_pixels}, "
-            f"elpd={self.elpd:.1f}, pareto_k={self.pareto_k:.2f})"
-        )
+        """Show the frame's fit statistic."""
+        return f"FramePosterior({self.id!r}, chi2={self.chi2:.1f}/{self.n_pixels})"
 
 
 class FramePosteriors(Mapping[str, FramePosterior]):
-    """Frames by id, plus the frame-level PSIS-LOO (``loo``, ``None`` for one frame)."""
+    """Frames by id."""
 
-    def __init__(self, frames: Mapping[str, FramePosterior], loo: Any) -> None:
+    def __init__(self, frames: Mapping[str, FramePosterior]) -> None:
         self._frames = dict(frames)
-        self.loo = loo
 
     def __repr__(self) -> str:
         """List the frames."""

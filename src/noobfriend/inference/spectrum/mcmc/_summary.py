@@ -78,23 +78,10 @@ def result_summary(result: NoobMCMCResult) -> str:
     lines += ["", "PSIS-LOO over pixels (exact conditionals for correlated noise)"]
     lines.append(f"  elpd_loo {loo.elpd:.2f} +- {loo.se:.2f}, p_loo {loo.p:.2f}")
     lines.append("  " + _pareto_counts(loo))
-    frames = result.frames
-    lines += [
-        "",
-        "Frames" + (" (leave-one-frame-out)" if frames.loo is not None else ""),
-    ]
+    lines += ["", "Frames (whitened chi2 of the posterior-median model)"]
     lines += format_rows(
-        ["frame", "chi2", "pixels", "elpd", "pareto k"],
-        [
-            [
-                f.id,
-                f"{f.chi2:.1f}",
-                str(f.n_pixels),
-                f"{f.elpd:.2f}",
-                f"{f.pareto_k:.2f}",
-            ]
-            for f in frames.values()
-        ],
+        ["frame", "chi2", "pixels"],
+        [[f.id, f"{f.chi2:.1f}", str(f.n_pixels)] for f in result.frames.values()],
     )
     return "\n".join(lines)
 
