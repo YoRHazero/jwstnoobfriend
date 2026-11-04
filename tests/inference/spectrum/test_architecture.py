@@ -90,16 +90,18 @@ def test_import_is_light() -> None:
     script = (
         "import os, sys\n"
         "os.environ.pop('XLA_FLAGS', None)\n"
+        "os.environ.pop('JAX_PLATFORMS', None)\n"
         "import noobfriend.inference.spectrum, noobfriend.inference.spectrum.mcmc\n"
         "import noobfriend.inference.spectrum.mle\n"
         "heavy = sorted({m.split('.')[0] for m in sys.modules} & "
         "{'jax', 'numpyro', 'arviz', 'matplotlib'})\n"
-        "print(heavy, 'xla_force_host_platform_device_count' in os.environ.get('XLA_FLAGS', ''))\n"
+        "print(heavy, 'xla_force_host_platform_device_count' in os.environ.get('XLA_FLAGS', ''), "
+        "os.environ.get('JAX_PLATFORMS'))\n"
     )
     output = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, check=True
     ).stdout.strip()
-    assert output == "[] True"
+    assert output == "[] True cpu"
 
 
 def test_top_level_exports_declaration_names_only() -> None:

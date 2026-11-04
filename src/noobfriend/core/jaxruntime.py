@@ -8,6 +8,8 @@ this module:
   importing jax**. XLA reads that flag once, when its backends start, so the
   call is cheap enough to run at package import time and still takes effect
   as long as nothing has initialized JAX yet;
+- platforms: :func:`restrict_to_cpu` keeps a CPU-only sampler's process off
+  the GPU entirely, also without importing jax;
 - precision: :func:`enable_x64` switches JAX to float64;
 - placement: :func:`cpu_devices`, :func:`on_cpu` and :func:`chain_map` keep
   sampling on the CPU even when an accelerator backend is installed.
@@ -41,11 +43,13 @@ __all__ = [
     "enable_x64",
     "on_cpu",
     "requested_cpu_cores",
+    "restrict_to_cpu",
 ]
 
 #: Environment variable holding the number of CPU cores exposed to JAX.
 CPU_CORES_VARIABLE = "NOOB_MCMC_CPU_CORES"
 _DEVICE_COUNT_FLAG = "--xla_force_host_platform_device_count"
+_PLATFORMS_VARIABLE = "JAX_PLATFORMS"
 
 #: ``True`` when JAX was already running at configuration time, so the
 #: requested device count could not be applied.
@@ -110,6 +114,39 @@ def configure_host_devices() -> None:
         return
     count = requested_cpu_cores()
     os.environ["XLA_FLAGS"] = f"{flags} {_DEVICE_COUNT_FLAG}={count}".strip()
+
+
+def restrict_to_cpu() -> None:
+    """Keep JAX in this process on the CPU platform only.
+
+    With a CUDA build of jaxlib installed, the first device query starts
+    every available backend, even ``jax.devices("cpu")``. A CPU-only process
+    then holds a CUDA context for its whole life (about 160 MiB on an RTX
+    2080 Ti), and many parallel workers together can leave a concurrent GPU
+    job without the memory it needs to start. Restricting the platforms
+    before JAX starts its backends avoids touching the GPU at all.
+
+    Rules, in order:
+
+    - ``JAX_PLATFORMS`` already in the environment: the user's choice, left
+      untouched;
+    - jax not imported yet: set ``JAX_PLATFORMS=cpu`` (does not import jax;
+      child processes inherit it);
+    - jax imported but its backends not started: set the ``jax_platforms``
+      config to ``"cpu"``, unless it already names platforms;
+    - backends already started: nothing can change any more; left as is.
+    """
+    if _PLATFORMS_VARIABLE in os.environ:
+        return
+    if not _jax_imported():
+        os.environ[_PLATFORMS_VARIABLE] = "cpu"
+        return
+    if _backends_initialized():
+        return
+    import jax
+
+    if not jax.config.jax_platforms:
+        jax.config.update("jax_platforms", "cpu")
 
 
 def cpu_devices() -> list[Any]:
@@ -190,6 +227,11 @@ def chain_map(n_devices: int) -> str | Callable[..., Any]:
     if jax.default_backend() == "cpu":
         return "parallel"
     return partial(jax.pmap, devices=cpu_devices()[:n_devices])
+
+
+def _jax_imported() -> bool:
+    """Whether jax is already imported in this process."""
+    return "jax" in sys.modules
 
 
 def _backends_initialized() -> bool:
