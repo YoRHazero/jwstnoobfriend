@@ -16,10 +16,32 @@ if TYPE_CHECKING:
 __all__ = [
     "Comparison",
     "DecompositionResult",
+    "FitRuntime",
     "ModelFit",
     "PredictiveMetric",
     "SamplerHealth",
 ]
+
+
+@dataclass(frozen=True)
+class FitRuntime:
+    """Where and how a fit actually ran.
+
+    Attributes
+    ----------
+    device : str
+        ``"cpu"`` or ``"gpu"``, resolved from ``SamplerConfig.device``.
+    precision : str
+        ``"float32"`` or ``"float64"``, resolved from
+        ``SamplerConfig.precision``.
+    chain_groups : tuple of int
+        Sizes of the chain groups run one after another (one group of every
+        chain on a GPU; as many as there are CPU devices on the CPU).
+    """
+
+    device: str
+    precision: str
+    chain_groups: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -128,6 +150,9 @@ class ModelFit:
         Per-stage wall times in seconds.
     images : NoobImageSet
         The fitted images (kept for residual accessors).
+    runtime : FitRuntime or None
+        Resolved device, precision and chain groups of the run; ``None`` for
+        fits not produced by ``fit_model``.
     """
 
     spec: ModelSpec
@@ -141,6 +166,7 @@ class ModelFit:
     timings: dict[str, float]
     images: NoobImageSet
     chain_weights: np.ndarray | None = None
+    runtime: FitRuntime | None = None
 
     @property
     def name(self) -> str:

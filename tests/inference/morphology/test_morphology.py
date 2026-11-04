@@ -6,6 +6,8 @@ All tests use synthetic arrays and Gaussian fake PSFs; nothing here touches
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import numpy as np
 import pytest
 
@@ -26,6 +28,15 @@ from noobfriend.inference.morphology import (
 )
 
 jax = pytest.importorskip("jax")
+
+
+@pytest.fixture
+def float64() -> Iterator[None]:
+    """Run directly called internals in float64 (entry points set their own)."""
+    from noobfriend.core.jaxruntime import precision
+
+    with precision("float64"):
+        yield
 
 
 def _gaussian_kernel(size: int = 15, sigma: float = 1.3) -> np.ndarray:
@@ -100,6 +111,7 @@ class TestPriors:
         assert priors.amplitudes.for_band("b1") == (7.0, 1.0)
 
 
+@pytest.mark.usefixtures("float64")
 class TestTransform:
     """Latent-to-physical maps: dimensions, containment, identifiability."""
 
@@ -148,6 +160,7 @@ class TestTransform:
         assert "host_x" in phys and "host_offset_rho" not in phys
 
 
+@pytest.mark.usefixtures("float64")
 class TestCollapse:
     """Marginal likelihood against brute-force dense Gaussian."""
 
@@ -194,6 +207,7 @@ class TestCollapse:
         )
 
 
+@pytest.mark.usefixtures("float64")
 class TestRender:
     """Unit-amplitude component rendering."""
 
@@ -378,6 +392,7 @@ class TestEndToEnd:
         sim = simulate(
             images, "point", params=truth, fluxes={"point0": {"b1": 2000.0}}, seed=5
         )
+        x64_before = jax.config.jax_enable_x64
         fit = fit_model(
             sim,
             "point",
@@ -385,6 +400,7 @@ class TestEndToEnd:
                 nuts=NutsConfig(chains=2, warmup=150, draws=150),
                 multistart=MultistartConfig(n_starts=32, n_refine=2),
                 compute_loo=False,
+                device="cpu",
             ),
             seed=0,
         )
@@ -393,3 +409,9 @@ class TestEndToEnd:
         assert report.max_abs_z < 4.0
         assert set(fit.fluxes) == {"point0", "background"}
         assert fit.rendered["b1"]["total"].shape == (25, 25)
+        # precision="auto" on the CPU is float64, and the fit leaves the
+        # process-wide JAX precision as it found it.
+        assert fit.runtime.device == "cpu"
+        assert fit.runtime.precision == "float64"
+        assert sum(fit.runtime.chain_groups) == 2
+        assert jax.config.jax_enable_x64 == x64_before

@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from noobfriend.core.jaxruntime import Device
 
 __all__ = ["NutsConfig", "NutsRun", "run_nuts"]
 
@@ -70,10 +73,13 @@ class NutsRun:
         Latent draws, shape ``(chains, draws, dim)``.
     diverging : numpy.ndarray
         Boolean divergence flags, shape ``(chains, draws)``.
+    groups : tuple of int
+        Sizes of the chain groups that ran one after another.
     """
 
     z: np.ndarray
     diverging: np.ndarray
+    groups: tuple[int, ...]
 
 
 def run_nuts(
@@ -83,9 +89,15 @@ def run_nuts(
     modes: tuple[tuple[np.ndarray, float], ...],
     inverse_mass_matrix: np.ndarray,
     config: NutsConfig,
+    device: Device,
     seed: int = 0,
 ) -> NutsRun:
     """Sample the latent posterior with NUTS.
+
+    Chains run in the groups :func:`noobfriend.core.jaxruntime.chain_groups`
+    gives for ``device``: all at once (vectorized) on a GPU, as many as there
+    are CPU devices (in parallel) on the CPU, groups one after another. Each
+    group gets its own slice of the chain starts and its own PRNG key.
 
     Parameters
     ----------
@@ -100,17 +112,21 @@ def run_nuts(
         Initial dense inverse mass matrix (the Laplace covariance).
     config : NutsConfig
         Sampler configuration.
+    device : {"cpu", "gpu"}
+        The resolved device; the caller makes it JAX's default device.
     seed : int
         PRNG seed for jitter and sampling.
 
     Returns
     -------
     NutsRun
-        Latent draws grouped by chain plus divergence flags.
+        Latent draws grouped by chain, divergence flags and chain groups.
     """
     import jax
     import jax.numpy as jnp
     from numpyro.infer import MCMC, NUTS
+
+    from noobfriend.core.jaxruntime import chain_groups, chain_method
 
     rng = np.random.default_rng(seed)
     # Seed chains only from modes genuinely competing with the best one:
@@ -145,38 +161,43 @@ def run_nuts(
         kwargs["inverse_mass_matrix"] = jnp.asarray(inverse_mass_matrix)
     kernel = NUTS(**kwargs)
 
-    devices = jax.devices()
-    if devices[0].platform in {"gpu", "cuda"}:
-        chain_method = "vectorized"
-    elif len(devices) >= config.chains:
-        chain_method = "parallel"
-    else:
-        chain_method = "sequential"
-    mcmc = MCMC(
-        kernel,
-        num_warmup=config.warmup,
-        num_samples=config.draws,
-        num_chains=config.chains,
-        chain_method=chain_method,
-        progress_bar=False,
+    groups = chain_groups(config.chains, device)
+    z_parts, diverging_parts = [], []
+    start = 0
+    for index, size in enumerate(groups):
+        mcmc = MCMC(
+            kernel,
+            num_warmup=config.warmup,
+            num_samples=config.draws,
+            num_chains=size,
+            chain_method=chain_method(size, device),
+            progress_bar=False,
+        )
+        block = inits[start : start + size]
+        init_params = jnp.asarray(block) if size > 1 else jnp.asarray(block[0])
+        # Warmup and sampling are run as separate phases: the combined
+        # ``mcmc.run(num_warmup=...)`` path has shown order-of-magnitude
+        # slowdowns after the first call in a process (observed with numpyro
+        # 0.21), while the explicit split compiles and runs reliably.
+        mcmc.warmup(
+            jax.random.fold_in(jax.random.PRNGKey(seed), index),
+            init_params=init_params,
+            collect_warmup=False,
+            extra_fields=("diverging",),
+        )
+        mcmc.run(
+            mcmc.post_warmup_state.rng_key,
+            extra_fields=("diverging",),
+        )
+        z = np.asarray(mcmc.get_samples(group_by_chain=True), dtype=np.float64)
+        diverging = np.asarray(
+            mcmc.get_extra_fields(group_by_chain=True)["diverging"], dtype=bool
+        )
+        z_parts.append(z.reshape(size, config.draws, dim))
+        diverging_parts.append(diverging.reshape(size, config.draws))
+        start += size
+    return NutsRun(
+        z=np.concatenate(z_parts),
+        diverging=np.concatenate(diverging_parts),
+        groups=groups,
     )
-    init_params = jnp.asarray(inits) if config.chains > 1 else jnp.asarray(inits[0])
-    # Warmup and sampling are run as separate phases: the combined
-    # ``mcmc.run(num_warmup=...)`` path has shown order-of-magnitude
-    # slowdowns after the first call in a process (observed with numpyro
-    # 0.21), while the explicit split compiles and runs reliably.
-    mcmc.warmup(
-        jax.random.PRNGKey(seed),
-        init_params=init_params,
-        collect_warmup=False,
-        extra_fields=("diverging",),
-    )
-    mcmc.run(
-        mcmc.post_warmup_state.rng_key,
-        extra_fields=("diverging",),
-    )
-    z = np.asarray(mcmc.get_samples(group_by_chain=True), dtype=np.float64)
-    diverging = np.asarray(
-        mcmc.get_extra_fields(group_by_chain=True)["diverging"], dtype=bool
-    )
-    return NutsRun(z=z, diverging=diverging)

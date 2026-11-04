@@ -1,9 +1,9 @@
 """JAX rendering of unit-amplitude component images.
 
 This is the only implementation of the model physics. Each band gets a
-:class:`BandStatic` bundle prepared once per fit: float64 arrays, oversampled
-evaluation grids, and the padded PSF-kernel FFT (computed once and reused by
-every likelihood evaluation).
+:class:`BandStatic` bundle prepared once per fit: arrays in the fit's
+precision, oversampled evaluation grids, and the padded PSF-kernel FFT
+(computed once and reused by every likelihood evaluation).
 
 Component images are rendered at *unit amplitude*: the Sersic basis uses
 the analytic (infinite-plane) flux normalization via the gamma function,
@@ -24,10 +24,9 @@ translation of an undersampled kernel produces catastrophic Gibbs ringing.
 No FFT is involved in the point basis at all; the FFT convolution is only
 used for the Sersic component (with the native-decimated kernel).
 
-Importing this module enables JAX float64 globally: the log-posterior sums
-tens of thousands of squared residuals, and in float32 that sum carries
-absolute error comparable to the O(1) energy differences NUTS accepts or
-rejects on.
+This module sets no precision itself: callers (``fit_model``, ``simulate``)
+run it inside :func:`noobfriend.core.jaxruntime.precision`, and inputs are
+prepared in float64 and become the active width when they enter JAX.
 """
 
 from __future__ import annotations
@@ -41,8 +40,6 @@ from scipy.fft import next_fast_len
 import jax.numpy as jnp
 from jax.scipy.special import gammaln
 
-from noobfriend.inference.morphology import _x64  # noqa: F401
-
 from noobfriend.inference.morphology.data import NoobImage
 from noobfriend.inference.morphology.models import ModelSpec
 
@@ -53,7 +50,7 @@ __all__ = ["BandStatic", "prepare_static", "source_images"]
 class BandStatic:
     """Prepared per-band arrays shared by every likelihood evaluation.
 
-    All floating arrays are float64 JAX arrays. ``invsig`` is ``1 / error``
+    All floating arrays are JAX arrays in the active precision. ``invsig`` is ``1 / error``
     with masked-out pixels set to zero, so whitening by it both scales and
     masks in one multiply.
     """

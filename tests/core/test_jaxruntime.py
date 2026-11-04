@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import warnings
 
 import pytest
 
@@ -120,3 +121,81 @@ class TestRestrictToCpu:
             "print(jax.config.jax_platforms)\n"
         )
         assert output == "None"
+
+
+class TestResolve:
+    """Device and precision choices."""
+
+    @pytest.mark.parametrize(
+        ("requested", "device", "expected"),
+        [
+            ("auto", "gpu", "float32"),
+            ("auto", "cpu", "float64"),
+            ("float64", "gpu", "float64"),
+            ("float32", "cpu", "float32"),
+        ],
+    )
+    def test_precision(self, requested: str, device: str, expected: str) -> None:
+        assert jaxruntime.resolve_precision(requested, device) == expected  # type: ignore[arg-type]
+
+    def test_rejects_unknown_choices(self) -> None:
+        with pytest.raises(ValueError, match="precision"):
+            jaxruntime.resolve_precision("half", "cpu")
+        with pytest.raises(ValueError, match="device"):
+            jaxruntime.resolve_device("tpu")
+
+    def test_cpu_restricts_platforms(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[bool] = []
+        monkeypatch.setattr(jaxruntime, "restrict_to_cpu", lambda: calls.append(True))
+        assert jaxruntime.resolve_device("cpu") == "cpu"
+        assert calls == [True]
+
+    def test_auto_uses_a_gpu_when_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(jaxruntime, "_has_gpu", lambda: True)
+        assert jaxruntime.resolve_device("auto") == "gpu"
+
+    def test_gpu_without_gpu_names_the_restriction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(jaxruntime, "_has_gpu", lambda: False)
+        monkeypatch.setattr(jaxruntime, "_restricted_platforms", lambda: "cpu")
+        with pytest.raises(RuntimeError, match="restricted to 'cpu'"):
+            jaxruntime.resolve_device("gpu")
+
+    @pytest.mark.parametrize("restricted", ["cpu", ""])
+    def test_auto_warns_only_when_a_restriction_hides_a_gpu(
+        self, monkeypatch: pytest.MonkeyPatch, restricted: str
+    ) -> None:
+        monkeypatch.setattr(jaxruntime, "_has_gpu", lambda: False)
+        monkeypatch.setattr(jaxruntime, "_restricted_platforms", lambda: restricted)
+        monkeypatch.setattr(jaxruntime, "_gpu_plugin_installed", lambda: True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert jaxruntime.resolve_device("auto") == "cpu"
+        assert [w.category for w in caught] == ([RuntimeWarning] if restricted else [])
+
+
+class TestChainGroups:
+    """Splitting chains over devices."""
+
+    def test_gpu_runs_every_chain_at_once(self) -> None:
+        assert jaxruntime.chain_groups(16, "gpu") == (16,)
+
+    def test_cpu_groups_by_device_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(jaxruntime, "cpu_devices", lambda: [object()] * 3)
+        assert jaxruntime.chain_groups(8, "cpu") == (3, 3, 2)
+        assert jaxruntime.chain_groups(2, "cpu") == (2,)
+
+
+def test_precision_is_scoped() -> None:
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    before = jax.config.jax_enable_x64
+    with jaxruntime.precision("float32"):
+        assert jnp.ones(1).dtype == jnp.float32
+    with jaxruntime.precision("float64"):
+        assert jnp.ones(1).dtype == jnp.float64
+    assert jax.config.jax_enable_x64 == before

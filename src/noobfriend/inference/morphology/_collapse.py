@@ -20,7 +20,6 @@ from typing import Any
 import jax.numpy as jnp
 from jax.scipy.linalg import cho_solve, cholesky, solve_triangular
 
-from noobfriend.inference.morphology import _x64  # noqa: F401
 
 __all__ = ["conditional_amplitudes", "marginal_loglik"]
 

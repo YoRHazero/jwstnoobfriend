@@ -24,6 +24,7 @@ from noobfriend.inference.morphology.priors import Priors
 from noobfriend.inference.morphology.results import (
     Comparison,
     DecompositionResult,
+    FitRuntime,
     ModelFit,
 )
 
@@ -52,8 +53,8 @@ def _require_backend() -> None:
     if missing:
         raise MissingSamplerBackendError(
             "the morphology sampler needs JAX, NumPyro and ArviZ.\n"
-            'Install them with:  uv add "jax[cpu]" numpyro arviz\n'
-            "(or the CUDA jax build matching your GPU)."
+            "Install them with:  uv sync --extra mcmc\n"
+            "(add --extra cuda for the CUDA build on Linux GPUs)."
         )
 
 
@@ -76,13 +77,26 @@ class SamplerConfig:
         (memory control; LOO needs far fewer draws than the posterior).
     amplitude_batch : int
         Draw-batch size for vectorized amplitude recovery.
+    device : str
+        ``"auto"`` (a GPU when JAX has one, else the CPU), ``"cpu"`` or
+        ``"gpu"`` (an error when JAX has no GPU). ``"cpu"`` restricts JAX
+        to the CPU platform when it is the process's first JAX use, so CPU
+        fits run in parallel processes hold no GPU memory; a later ``"gpu"``
+        fit in that process then fails. Run one GPU fit at a time: each GPU
+        process reserves 75% of the GPU memory at its first GPU array, and a
+        second concurrent one may fail to start.
     precision : str
-        ``"float64"`` or ``"float32"``. The marginal likelihood is computed
-        in a cancellation-free residual form, so float32 is numerically
-        viable and is dramatically faster on consumer GPUs (whose float64
-        throughput is 1/32 of float32); float64 remains the conservative
-        default. Validate float32 results against a float64 fit once per
-        study configuration.
+        ``"auto"`` (float32 on a GPU, float64 on the CPU), ``"float32"`` or
+        ``"float64"``. The marginal likelihood is computed in a
+        cancellation-free residual form, so float32 is numerically safe; on
+        GPUs it is several times faster (consumer GPUs run float64 at 1/32 of
+        the float32 throughput). It covers the whole fit (MAP, NUTS,
+        amplitude recovery, LOO) and is restored afterwards.
+
+    Notes
+    -----
+    ``ModelFit.runtime`` records the device, precision and chain groups a fit
+    actually used.
     """
 
     nuts: NutsConfig = NutsConfig()
@@ -91,7 +105,8 @@ class SamplerConfig:
     compute_loo: bool = True
     loo_thin: int = 4
     amplitude_batch: int = 64
-    precision: str = "float64"
+    device: str = "auto"
+    precision: str = "auto"
 
 
 def fit_model(
@@ -120,58 +135,73 @@ def fit_model(
     Returns
     -------
     ModelFit
-        Posterior draws, amplitude posteriors, diagnostics and timings.
+        Posterior draws, amplitude posteriors, diagnostics, timings and the
+        resolved runtime (device, precision, chain groups).
+
+    Raises
+    ------
+    ValueError
+        If ``sampler.device`` or ``sampler.precision`` is not a valid choice.
+    RuntimeError
+        If ``sampler.device="gpu"`` and JAX has no GPU.
     """
+    from noobfriend.core.jaxruntime import (
+        on_device,
+        precision,
+        resolve_device,
+        resolve_precision,
+    )
+
     _require_backend()
     spec = ModelSpec.parse(model)
     images = images if isinstance(images, NoobImageSet) else NoobImageSet(images)
     priors = priors or Priors.from_images(images)
-
-    if sampler.precision not in ("float64", "float32"):
-        raise ValueError("SamplerConfig.precision must be 'float64' or 'float32'.")
-
-    import numpyro
-
-    numpyro.set_host_device_count(sampler.nuts.chains)
+    # Resolved before anything starts JAX's backends, so device="cpu" can keep
+    # the process off the GPU entirely.
+    device = resolve_device(sampler.device)
+    width = resolve_precision(sampler.precision, device)
 
     from noobfriend.inference.morphology._map import find_map
     from noobfriend.inference.morphology._nuts import run_nuts
     from noobfriend.inference.morphology._posterior import build_posterior
 
-    import jax
-
-    jax.config.update("jax_enable_x64", sampler.precision == "float64")
-
     timings: dict[str, float] = {}
     total_start = time.perf_counter()
+    # The whole fit runs in one precision on one device: functions compiled
+    # here are not reused outside this block.
+    with precision(width), on_device(device):
+        start = time.perf_counter()
+        posterior = build_posterior(images, spec, priors, oversample=sampler.oversample)
+        timings["prepare_s"] = time.perf_counter() - start
 
-    start = time.perf_counter()
-    posterior = build_posterior(images, spec, priors, oversample=sampler.oversample)
-    timings["prepare_s"] = time.perf_counter() - start
+        start = time.perf_counter()
+        map_result = find_map(
+            posterior.log_density, posterior.dim, sampler.multistart, seed=seed
+        )
+        timings["map_s"] = time.perf_counter() - start
+        timings.update({f"map.{k}": v for k, v in map_result.timings.items()})
 
-    start = time.perf_counter()
-    map_result = find_map(
-        posterior.log_density, posterior.dim, sampler.multistart, seed=seed
-    )
-    timings["map_s"] = time.perf_counter() - start
-    timings.update({f"map.{k}": v for k, v in map_result.timings.items()})
+        start = time.perf_counter()
+        run = run_nuts(
+            posterior.log_density,
+            posterior.dim,
+            modes=map_result.modes,
+            inverse_mass_matrix=map_result.cov,
+            config=sampler.nuts,
+            device=device,
+            seed=seed + 1,
+        )
+        timings["nuts_s"] = time.perf_counter() - start
 
-    start = time.perf_counter()
-    run = run_nuts(
-        posterior.log_density,
-        posterior.dim,
-        modes=map_result.modes,
-        inverse_mass_matrix=map_result.cov,
-        config=sampler.nuts,
-        seed=seed + 1,
-    )
-    timings["nuts_s"] = time.perf_counter() - start
-
-    start = time.perf_counter()
-    fit = _postprocess(posterior, map_result.modes, run, sampler, seed, images)
-    timings["postprocess_s"] = time.perf_counter() - start
+        start = time.perf_counter()
+        fit = _postprocess(posterior, map_result.modes, run, sampler, seed, images)
+        timings["postprocess_s"] = time.perf_counter() - start
     timings["total_s"] = time.perf_counter() - total_start
-    return replace(fit, timings={**timings, **fit.timings})
+    return replace(
+        fit,
+        timings={**timings, **fit.timings},
+        runtime=FitRuntime(device=device, precision=width, chain_groups=run.groups),
+    )
 
 
 def decompose(
@@ -193,7 +223,9 @@ def decompose(
     priors : Priors, optional
         Shared prior configuration; defaults to :meth:`Priors.from_images`.
     sampler : SamplerConfig
-        Pipeline configuration shared by all fits.
+        Pipeline configuration shared by all fits, so every model is fitted
+        on the same device in the same precision (the fits run one after
+        another; do not run several GPU decompositions concurrently).
     seed : int
         Master seed; each model gets a distinct offset.
 

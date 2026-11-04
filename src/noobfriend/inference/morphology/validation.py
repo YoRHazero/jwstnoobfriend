@@ -60,21 +60,36 @@ def simulate(
     -------
     NoobImageSet
         Copies of the images with simulated ``data``.
+
+    Notes
+    -----
+    The model is rendered in float64 on the CPU whatever ``SamplerConfig``
+    the fits use, so simulated truth does not depend on the machine.
     """
     import jax.numpy as jnp
 
+    from noobfriend.core.jaxruntime import on_cpu, precision
     from noobfriend.inference.morphology._render import prepare_static, source_images
 
     spec = ModelSpec.parse(model)
     images = images if isinstance(images, NoobImageSet) else NoobImageSet(images)
     backgrounds = backgrounds or {}
-    phys: dict[str, Any] = {key: jnp.asarray(value) for key, value in params.items()}
     rng = np.random.default_rng(seed)
 
     simulated = []
-    for image in images:
-        static = prepare_static(image, oversample=oversample)
-        sources = np.asarray(source_images(static, spec, phys))
+    # Truth is always rendered the same way, whatever device and precision
+    # the fits use.
+    with precision("float64"), on_cpu():
+        phys: dict[str, Any] = {
+            key: jnp.asarray(value) for key, value in params.items()
+        }
+        rendered = [
+            np.asarray(
+                source_images(prepare_static(image, oversample=oversample), spec, phys)
+            )
+            for image in images
+        ]
+    for image, sources in zip(images, rendered, strict=True):
         total = np.full(image.shape, float(backgrounds.get(image.name, 0.0)))
         for index, component in enumerate(spec.component_names):
             total = total + fluxes[component][image.name] * sources[index]

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from noobfriend.core.jaxruntime import chain_map, cpu_devices, enable_x64, on_cpu
+from noobfriend.core.jaxruntime import chain_groups, chain_method, enable_x64, on_cpu
 from noobfriend.inference.spectrum._xp import numpy_namespace
 from noobfriend.inference.spectrum.mcmc._names import LATENT, site_frame
 
@@ -102,15 +102,13 @@ def run_chains(
     posterior, stats, samples, groups = [], [], [], []
     start = time.perf_counter()
     with on_cpu():
-        width = min(chains, len(cpu_devices()))
-        for index, offset in enumerate(range(0, chains, width)):
-            size = min(width, chains - offset)
+        for index, size in enumerate(chain_groups(chains, "cpu")):
             mcmc = MCMC(
                 NUTS(model, dense_mass=True, target_accept_prob=target_accept),
                 num_warmup=tune,
                 num_samples=draws,
                 num_chains=size,
-                chain_method=chain_map(size) if size > 1 else "sequential",
+                chain_method=chain_method(size, "cpu"),
                 progress_bar=progressbar,
             )
             key = jax.random.fold_in(jax.random.PRNGKey(random_seed), index)
