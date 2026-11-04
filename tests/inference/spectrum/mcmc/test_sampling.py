@@ -78,10 +78,12 @@ def test_correlated_noise_loo_terms() -> None:
         {"w": halpha_spectrum(seed=13), "r": halpha_spectrum(seed=14)}
     )
     spectrum = joined.with_noise({"r": Noise(correlation=AR1(Uniform()))})
+    # Two frames with a pooled continuum do not converge; share it instead.
+    continuum = NoobContinuum.polynomial(0, lambda_0=LAMBDA_0, sharing="shared")
     workspace = spectrum.prepare(
-        [NoobLine("Ha", rest=HALPHA, unit="angstrom")], continuum=CONTINUUM
+        [NoobLine("Ha", rest=HALPHA, unit="angstrom")], continuum=continuum
     )
-    result = workspace.model().sample(draws=200, tune=300, chains=4)
+    result = workspace.model().sample(draws=500, tune=500, chains=4)
     log_likelihood = result.idata["log_likelihood"].dataset
     # Pixel terms only: a frame-level PSIS term would leak each frame's own
     # continuum into its own prediction.

@@ -331,8 +331,8 @@ class TestStacking:
         from noobfriend.inference.morphology._diagnostics import stacking_weights
 
         rng = np.random.default_rng(0)
-        good = rng.normal(-1.0, 0.05, size=(1, 80, 40))
-        bad = rng.normal(-3.0, 0.05, size=(1, 80, 40))
+        good = rng.normal(-1.0, 0.05, size=(1, 400, 40))
+        bad = rng.normal(-3.0, 0.05, size=(1, 400, 40))
         weights = stacking_weights(np.concatenate([good, bad]))
         assert weights is not None
         assert weights[0] > 0.99
@@ -342,7 +342,7 @@ class TestStacking:
         from noobfriend.inference.morphology._diagnostics import stacking_weights
 
         rng = np.random.default_rng(1)
-        loglik = rng.normal(-1.0, 0.05, size=(4, 80, 40))
+        loglik = rng.normal(-1.0, 0.05, size=(4, 400, 40))
         weights = stacking_weights(loglik)
         assert weights is not None
         np.testing.assert_allclose(weights, 0.25, atol=0.15)
